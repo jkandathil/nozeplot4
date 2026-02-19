@@ -123,7 +123,25 @@ function App() {
             const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
             const firstSheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[firstSheetName];
-            const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: false });
+            // Use raw:true so numbers stay as JS numbers (not formatted strings).
+            // cellDates:true makes date cells come back as Date objects.
+            const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: true });
+
+            // Post-process each row: Date → ISO string, numeric strings → float
+            const jsonData = rawData.map(row => {
+              const clean = {};
+              Object.entries(row).forEach(([k, v]) => {
+                if (v instanceof Date) {
+                  clean[k] = v.toISOString().replace('T', ' ').slice(0, 19);
+                } else if (typeof v === 'string') {
+                  const n = parseFloat(v);
+                  clean[k] = isNaN(n) ? v : n;
+                } else {
+                  clean[k] = v;
+                }
+              });
+              return clean;
+            });
 
             resolve({
               fileName: fileObj.name,
