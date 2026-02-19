@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2 } from 'lucide-react';
 import './Sidebar.css';
-const logo = '/logo_noze_circle.png';
+const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, userName = "User" }) => {
     const fileInputRef = useRef(null);

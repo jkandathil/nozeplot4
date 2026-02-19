@@ -13,7 +13,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import './App.css';
 import { fileManager } from './utils/db';
-const logo = '/logo_noze_circle.png';
+const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 // Components (We will create these next)
 import Sidebar from './components/Sidebar';
