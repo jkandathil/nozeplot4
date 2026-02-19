@@ -1,0 +1,223 @@
+.chart-area {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.file-title {
+    font-size: 1.0rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 16px;
+}
+
+.chart-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.separator {
+    width: 1px;
+    height: 24px;
+    background-color: var(--border-color);
+    margin: 0 4px;
+}
+
+.icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--border-radius-sm);
+    color: var(--text-secondary);
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.icon-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-primary);
+}
+
+.icon-btn.active {
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--accent-primary);
+}
+
+.charts-scroll-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    position: relative;
+}
+
+/* Single View */
+.single-chart-view {
+    width: 100%;
+    height: 100%;
+    /* Fill container */
+    min-height: 400px;
+}
+
+.chart-container-wrapper {
+    width: 100%;
+    height: 100%;
+    padding: 16px;
+    border-radius: var(--border-radius-lg);
+    overflow: hidden;
+    position: relative;
+}
+
+/* Grid View */
+.charts-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    /* 2 Columns as requested */
+    gap: 16px;
+    width: 100%;
+    padding-bottom: 16px;
+}
+
+.chart-grid-item {
+    display: flex;
+    flex-direction: column;
+    height: 300px;
+    /* Fixed height for consistency */
+    border-radius: var(--border-radius-lg);
+    overflow: hidden;
+    position: relative;
+    background: rgba(30, 41, 59, 0.5);
+    /* Slightly lighter/different for cards */
+    transition: box-shadow var(--transition-fast);
+}
+
+.chart-grid-item:hover {
+    box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.chart-grid-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.chart-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mini-chart-wrapper {
+    flex: 1;
+    padding: 8px 16px 16px 8px;
+    /* Slightly adjusted for standard axis */
+    min-height: 0;
+    /* Important for flex child */
+    user-select: none;
+    /* Prevent text selection while dragging if we add drag here later */
+}
+
+/* Footer Stats */
+.chart-footer {
+    display: flex;
+    justify-content: space-around;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.stat-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+}
+
+.stat-value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent-secondary);
+}
+
+/* Tooltip */
+.custom-tooltip {
+    background: rgba(15, 23, 42, 0.95);
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-xl);
+    backdrop-filter: blur(8px);
+    font-size: 0.85rem;
+    pointer-events: none;
+}
+
+.label {
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 2px;
+}
+
+.chart-area-loading,
+.chart-area-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary);
+}
+
+.spinner {
+    animation: spin 1s linear infinite;
+    margin-bottom: 16px;
+    color: var(--accent-primary);
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 1024px) {
+    .charts-grid {
+        grid-template-columns: 1fr;
+        /* Fallback for smaller screens */
+    }
+}
