@@ -12,11 +12,27 @@ import {
     ReferenceArea,
     Brush
 } from 'recharts';
-import { AlertCircle, Activity, RotateCcw, Target } from 'lucide-react';
+import { AlertCircle, Activity, RotateCcw, Target, Layers } from 'lucide-react';
 import { motion } from 'framer-motion';
 import './NormalizePage.css';
 
-const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
+/* Palette: first 8 = main file, next 8 = compare file */
+const MAIN_COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
+const CMP_COLORS = ['#0ea5e9', '#6366f1', '#10b981', '#ec4899', '#f59e0b', '#8b5cf6', '#ef4444', '#3b82f6'];
+
+/* ── Helpers ──────────────────────────────────────────────────────── */
+function detectXKey(row) {
+    const keys = Object.keys(row);
+    return keys.find(k =>
+        k.toLowerCase().includes('date') ||
+        k.toLowerCase().includes('time') ||
+        k.toLowerCase().includes('stamp')
+    ) || keys[0];
+}
+
+function shortName(fileName = '') {
+    return fileName.replace(/\.[^/.]+$/, '').slice(0, 14);
+}
 
 /* ── Custom tooltip ────────────────────────────────────────────────── */
 const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
@@ -27,19 +43,20 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             padding: '8px 12px',
-            fontSize: '0.82rem',
+            fontSize: '0.8rem',
             pointerEvents: 'none',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
-            maxHeight: 260,
-            overflowY: 'auto'
+            boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+            maxHeight: 300,
+            overflowY: 'auto',
+            maxWidth: 300
         }}>
-            <p style={{ color: '#94a3b8', marginBottom: 4, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 3 }}>
+            <p style={{ color: '#94a3b8', marginBottom: 4, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.07)', paddingBottom: 3 }}>
                 {String(label)}
             </p>
             {payload.map((entry, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: entry.color, marginBottom: 2 }}>
-                    <span style={{ opacity: 0.85 }}>{entry.name}</span>
-                    <strong>
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 14, color: entry.color, marginBottom: 2 }}>
+                    <span style={{ opacity: 0.85, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 160 }}>{entry.name}</span>
+                    <strong style={{ whiteSpace: 'nowrap' }}>
                         {isNormalized
                             ? `${entry.value >= 0 ? '+' : ''}${(entry.value * 100).toFixed(2)}%`
                             : typeof entry.value === 'number' ? entry.value.toFixed(3) : entry.value}
@@ -51,80 +68,120 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
 };
 
 /* ── Main component ────────────────────────────────────────────────── */
-const NormalizePage = ({ data, fileName }) => {
+const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
-    /* Derive xKey / seriesKeys */
+    /* ── Derive main file keys ── */
     const { xKey, seriesKeys, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
-        const keys = Object.keys(data[0]);
-        let x = keys[0];
-        const potentialX = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time') || k.toLowerCase().includes('stamp'));
-        if (potentialX) x = potentialX;
-        const series = keys.filter(k => k !== x && typeof data[0][k] === 'number');
+        const x = detectXKey(data[0]);
+        const series = Object.keys(data[0]).filter(k => k !== x && typeof data[0][k] === 'number');
         return { xKey: x, seriesKeys: series, chartData: data };
     }, [data]);
 
-    /* Visible series toggle */
+    /* ── Derive compare file keys (first compare file only) ── */
+    const compareFile = compareDataList?.[0];
+    const { cmpXKey, cmpSeriesKeys, cmpData, cmpShortName } = useMemo(() => {
+        if (!compareFile?.data || compareFile.data.length === 0)
+            return { cmpXKey: '', cmpSeriesKeys: [], cmpData: [], cmpShortName: '' };
+        const x = detectXKey(compareFile.data[0]);
+        const series = Object.keys(compareFile.data[0]).filter(k => k !== x && typeof compareFile.data[0][k] === 'number');
+        return {
+            cmpXKey: x,
+            cmpSeriesKeys: series,
+            cmpData: compareFile.data,
+            cmpShortName: shortName(compareFile.fileName)
+        };
+    }, [compareFile]);
+
+    const hasCompare = cmpData.length > 0;
+
+    /* ── Merged data for the chart (index-aligned) ── */
+    /* Prefixed compare keys: "cmpShortName:key" */
+    const prefixedCmpKeys = useMemo(
+        () => cmpSeriesKeys.map(k => `${cmpShortName}:${k}`),
+        [cmpSeriesKeys, cmpShortName]
+    );
+
+    const mergedData = useMemo(() => {
+        if (!hasCompare) return chartData;
+        const maxLen = Math.max(chartData.length, cmpData.length);
+        return Array.from({ length: maxLen }, (_, i) => {
+            const row = {};
+            // Main x label
+            row[xKey] = i < chartData.length ? chartData[i][xKey] : i;
+            // Main series
+            if (i < chartData.length) {
+                seriesKeys.forEach(k => { row[k] = chartData[i][k]; });
+            } else {
+                seriesKeys.forEach(k => { row[k] = null; });
+            }
+            // Compare series
+            if (i < cmpData.length) {
+                cmpSeriesKeys.forEach(k => { row[`${cmpShortName}:${k}`] = cmpData[i][k]; });
+            } else {
+                cmpSeriesKeys.forEach(k => { row[`${cmpShortName}:${k}`] = null; });
+            }
+            return row;
+        });
+    }, [hasCompare, chartData, cmpData, seriesKeys, cmpSeriesKeys, xKey, cmpShortName]);
+
+    /* All series keys for display purposes */
+    const allSeriesKeys = useMemo(() => [...seriesKeys, ...prefixedCmpKeys], [seriesKeys, prefixedCmpKeys]);
+
+    /* ── Visible series toggles ── */
     const [visibleSeries, setVisibleSeries] = useState([]);
     useEffect(() => {
-        setVisibleSeries(seriesKeys.slice(0, Math.min(seriesKeys.length, 8)));
-    }, [seriesKeys]);
+        setVisibleSeries(allSeriesKeys.slice(0, Math.min(allSeriesKeys.length, 8)));
+    }, [allSeriesKeys.join(',')]);   // eslint-disable-line
     const toggleSeries = (key) =>
         setVisibleSeries(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
 
-    /* Baseline state */
+    /* ── Baseline / zoom state ── */
     const [baselineLeft, setBaselineLeft] = useState(null);
     const [baselineRight, setBaselineRight] = useState(null);
     const [isDragging, setIsDragging] = useState(false);
     const [dragRight, setDragRight] = useState('');
-
-    /* Brush/zoom state */
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null);
     const [hoverLabel, setHoverLabel] = useState(null);
-
     const chartWrapperRef = useRef(null);
 
-    /* Reset on new file */
     useEffect(() => {
-        setBaselineLeft(null);
-        setBaselineRight(null);
-        setIsDragging(false);
-        setDragRight('');
-        setBrushStartIdx(0);
-        setBrushEndIdx(null);
+        setBaselineLeft(null); setBaselineRight(null);
+        setIsDragging(false); setDragRight('');
+        setBrushStartIdx(0); setBrushEndIdx(null);
     }, [data, fileName]);
 
-    /* Baseline index range */
+    /* ── Baseline index range (on merged data) ── */
     const baselineRange = useMemo(() => {
-        if (!baselineLeft || !baselineRight || !chartData.length) return null;
-        let s = chartData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-        let e = chartData.findIndex(d => String(d[xKey]) === String(baselineRight));
+        if (!baselineLeft || !baselineRight || !mergedData.length) return null;
+        let s = mergedData.findIndex(d => String(d[xKey]) === String(baselineLeft));
+        let e = mergedData.findIndex(d => String(d[xKey]) === String(baselineRight));
         if (s < 0) s = 0;
-        if (e < 0) e = chartData.length - 1;
+        if (e < 0) e = mergedData.length - 1;
         if (s > e) [s, e] = [e, s];
         return { startIdx: s, endIdx: e };
-    }, [baselineLeft, baselineRight, chartData, xKey]);
+    }, [baselineLeft, baselineRight, mergedData, xKey]);
 
-    /* Per-series averages over baseline window */
+    /* ── Baseline averages per series ── */
     const baselineAvgs = useMemo(() => {
         if (!baselineRange) return null;
         const { startIdx, endIdx } = baselineRange;
-        const slice = chartData.slice(startIdx, endIdx + 1);
+        const slice = mergedData.slice(startIdx, endIdx + 1);
         const avgs = {};
-        seriesKeys.forEach(key => {
+        allSeriesKeys.forEach(key => {
             const vals = slice.map(r => r[key]).filter(v => typeof v === 'number' && isFinite(v));
             avgs[key] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
         });
         return avgs;
-    }, [baselineRange, chartData, seriesKeys]);
+    }, [baselineRange, mergedData, allSeriesKeys]);
 
-    /* Normalized data: (y - avg) / avg */
+    /* ── Normalized display data ── */
     const displayData = useMemo(() => {
-        if (!baselineAvgs) return chartData;
-        return chartData.map(row => {
+        if (!baselineAvgs) return mergedData;
+        return mergedData.map(row => {
             const out = { [xKey]: row[xKey] };
-            seriesKeys.forEach(key => {
+            allSeriesKeys.forEach(key => {
                 const avg = baselineAvgs[key];
                 if (avg !== null && avg !== undefined && avg !== 0 && typeof row[key] === 'number') {
                     out[key] = (row[key] - avg) / avg;
@@ -134,11 +191,11 @@ const NormalizePage = ({ data, fileName }) => {
             });
             return out;
         });
-    }, [baselineAvgs, chartData, seriesKeys, xKey]);
+    }, [baselineAvgs, mergedData, allSeriesKeys, xKey]);
 
     const isNormalized = !!baselineAvgs;
 
-    /* Mouse handlers — drag to select baseline */
+    /* ── Mouse handlers ── */
     const handleMouseDown = (e) => {
         if (e && e.activeLabel !== undefined && e.activeLabel !== null) {
             setIsDragging(true);
@@ -147,7 +204,6 @@ const NormalizePage = ({ data, fileName }) => {
             setBaselineRight(null);
         }
     };
-
     const handleMouseMove = (e) => {
         if (!e) return;
         if (e.activeLabel !== undefined && e.activeLabel !== null) {
@@ -155,12 +211,11 @@ const NormalizePage = ({ data, fileName }) => {
             if (isDragging) setDragRight(String(e.activeLabel));
         }
     };
-
     const handleMouseUp = () => {
         if (!isDragging) return;
         const finalRight = dragRight || baselineLeft;
-        const lIdx = chartData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-        const rIdx = chartData.findIndex(d => String(d[xKey]) === String(finalRight));
+        const lIdx = mergedData.findIndex(d => String(d[xKey]) === String(baselineLeft));
+        const rIdx = mergedData.findIndex(d => String(d[xKey]) === String(finalRight));
         if (lIdx <= rIdx) {
             setBaselineRight(finalRight);
         } else {
@@ -171,12 +226,12 @@ const NormalizePage = ({ data, fileName }) => {
         setIsDragging(false);
     };
 
-    /* Wheel zoom */
+    /* ── Wheel zoom ── */
     const handleWheel = useCallback((e) => {
-        if (!chartData || chartData.length === 0) return;
+        if (!mergedData || mergedData.length === 0) return;
         e.preventDefault();
         const zoomIn = e.deltaY < 0;
-        const lastIdx = chartData.length - 1;
+        const lastIdx = mergedData.length - 1;
         const startIdx = brushStartIdx;
         const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
         const currentSpan = endIdx - startIdx;
@@ -185,7 +240,7 @@ const NormalizePage = ({ data, fileName }) => {
         const delta = Math.max(1, Math.floor(currentSpan * 0.15));
         let pivotIdx = Math.floor(startIdx + currentSpan / 2);
         if (hoverLabel) {
-            const hi = chartData.findIndex(d => String(d[xKey]) === String(hoverLabel));
+            const hi = mergedData.findIndex(d => String(d[xKey]) === String(hoverLabel));
             if (hi >= startIdx && hi <= endIdx) pivotIdx = hi;
         }
         const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
@@ -203,7 +258,7 @@ const NormalizePage = ({ data, fileName }) => {
         }
         setBrushStartIdx(newStart);
         setBrushEndIdx(newEnd);
-    }, [chartData, brushStartIdx, brushEndIdx, xKey, hoverLabel]);
+    }, [mergedData, brushStartIdx, brushEndIdx, xKey, hoverLabel]);
 
     useEffect(() => {
         const el = chartWrapperRef.current;
@@ -213,10 +268,8 @@ const NormalizePage = ({ data, fileName }) => {
     }, [handleWheel]);
 
     const clearBaseline = () => {
-        setBaselineLeft(null);
-        setBaselineRight(null);
-        setDragRight('');
-        setIsDragging(false);
+        setBaselineLeft(null); setBaselineRight(null);
+        setDragRight(''); setIsDragging(false);
     };
 
     const formatYAxis = (v) => {
@@ -230,6 +283,9 @@ const NormalizePage = ({ data, fileName }) => {
             <div className="normalize-empty">
                 <AlertCircle size={48} color="#475569" />
                 <p>Select a file from the sidebar to begin normalization.</p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Ctrl+click a second file to overlay and compare.
+                </p>
             </div>
         );
     }
@@ -242,7 +298,6 @@ const NormalizePage = ({ data, fileName }) => {
         );
     }
 
-    const baselL = baselineLeft;
     const baselR = baselineRight || (isDragging ? dragRight : null);
 
     return (
@@ -250,85 +305,128 @@ const NormalizePage = ({ data, fileName }) => {
 
             {/* ── Compact header ── */}
             <div className="normalize-header">
-                <span className="normalize-title">
-                    <Activity size={15} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle', color: '#fbbf24' }} />
-                    Baseline Normalization
-                    {fileName && <em style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 8 }}>— {fileName}</em>}
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, overflow: 'hidden' }}>
+                    <Activity size={15} color="#fbbf24" style={{ flexShrink: 0 }} />
+                    <span className="normalize-title">{shortName(fileName)}</span>
+                    {hasCompare && (
+                        <>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>vs</span>
+                            <span className="normalize-title" style={{ color: CMP_COLORS[0] }}>
+                                <Layers size={13} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
+                                {cmpShortName}
+                            </span>
+                        </>
+                    )}
+                    {!hasCompare && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: 4 }}>
+                            · Ctrl+click a second file to overlay
+                        </span>
+                    )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                     {isNormalized && (
-                        <span style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600 }}>✓ Normalized (y−ȳ₀)/ȳ₀</span>
+                        <span style={{ fontSize: '0.73rem', color: '#34d399', fontWeight: 600 }}>✓ (y−ȳ₀)/ȳ₀</span>
                     )}
                     {baselineLeft && (
-                        <button
-                            onClick={clearBaseline}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: 5,
-                                background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-                                color: '#f87171', borderRadius: 6, padding: '4px 10px',
-                                fontSize: '0.75rem', cursor: 'pointer'
-                            }}
-                        >
+                        <button onClick={clearBaseline} className="clear-btn">
                             <RotateCcw size={12} /> Clear baseline
                         </button>
                     )}
                 </div>
             </div>
 
-            {/* ── Series chip bar — horizontally scrollable, single row ── */}
+            {/* ── Series chip bar — single scrollable row ── */}
             <div className="series-chip-bar">
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', marginRight: 4 }}>Series:</span>
-                {seriesKeys.map((key) => {
-                    const colorIdx = seriesKeys.indexOf(key) % COLORS.length;
+                {/* Main file chips */}
+                {seriesKeys.length > 0 && (
+                    <span style={{
+                        fontSize: '0.68rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', marginRight: 2,
+                        borderRight: hasCompare ? '1px solid var(--border-color)' : 'none', paddingRight: hasCompare ? 6 : 0
+                    }}>
+                        {shortName(fileName)}
+                    </span>
+                )}
+                {seriesKeys.map((key, i) => {
                     const active = visibleSeries.includes(key);
                     return (
-                        <button
-                            key={key}
-                            onClick={() => toggleSeries(key)}
+                        <button key={key} onClick={() => toggleSeries(key)}
                             className={`series-chip${active ? ' active' : ''}`}
-                            style={{ borderColor: active ? COLORS[colorIdx] : 'transparent', color: COLORS[colorIdx] }}
-                            title={active ? 'Hide' : 'Show'}
-                        >
-                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: COLORS[colorIdx], display: 'inline-block', flexShrink: 0 }} />
+                            style={{
+                                borderColor: active ? MAIN_COLORS[i % MAIN_COLORS.length] : 'transparent',
+                                color: MAIN_COLORS[i % MAIN_COLORS.length]
+                            }}
+                            title={active ? 'Hide' : 'Show'}>
+                            <span style={{
+                                width: 7, height: 7, borderRadius: '50%',
+                                background: MAIN_COLORS[i % MAIN_COLORS.length], display: 'inline-block', flexShrink: 0
+                            }} />
                             {key}
                         </button>
                     );
                 })}
+
+                {/* Compare file chips */}
+                {hasCompare && (
+                    <>
+                        <span style={{
+                            fontSize: '0.68rem', color: CMP_COLORS[0], whiteSpace: 'nowrap',
+                            marginLeft: 6, borderLeft: '1px solid var(--border-color)', paddingLeft: 6
+                        }}>
+                            <Layers size={10} style={{ display: 'inline', marginRight: 3 }} />{cmpShortName}
+                        </span>
+                        {cmpSeriesKeys.map((key, i) => {
+                            const prefKey = `${cmpShortName}:${key}`;
+                            const active = visibleSeries.includes(prefKey);
+                            return (
+                                <button key={prefKey} onClick={() => toggleSeries(prefKey)}
+                                    className={`series-chip${active ? ' active' : ''}`}
+                                    style={{
+                                        borderColor: active ? CMP_COLORS[i % CMP_COLORS.length] : 'transparent',
+                                        color: CMP_COLORS[i % CMP_COLORS.length],
+                                        borderStyle: 'dashed'
+                                    }}
+                                    title={active ? 'Hide' : 'Show'}>
+                                    <span style={{
+                                        width: 7, height: 7, borderRadius: 1,
+                                        background: CMP_COLORS[i % CMP_COLORS.length], display: 'inline-block', flexShrink: 0
+                                    }} />
+                                    {key}
+                                </button>
+                            );
+                        })}
+                    </>
+                )}
             </div>
 
-            {/* ── Baseline info / instruction bar ── */}
+            {/* ── Baseline info bar ── */}
             <div className="baseline-info-bar">
                 {!baselineLeft ? (
                     <span>
                         <Target size={12} style={{ display: 'inline', marginRight: 5, verticalAlign: 'middle', color: '#fbbf24' }} />
-                        <strong style={{ color: '#fbbf24' }}>Click &amp; drag</strong> on the chart to select a baseline interval
-                        — the chart normalises to <strong>(y − ȳ₀) / ȳ₀</strong> shown as <strong>%</strong>
+                        <strong style={{ color: '#fbbf24' }}>Click &amp; drag</strong> on the chart to select baseline window
+                        — normalises each series to <strong>(y − ȳ₀) / ȳ₀</strong> shown as <strong>%</strong>
+                        {hasCompare && <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>· Both files use same window</span>}
                     </span>
                 ) : (
                     <>
                         <span>
-                            Baseline: <strong style={{ color: '#fbbf24' }}>{baselL}</strong>
-                            {baselR && baselR !== baselL && <> → <strong style={{ color: '#fbbf24' }}>{baselR}</strong></>}
+                            Baseline: <strong style={{ color: '#fbbf24' }}>{baselineLeft}</strong>
+                            {baselR && baselR !== baselineLeft && <> → <strong style={{ color: '#fbbf24' }}>{baselR}</strong></>}
                             {baselineRange && <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>({baselineRange.endIdx - baselineRange.startIdx + 1} rows)</span>}
                         </span>
-                        {isNormalized && <span style={{ color: '#34d399' }}>Y-axis = % change from baseline avg</span>}
+                        {isNormalized && <span style={{ color: '#34d399' }}>Y-axis = % change from baseline average</span>}
                     </>
                 )}
             </div>
 
             {/* ── Chart scroll container ── */}
             <div className="normalize-chart-scroll">
-                <div
-                    ref={chartWrapperRef}
-                    className={`normalize-chart-wrapper${isDragging ? ' selecting-baseline' : ''}`}
-                >
-                    {/* Floating hint — pointer-events:none so it never blocks drag */}
+                <div ref={chartWrapperRef}
+                    className={`normalize-chart-wrapper${isDragging ? ' selecting-baseline' : ''}`}>
                     <div className="normalize-mode-hint" style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                        {isDragging
-                            ? '🎯 Release to set baseline'
-                            : isNormalized
-                                ? '📊 % change from baseline — drag to reselect, scroll to zoom'
-                                : '🖱️ Drag on chart to define baseline window · scroll to zoom'}
+                        {isDragging ? '🎯 Release to set baseline'
+                            : isNormalized ? '📊 % change from baseline — drag to reselect · scroll to zoom'
+                                : '🖱️ Drag to define baseline window · scroll to zoom'}
                     </div>
 
                     <ResponsiveContainer width="100%" height={700}>
@@ -341,36 +439,22 @@ const NormalizePage = ({ data, fileName }) => {
                             onMouseLeave={handleMouseUp}
                         >
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
-                            <XAxis
-                                dataKey={xKey}
-                                stroke="#94a3b8"
+                            <XAxis dataKey={xKey} stroke="#94a3b8"
                                 tick={{ fill: '#94a3b8', fontSize: 11 }}
-                                minTickGap={30}
-                                interval="preserveStartEnd"
-                                tickFormatter={v => String(v)}
-                            />
-                            <YAxis
-                                stroke="#94a3b8"
-                                tick={{ fill: '#94a3b8', fontSize: 11 }}
+                                minTickGap={30} interval="preserveStartEnd"
+                                tickFormatter={v => String(v)} />
+                            <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 11 }}
                                 domain={['auto', 'auto']}
-                                width={isNormalized ? 72 : 55}
+                                width={isNormalized ? 72 : 58}
                                 tickFormatter={formatYAxis}
                                 label={isNormalized ? {
                                     value: '% change', angle: -90, position: 'insideLeft',
                                     fill: '#64748b', fontSize: 11, dx: 10
-                                } : undefined}
-                            />
+                                } : undefined} />
                             <Tooltip content={<NormalizeTooltip isNormalized={isNormalized} />} />
-                            <Legend
-                                verticalAlign="bottom"
-                                formatter={(v) => <span style={{ color: '#e2e8f0', fontSize: '0.75rem' }}>{v}</span>}
-                            />
-                            <Brush
-                                dataKey={xKey}
-                                height={24}
-                                stroke="#fbbf24"
-                                fill="#1e293b"
-                                travellerWidth={8}
+                            <Legend verticalAlign="bottom"
+                                formatter={(v) => <span style={{ color: '#e2e8f0', fontSize: '0.72rem' }}>{v}</span>} />
+                            <Brush dataKey={xKey} height={24} stroke="#fbbf24" fill="#1e293b" travellerWidth={8}
                                 startIndex={brushStartIdx}
                                 endIndex={brushEndIdx !== null ? brushEndIdx : Math.max(0, displayData.length - 1)}
                                 onChange={(range) => {
@@ -379,52 +463,52 @@ const NormalizePage = ({ data, fileName }) => {
                                         setBrushEndIdx(range.endIndex);
                                     }
                                 }}
-                                tickFormatter={() => ''}
-                            />
+                                tickFormatter={() => ''} />
 
-                            {/* Zero reference when normalised */}
                             {isNormalized && (
-                                <ReferenceLine y={0} stroke="rgba(255,255,255,0.3)" strokeDasharray="5 3"
+                                <ReferenceLine y={0} stroke="rgba(255,255,255,0.28)" strokeDasharray="5 3"
                                     label={{ value: '0%', fill: '#64748b', fontSize: 11, position: 'right' }} />
                             )}
-
-                            {/* Live drag highlight */}
                             {isDragging && baselineLeft && dragRight && (
                                 <ReferenceArea x1={baselineLeft} x2={dragRight}
                                     fill="rgba(251,191,36,0.15)" stroke="rgba(251,191,36,0.6)" strokeWidth={1.5} />
                             )}
-                            {/* Committed baseline band */}
                             {!isDragging && baselineLeft && baselineRight && (
                                 <ReferenceArea x1={baselineLeft} x2={baselineRight}
-                                    fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.35)" strokeWidth={1} strokeDasharray="4 3" />
+                                    fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.35)"
+                                    strokeWidth={1} strokeDasharray="4 3" />
                             )}
 
-                            {/* Lines */}
-                            {visibleSeries.map((key) => (
-                                <Line
-                                    key={key}
-                                    type="monotone"
-                                    dataKey={key}
-                                    stroke={COLORS[seriesKeys.indexOf(key) % COLORS.length]}
-                                    strokeWidth={2}
-                                    dot={false}
-                                    activeDot={{ r: 4 }}
-                                    name={key}
-                                    isAnimationActive={false}
-                                    connectNulls
-                                />
+                            {/* Main file lines — solid */}
+                            {seriesKeys.filter(k => visibleSeries.includes(k)).map((key, i) => (
+                                <Line key={key} type="monotone" dataKey={key}
+                                    stroke={MAIN_COLORS[i % MAIN_COLORS.length]}
+                                    strokeWidth={2} dot={false} activeDot={{ r: 4 }}
+                                    name={key} isAnimationActive={false} connectNulls />
+                            ))}
+
+                            {/* Compare file lines — dashed */}
+                            {hasCompare && cmpSeriesKeys.filter(k => visibleSeries.includes(`${cmpShortName}:${k}`)).map((key, i) => (
+                                <Line key={`${cmpShortName}:${key}`} type="monotone"
+                                    dataKey={`${cmpShortName}:${key}`}
+                                    stroke={CMP_COLORS[i % CMP_COLORS.length]}
+                                    strokeWidth={2} strokeDasharray="6 3"
+                                    dot={false} activeDot={{ r: 4 }}
+                                    name={`${cmpShortName}:${key}`}
+                                    isAnimationActive={false} connectNulls />
                             ))}
                         </LineChart>
                     </ResponsiveContainer>
                 </div>
             </div>
 
-            {/* ── Footer stats ── */}
+            {/* ── Footer ── */}
             <div className="normalize-footer">
-                <span className="stat">Rows: <strong>{data.length}</strong></span>
-                <span className="stat">Total series: <strong>{seriesKeys.length}</strong></span>
-                <span className="stat">Showing: <strong>{visibleSeries.length}</strong></span>
-                <span className="stat">X-axis: <strong>{xKey}</strong></span>
+                <span className="stat">Main rows: <strong>{data.length}</strong></span>
+                {hasCompare && <span className="stat">Compare rows: <strong>{cmpData.length}</strong></span>}
+                <span className="stat">Main series: <strong>{seriesKeys.length}</strong></span>
+                {hasCompare && <span className="stat">Cmp series: <strong>{cmpSeriesKeys.length}</strong></span>}
+                <span className="stat">Visible: <strong>{visibleSeries.length}</strong></span>
                 {baselineRange && (
                     <span className="stat" style={{ color: '#fbbf24' }}>
                         Baseline: <strong>{baselineRange.endIdx - baselineRange.startIdx + 1} rows</strong>

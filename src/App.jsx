@@ -353,6 +353,7 @@ function App() {
                 key="normalize"
                 data={parsedData?.data}
                 fileName={parsedData?.fileName}
+                compareDataList={compareDataList}
               />
             ) : !selectedFileId ? (
               <EmptyState

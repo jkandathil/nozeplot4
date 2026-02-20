@@ -5,6 +5,24 @@
     overflow: hidden;
 }
 
+.clear-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.clear-btn:hover {
+    background: rgba(239, 68, 68, 0.22);
+}
+
 /* ── Header — single tight row ───────────────────── */
 .normalize-header {
     display: flex;
