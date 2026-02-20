@@ -1,0 +1,190 @@
+.normalize-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.normalize-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.normalize-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    margin-right: 8px;
+}
+
+.normalize-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ── Baseline info bar ───────────────────────────── */
+.baseline-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgba(251, 191, 36, 0.07);
+    border-bottom: 1px solid rgba(251, 191, 36, 0.25);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.baseline-info-bar strong {
+    color: #fbbf24;
+}
+
+.baseline-info-bar .clear-baseline-btn {
+    margin-left: auto;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.baseline-info-bar .clear-baseline-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+}
+
+.baseline-stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #fbbf24;
+    font-weight: 500;
+}
+
+/* ── Chart area ──────────────────────────────────── */
+.normalize-chart-area {
+    flex: 1;
+    padding: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.normalize-chart-wrapper {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+}
+
+/* Cursor changes when in baseline-select mode */
+.normalize-chart-wrapper.selecting-baseline {
+    cursor: crosshair;
+}
+
+/* ── Normalize mode badge on chart ───────────────── */
+.normalize-mode-hint {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    font-size: 0.73rem;
+    color: var(--text-muted);
+    background: rgba(15, 23, 42, 0.88);
+    padding: 4px 12px;
+    border-radius: 20px;
+    pointer-events: none;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    white-space: nowrap;
+}
+
+/* ── Series selector ─────────────────────────────── */
+.series-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.series-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.series-chip.active {
+    border-color: currentColor;
+    opacity: 1;
+}
+
+.series-chip:not(.active) {
+    opacity: 0.4;
+}
+
+.series-chip:hover {
+    opacity: 0.85;
+}
+
+/* ── Empty / no file state ───────────────────────── */
+.normalize-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.normalize-empty svg {
+    opacity: 0.35;
+}
+
+/* ── Footer stats ────────────────────────────────── */
+.normalize-footer {
+    display: flex;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.normalize-footer .stat {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.normalize-footer .stat strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+}

@@ -19,12 +19,14 @@ const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 import Sidebar from './components/Sidebar';
 import ChartArea from './components/ChartArea';
 import EmptyState from './components/EmptyState';
+import NormalizePage from './components/NormalizePage';
 
 function App() {
   const [files, setFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState(null);
   const [parsedData, setParsedData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [activePage, setActivePage] = useState('dashboard'); // 'dashboard' | 'normalize'
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
@@ -330,6 +332,8 @@ function App() {
         onDeleteFile={deleteFile}
         onDeleteAllFiles={deleteAllFiles}
         userName={userName}
+        activePage={activePage}
+        onPageChange={setActivePage}
       />
 
       {/* Main Content */}
@@ -344,7 +348,13 @@ function App() {
 
         <div className="content-area">
           <AnimatePresence mode="wait">
-            {!selectedFileId ? (
+            {activePage === 'normalize' ? (
+              <NormalizePage
+                key="normalize"
+                data={parsedData?.data}
+                fileName={parsedData?.fileName}
+              />
+            ) : !selectedFileId ? (
               <EmptyState
                 key="empty"
                 isDragActive={isDragActive}

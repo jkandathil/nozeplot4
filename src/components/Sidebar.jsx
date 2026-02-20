@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2 } from 'lucide-react';
+import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, userName = "User" }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, userName = "User", activePage = 'dashboard', onPageChange }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -62,6 +62,60 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <img src={logo} alt="NozePlots4 Logo" className="logo-icon" />
                     <span>NozePlot</span>
                 </div>
+            </div>
+
+            {/* Page navigation */}
+            <div style={{
+                display: 'flex',
+                gap: 6,
+                padding: '8px 12px',
+                borderBottom: '1px solid var(--border-color)',
+                flexShrink: 0
+            }}>
+                <button
+                    onClick={() => onPageChange?.('dashboard')}
+                    style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'dashboard' ? 'rgba(56,189,248,0.15)' : 'transparent',
+                        color: activePage === 'dashboard' ? 'var(--accent-primary)' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Dashboard"
+                >
+                    <BarChart2 size={14} /> Dashboard
+                </button>
+                <button
+                    onClick={() => onPageChange?.('normalize')}
+                    style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'normalize' ? 'rgba(251,191,36,0.15)' : 'transparent',
+                        color: activePage === 'normalize' ? '#fbbf24' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Baseline Normalization"
+                >
+                    <Activity size={14} /> Normalize
+                </button>
             </div>
 
             <div className="upload-section">
