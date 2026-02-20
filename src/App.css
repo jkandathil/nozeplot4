@@ -15,7 +15,7 @@
   overflow: hidden;
   background-color: var(--bg-secondary);
   border-top-left-radius: var(--border-radius-xl);
-  margin-top: 8px;
+  margin-top: 0;
   /* Small gap for styling */
   z-index: 10;
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.2);
@@ -50,7 +50,7 @@
 
 .content-area {
   flex: 1;
-  padding: var(--spacing-lg);
+  padding: 0;
   overflow-y: auto;
   position: relative;
 }

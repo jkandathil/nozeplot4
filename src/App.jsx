@@ -357,13 +357,7 @@ function App() {
 
       {/* Main Content */}
       <main className="main-content">
-        <header className="top-bar glass-panel">
-          {/* Logo removed from header to avoid duplication with sidebar */}
-          <div className="title">
-            <h1 style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>Dashboard</h1>
-          </div>
-          {/* Add more header controls here */}
-        </header>
+
 
         <div className="content-area">
           <AnimatePresence mode="wait">
