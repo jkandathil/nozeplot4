@@ -18,26 +18,31 @@ import './NormalizePage.css';
 
 const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
 
+/* ── Custom tooltip ────────────────────────────────────────────────── */
 const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
     if (!active || !payload || !payload.length) return null;
     return (
         <div style={{
-            background: 'rgba(15,23,42,0.95)',
+            background: 'rgba(15,23,42,0.97)',
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             padding: '8px 12px',
             fontSize: '0.82rem',
             pointerEvents: 'none',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.4)'
+            boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            maxHeight: 260,
+            overflowY: 'auto'
         }}>
-            <p style={{ color: '#94a3b8', marginBottom: 4, fontWeight: 600 }}>{String(label)}</p>
+            <p style={{ color: '#94a3b8', marginBottom: 4, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 3 }}>
+                {String(label)}
+            </p>
             {payload.map((entry, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: entry.color }}>
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: entry.color, marginBottom: 2 }}>
                     <span style={{ opacity: 0.85 }}>{entry.name}</span>
                     <strong>
                         {isNormalized
                             ? `${entry.value >= 0 ? '+' : ''}${(entry.value * 100).toFixed(2)}%`
-                            : entry.value}
+                            : typeof entry.value === 'number' ? entry.value.toFixed(3) : entry.value}
                     </strong>
                 </div>
             ))}
@@ -45,46 +50,42 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
     );
 };
 
-const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesKeys }) => {
-    // ── Derive series info ────────────────────────────────────────────────
+/* ── Main component ────────────────────────────────────────────────── */
+const NormalizePage = ({ data, fileName }) => {
+
+    /* Derive xKey / seriesKeys */
     const { xKey, seriesKeys, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
         const keys = Object.keys(data[0]);
         let x = keys[0];
-        const potentialX = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time'));
+        const potentialX = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time') || k.toLowerCase().includes('stamp'));
         if (potentialX) x = potentialX;
         const series = keys.filter(k => k !== x && typeof data[0][k] === 'number');
         return { xKey: x, seriesKeys: series, chartData: data };
     }, [data]);
 
-    // ── Visible series (chips) ────────────────────────────────────────────
+    /* Visible series toggle */
     const [visibleSeries, setVisibleSeries] = useState([]);
     useEffect(() => {
-        setVisibleSeries(seriesKeys.slice(0, Math.min(seriesKeys.length, 6)));
+        setVisibleSeries(seriesKeys.slice(0, Math.min(seriesKeys.length, 8)));
     }, [seriesKeys]);
-    const toggleSeries = (key) => {
-        setVisibleSeries(prev =>
-            prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-        );
-    };
+    const toggleSeries = (key) =>
+        setVisibleSeries(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
 
-    // ── Baseline selection state ──────────────────────────────────────────
-    const [baselineLeft, setBaselineLeft] = useState(null);   // committed x labels
+    /* Baseline state */
+    const [baselineLeft, setBaselineLeft] = useState(null);
     const [baselineRight, setBaselineRight] = useState(null);
     const [isDragging, setIsDragging] = useState(false);
-    const [dragRight, setDragRight] = useState('');           // live drag endpoint
+    const [dragRight, setDragRight] = useState('');
 
-    // ── Brush zoom state ──────────────────────────────────────────────────
+    /* Brush/zoom state */
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null);
-
-    // Current hover label (for tooltip etc.)
     const [hoverLabel, setHoverLabel] = useState(null);
 
-    // ── Ref for non-passive wheel ─────────────────────────────────────────
     const chartWrapperRef = useRef(null);
 
-    // Reset everything when data changes
+    /* Reset on new file */
     useEffect(() => {
         setBaselineLeft(null);
         setBaselineRight(null);
@@ -92,10 +93,9 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
         setDragRight('');
         setBrushStartIdx(0);
         setBrushEndIdx(null);
-        setVisibleSeries(seriesKeys.slice(0, Math.min(seriesKeys.length, 6)));
     }, [data, fileName]);
 
-    // ── Baseline indices ──────────────────────────────────────────────────
+    /* Baseline index range */
     const baselineRange = useMemo(() => {
         if (!baselineLeft || !baselineRight || !chartData.length) return null;
         let s = chartData.findIndex(d => String(d[xKey]) === String(baselineLeft));
@@ -106,7 +106,7 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
         return { startIdx: s, endIdx: e };
     }, [baselineLeft, baselineRight, chartData, xKey]);
 
-    // ── Per-series baseline averages ──────────────────────────────────────
+    /* Per-series averages over baseline window */
     const baselineAvgs = useMemo(() => {
         if (!baselineRange) return null;
         const { startIdx, endIdx } = baselineRange;
@@ -119,7 +119,7 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
         return avgs;
     }, [baselineRange, chartData, seriesKeys]);
 
-    // ── Normalized display data: (y - avg) / avg ──────────────────────────
+    /* Normalized data: (y - avg) / avg */
     const displayData = useMemo(() => {
         if (!baselineAvgs) return chartData;
         return chartData.map(row => {
@@ -138,43 +138,40 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
 
     const isNormalized = !!baselineAvgs;
 
-    // ── Mouse handlers on the chart ───────────────────────────────────────
+    /* Mouse handlers — drag to select baseline */
     const handleMouseDown = (e) => {
-        if (e && e.activeLabel) {
+        if (e && e.activeLabel !== undefined && e.activeLabel !== null) {
             setIsDragging(true);
-            setBaselineLeft(e.activeLabel);
-            setDragRight(e.activeLabel);
-            // Clear previous baseline when starting new selection
+            setBaselineLeft(String(e.activeLabel));
+            setDragRight(String(e.activeLabel));
             setBaselineRight(null);
         }
     };
 
     const handleMouseMove = (e) => {
-        if (e && e.activeLabel) {
-            setHoverLabel(e.activeLabel);
-            if (isDragging) setDragRight(e.activeLabel);
+        if (!e) return;
+        if (e.activeLabel !== undefined && e.activeLabel !== null) {
+            setHoverLabel(String(e.activeLabel));
+            if (isDragging) setDragRight(String(e.activeLabel));
         }
     };
 
     const handleMouseUp = () => {
-        if (isDragging) {
-            const finalRight = dragRight || baselineLeft;
-            // Ensure left < right
-            const lIdx = chartData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-            const rIdx = chartData.findIndex(d => String(d[xKey]) === String(finalRight));
-            if (lIdx <= rIdx) {
-                setBaselineRight(finalRight);
-            } else {
-                // swap
-                setBaselineLeft(finalRight);
-                setBaselineRight(baselineLeft);
-            }
-            setDragRight('');
-            setIsDragging(false);
+        if (!isDragging) return;
+        const finalRight = dragRight || baselineLeft;
+        const lIdx = chartData.findIndex(d => String(d[xKey]) === String(baselineLeft));
+        const rIdx = chartData.findIndex(d => String(d[xKey]) === String(finalRight));
+        if (lIdx <= rIdx) {
+            setBaselineRight(finalRight);
+        } else {
+            setBaselineLeft(finalRight);
+            setBaselineRight(baselineLeft);
         }
+        setDragRight('');
+        setIsDragging(false);
     };
 
-    // ── Wheel zoom (same mechanism as ChartArea) ──────────────────────────
+    /* Wheel zoom */
     const handleWheel = useCallback((e) => {
         if (!chartData || chartData.length === 0) return;
         e.preventDefault();
@@ -223,20 +220,11 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
     };
 
     const formatYAxis = (v) => {
-        if (!isNormalized) return v;
+        if (!isNormalized) return typeof v === 'number' ? v.toFixed(2) : v;
         return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
     };
 
-    // ── Baseline stats for info bar ───────────────────────────────────────
-    const baselineStats = useMemo(() => {
-        if (!baselineAvgs || !baselineRange) return [];
-        return visibleSeries.map(key => ({
-            key,
-            avg: baselineAvgs[key] !== null ? baselineAvgs[key] : null
-        }));
-    }, [baselineAvgs, baselineRange, visibleSeries]);
-
-    // ── Empty state ───────────────────────────────────────────────────────
+    /* ── Empty states ── */
     if (!data || data.length === 0) {
         return (
             <div className="normalize-empty">
@@ -254,96 +242,99 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
         );
     }
 
-    // Labels for the committed baseline area (sorted)
     const baselL = baselineLeft;
-    const baselR = baselineRight || dragRight;
+    const baselR = baselineRight || (isDragging ? dragRight : null);
 
     return (
-        <motion.div className="normalize-page" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+        <motion.div className="normalize-page" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}>
 
-            {/* ── Header ── */}
+            {/* ── Compact header ── */}
             <div className="normalize-header">
                 <span className="normalize-title">
-                    <Activity size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle', color: '#fbbf24' }} />
-                    Baseline Normalization — <em style={{ fontWeight: 400, color: 'var(--text-secondary)' }}>{fileName}</em>
+                    <Activity size={15} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle', color: '#fbbf24' }} />
+                    Baseline Normalization
+                    {fileName && <em style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 8 }}>— {fileName}</em>}
                 </span>
-                <div className="normalize-controls">
-                    {/* Series chips */}
-                    <div className="series-selector">
-                        {seriesKeys.map((key, i) => (
-                            <button
-                                key={key}
-                                className={`series-chip ${visibleSeries.includes(key) ? 'active' : ''}`}
-                                style={{ color: COLORS[i % COLORS.length] }}
-                                onClick={() => toggleSeries(key)}
-                                title={visibleSeries.includes(key) ? 'Hide series' : 'Show series'}
-                            >
-                                <span style={{
-                                    display: 'inline-block', width: 8, height: 8,
-                                    borderRadius: '50%', background: COLORS[i % COLORS.length]
-                                }} />
-                                {key}
-                            </button>
-                        ))}
-                    </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {isNormalized && (
+                        <span style={{ fontSize: '0.75rem', color: '#34d399', fontWeight: 600 }}>✓ Normalized (y−ȳ₀)/ȳ₀</span>
+                    )}
                     {baselineLeft && (
                         <button
-                            className="icon-btn"
-                            style={{ color: '#fbbf24', fontSize: '0.78rem', gap: 4, display: 'flex', alignItems: 'center' }}
                             onClick={clearBaseline}
-                            title="Clear baseline"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 5,
+                                background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                                color: '#f87171', borderRadius: 6, padding: '4px 10px',
+                                fontSize: '0.75rem', cursor: 'pointer'
+                            }}
                         >
-                            <RotateCcw size={14} /> Clear Baseline
+                            <RotateCcw size={12} /> Clear baseline
                         </button>
                     )}
                 </div>
             </div>
 
-            {/* ── Baseline info bar ── */}
+            {/* ── Series chip bar — horizontally scrollable, single row ── */}
+            <div className="series-chip-bar">
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', marginRight: 4 }}>Series:</span>
+                {seriesKeys.map((key) => {
+                    const colorIdx = seriesKeys.indexOf(key) % COLORS.length;
+                    const active = visibleSeries.includes(key);
+                    return (
+                        <button
+                            key={key}
+                            onClick={() => toggleSeries(key)}
+                            className={`series-chip${active ? ' active' : ''}`}
+                            style={{ borderColor: active ? COLORS[colorIdx] : 'transparent', color: COLORS[colorIdx] }}
+                            title={active ? 'Hide' : 'Show'}
+                        >
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: COLORS[colorIdx], display: 'inline-block', flexShrink: 0 }} />
+                            {key}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* ── Baseline info / instruction bar ── */}
             <div className="baseline-info-bar">
                 {!baselineLeft ? (
                     <span>
-                        <Target size={13} style={{ display: 'inline', marginRight: 5, verticalAlign: 'middle', color: '#fbbf24' }} />
-                        <strong>Drag on the chart</strong> to select your baseline interval — the chart will normalize to <strong>(y − ȳ₀) / ȳ₀</strong>
+                        <Target size={12} style={{ display: 'inline', marginRight: 5, verticalAlign: 'middle', color: '#fbbf24' }} />
+                        <strong style={{ color: '#fbbf24' }}>Click &amp; drag</strong> on the chart to select a baseline interval
+                        — the chart normalises to <strong>(y − ȳ₀) / ȳ₀</strong> shown as <strong>%</strong>
                     </span>
                 ) : (
                     <>
                         <span>
-                            Baseline: <strong>{baselL}</strong>
-                            {baselR && baselR !== baselL && <> → <strong>{baselR}</strong></>}
-                            {baselineRange && ` (${baselineRange.endIdx - baselineRange.startIdx + 1} rows)`}
+                            Baseline: <strong style={{ color: '#fbbf24' }}>{baselL}</strong>
+                            {baselR && baselR !== baselL && <> → <strong style={{ color: '#fbbf24' }}>{baselR}</strong></>}
+                            {baselineRange && <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>({baselineRange.endIdx - baselineRange.startIdx + 1} rows)</span>}
                         </span>
-                        {baselineStats.slice(0, 4).map(({ key, avg }) => avg !== null && (
-                            <span key={key} className="baseline-stat">
-                                <span style={{ color: COLORS[seriesKeys.indexOf(key) % COLORS.length] }}>●</span>
-                                {key}: <strong>{avg.toFixed(3)}</strong>
-                            </span>
-                        ))}
-                        {isNormalized && <span style={{ color: '#34d399', fontWeight: 600, marginLeft: 4 }}>✓ Normalized</span>}
-                        <button className="clear-baseline-btn" onClick={clearBaseline}>✕ Clear</button>
+                        {isNormalized && <span style={{ color: '#34d399' }}>Y-axis = % change from baseline avg</span>}
                     </>
                 )}
             </div>
 
-            {/* ── Chart ── */}
-            <div className="normalize-chart-area">
+            {/* ── Chart scroll container ── */}
+            <div className="normalize-chart-scroll">
                 <div
                     ref={chartWrapperRef}
                     className={`normalize-chart-wrapper${isDragging ? ' selecting-baseline' : ''}`}
-                    style={{ height: '100%' }}
                 >
-                    <div className="normalize-mode-hint">
+                    {/* Floating hint — pointer-events:none so it never blocks drag */}
+                    <div className="normalize-mode-hint" style={{ pointerEvents: 'none', userSelect: 'none' }}>
                         {isDragging
                             ? '🎯 Release to set baseline'
                             : isNormalized
-                                ? '📊 Showing (y − ȳ₀) / ȳ₀ — drag to reselect baseline'
-                                : '🖱️ Drag on chart to define baseline interval, scroll to zoom'}
+                                ? '📊 % change from baseline — drag to reselect, scroll to zoom'
+                                : '🖱️ Drag on chart to define baseline window · scroll to zoom'}
                     </div>
 
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height={700}>
                         <LineChart
                             data={displayData}
-                            margin={{ top: 36, right: 30, left: 20, bottom: 80 }}
+                            margin={{ top: 40, right: 30, left: 10, bottom: 60 }}
                             onMouseDown={handleMouseDown}
                             onMouseMove={handleMouseMove}
                             onMouseUp={handleMouseUp}
@@ -362,64 +353,54 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
                                 stroke="#94a3b8"
                                 tick={{ fill: '#94a3b8', fontSize: 11 }}
                                 domain={['auto', 'auto']}
-                                width={isNormalized ? 70 : 55}
+                                width={isNormalized ? 72 : 55}
                                 tickFormatter={formatYAxis}
+                                label={isNormalized ? {
+                                    value: '% change', angle: -90, position: 'insideLeft',
+                                    fill: '#64748b', fontSize: 11, dx: 10
+                                } : undefined}
                             />
-                            <Tooltip
-                                content={<NormalizeTooltip isNormalized={isNormalized} />}
-                            />
+                            <Tooltip content={<NormalizeTooltip isNormalized={isNormalized} />} />
                             <Legend
                                 verticalAlign="bottom"
-                                wrapperStyle={{ paddingTop: 8, bottom: 48 }}
-                                formatter={(v) => (
-                                    <span style={{ color: '#e2e8f0', fontSize: '0.78rem' }}>{v}</span>
-                                )}
+                                formatter={(v) => <span style={{ color: '#e2e8f0', fontSize: '0.75rem' }}>{v}</span>}
                             />
                             <Brush
                                 dataKey={xKey}
-                                height={26}
+                                height={24}
                                 stroke="#fbbf24"
                                 fill="#1e293b"
                                 travellerWidth={8}
-                                y={560}
                                 startIndex={brushStartIdx}
-                                endIndex={brushEndIdx !== null ? brushEndIdx : (displayData.length - 1)}
+                                endIndex={brushEndIdx !== null ? brushEndIdx : Math.max(0, displayData.length - 1)}
                                 onChange={(range) => {
                                     if (range && range.startIndex !== undefined) {
                                         setBrushStartIdx(range.startIndex);
                                         setBrushEndIdx(range.endIndex);
                                     }
                                 }}
-                                tickFormatter={v => String(v)}
+                                tickFormatter={() => ''}
                             />
 
-                            {/* Zero reference line when normalized */}
+                            {/* Zero reference when normalised */}
                             {isNormalized && (
-                                <ReferenceLine y={0} stroke="rgba(255,255,255,0.25)" strokeDasharray="6 3" />
+                                <ReferenceLine y={0} stroke="rgba(255,255,255,0.3)" strokeDasharray="5 3"
+                                    label={{ value: '0%', fill: '#64748b', fontSize: 11, position: 'right' }} />
                             )}
 
-                            {/* Live drag selection */}
+                            {/* Live drag highlight */}
                             {isDragging && baselineLeft && dragRight && (
-                                <ReferenceArea
-                                    x1={baselineLeft} x2={dragRight}
-                                    fill="rgba(251,191,36,0.12)"
-                                    stroke="rgba(251,191,36,0.5)"
-                                    strokeWidth={1}
-                                />
+                                <ReferenceArea x1={baselineLeft} x2={dragRight}
+                                    fill="rgba(251,191,36,0.15)" stroke="rgba(251,191,36,0.6)" strokeWidth={1.5} />
                             )}
-                            {/* Committed baseline */}
+                            {/* Committed baseline band */}
                             {!isDragging && baselineLeft && baselineRight && (
-                                <ReferenceArea
-                                    x1={baselineLeft} x2={baselineRight}
-                                    fill="rgba(251,191,36,0.08)"
-                                    stroke="rgba(251,191,36,0.4)"
-                                    strokeWidth={1}
-                                    strokeDasharray="4 3"
-                                />
+                                <ReferenceArea x1={baselineLeft} x2={baselineRight}
+                                    fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.35)" strokeWidth={1} strokeDasharray="4 3" />
                             )}
 
-                            {/* Series lines */}
-                            {visibleSeries.map((key, i) => (
+                            {/* Lines */}
+                            {visibleSeries.map((key) => (
                                 <Line
                                     key={key}
                                     type="monotone"
@@ -427,7 +408,7 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
                                     stroke={COLORS[seriesKeys.indexOf(key) % COLORS.length]}
                                     strokeWidth={2}
                                     dot={false}
-                                    activeDot={{ r: 5 }}
+                                    activeDot={{ r: 4 }}
                                     name={key}
                                     isAnimationActive={false}
                                     connectNulls
@@ -438,20 +419,19 @@ const NormalizePage = ({ data, fileName, xKey: propXKey, seriesKeys: propSeriesK
                 </div>
             </div>
 
-            {/* ── Footer ── */}
+            {/* ── Footer stats ── */}
             <div className="normalize-footer">
                 <span className="stat">Rows: <strong>{data.length}</strong></span>
-                <span className="stat">Series: <strong>{seriesKeys.length}</strong></span>
+                <span className="stat">Total series: <strong>{seriesKeys.length}</strong></span>
+                <span className="stat">Showing: <strong>{visibleSeries.length}</strong></span>
                 <span className="stat">X-axis: <strong>{xKey}</strong></span>
                 {baselineRange && (
                     <span className="stat" style={{ color: '#fbbf24' }}>
-                        Baseline window: <strong>{baselineRange.endIdx - baselineRange.startIdx + 1} rows</strong>
+                        Baseline: <strong>{baselineRange.endIdx - baselineRange.startIdx + 1} rows</strong>
                     </span>
                 )}
                 {isNormalized && (
-                    <span className="stat" style={{ color: '#34d399' }}>
-                        Mode: <strong>(y − ȳ₀) / ȳ₀</strong>
-                    </span>
+                    <span className="stat" style={{ color: '#34d399' }}>Mode: <strong>(y − ȳ₀) / ȳ₀ × 100%</strong></span>
                 )}
             </div>
         </motion.div>
