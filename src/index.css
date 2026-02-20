@@ -18,6 +18,7 @@
   /* Pantone 00DE93 */
   --accent-secondary: #4ade80;
   /* Complementary green */
+  --gradient-primary: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   --accent-glow: rgba(0, 222, 147, 0.5);
   --accent-hover: #00c080;
 
