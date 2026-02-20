@@ -202,10 +202,34 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     /* Default: first 4 from main file */
     const [visibleSeries, setVisibleSeries] = useState([]);
 
-    // Initialize on load
+    // Initialize on load or when file selection changes
     useEffect(() => {
-        setVisibleSeries(seriesKeys.slice(0, Math.min(seriesKeys.length, 5)));
-    }, [seriesKeys.join(',')]); // eslint-disable-line
+        // Identifies common columns across main and all compare files
+        let common = seriesKeys;
+        if (cmpFiles.length > 0) {
+            const allSets = [new Set(seriesKeys), ...cmpFiles.map(f => new Set(f.seriesKeys))];
+            common = seriesKeys.filter(k => allSets.every(s => s.has(k)));
+        }
+
+        // If common columns exist, select up to 4 of them for ALL files
+        if (common.length > 0) {
+            const initial = [];
+            const cols = common.slice(0, 4);
+            cols.forEach(c => {
+                initial.push(c); // Main
+                cmpFiles.forEach((f, idx) => {
+                    // prefixedKeysMap is stable as it depends on cmpFiles
+                    if (prefixedKeysMap[idx] && prefixedKeysMap[idx][c]) {
+                        initial.push(prefixedKeysMap[idx][c]);
+                    }
+                });
+            });
+            setVisibleSeries(initial);
+        } else {
+            // Fallback: Just main file keys
+            setVisibleSeries(seriesKeys.slice(0, 5));
+        }
+    }, [seriesKeys.join(','), cmpFiles.length]); // Only re-run if main keys change or compare count changes
 
     const toggleSeries = (key) => {
         setVisibleSeries(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
