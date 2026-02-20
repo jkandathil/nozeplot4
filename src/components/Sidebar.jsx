@@ -1,9 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity } from 'lucide-react';
+import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, userName = "User", activePage = 'dashboard', onPageChange }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, onSelectAll, userName = "User", activePage = 'dashboard', onPageChange }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -165,32 +165,55 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             <div className="file-list-container">
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <h3 className="section-title" style={{ margin: 0 }}>Workspace ({files.length})</h3>
-                    {files.length > 0 && onDeleteAllFiles && (
-                        <button
-                            className="delete-all-btn"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (onDeleteAllFiles) onDeleteAllFiles(e);
-                            }}
-                            title="Delete All Files"
-                            style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: '#ef4444',
-                                cursor: 'pointer',
-                                padding: '4px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '4px',
-                                transition: 'background 0.2s',
-                            }}
-                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
-                            onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-                        >
-                            <Trash2 size={16} />
-                        </button>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {/* Select All Button */}
+                        {selectedFileId && files.length > 1 && onSelectAll && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onSelectAll(); }}
+                                title={compareFileIds?.length === (files.length - 1) ? "Deselect All" : "Select All for Compare"}
+                                style={{
+                                    background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px',
+                                    transition: 'background 0.2s', opacity: 0.8
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+                                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                                {compareFileIds?.length === (files.length - 1) ?
+                                    <CheckSquare size={16} color="#fbbf24" strokeWidth={2} /> :
+                                    <Square size={16} color="#94a3b8" strokeWidth={2} />
+                                }
+                            </button>
+                        )}
+
+                        {/* Delete All Button */}
+                        {files.length > 0 && onDeleteAllFiles && (
+                            <button
+                                className="delete-all-btn"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onDeleteAllFiles) onDeleteAllFiles(e);
+                                }}
+                                title="Delete All Files"
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#ef4444',
+                                    cursor: 'pointer',
+                                    padding: '4px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    borderRadius: '4px',
+                                    transition: 'background 0.2s',
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        )}
+                    </div>
                 </div>
                 {files.length === 0 ? (
                     <div className="empty-files">

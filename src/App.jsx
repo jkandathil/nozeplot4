@@ -276,6 +276,24 @@ function App() {
     }
   };
 
+  const handleSelectAll = () => {
+    if (!selectedFileId) return;
+
+    // Get all other files
+    const otherFileIds = files
+      .filter(f => f.id !== selectedFileId)
+      .map(f => f.id);
+
+    if (otherFileIds.length === 0) return;
+
+    // Toggle: If all are selected, deselect. Else, select all.
+    if (compareFileIds.length === otherFileIds.length) {
+      handleCompareSelect([]);
+    } else {
+      handleCompareSelect(otherFileIds);
+    }
+  };
+
   const deleteFile = async (e, fileId) => {
     e.stopPropagation();
 
@@ -331,6 +349,7 @@ function App() {
         onUpload={handleManualUpload}
         onDeleteFile={deleteFile}
         onDeleteAllFiles={deleteAllFiles}
+        onSelectAll={handleSelectAll}
         userName={userName}
         activePage={activePage}
         onPageChange={setActivePage}
