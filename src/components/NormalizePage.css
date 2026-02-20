@@ -17,47 +17,100 @@
     font-size: 0.74rem;
     cursor: pointer;
     transition: background 0.15s;
+    white-space: nowrap;
 }
 
 .clear-btn:hover {
     background: rgba(239, 68, 68, 0.22);
 }
 
-/* ── Header — single tight row ───────────────────── */
+/* ── Header ───────────────────── */
 .normalize-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 16px;
+    padding: 8px 16px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
     gap: 12px;
+    flex-wrap: wrap;
+    /* Allow wrap on small screens */
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+    flex-wrap: nowrap;
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
 }
 
 .normalize-title {
-    font-size: 0.95rem;
+    font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
-/* ── Series chip bar — single scrollable row ─────── */
+.norm-badge {
+    font-size: 0.73rem;
+    color: #34d399;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* ── Common Columns Quick Bar ── */
+.common-cols-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border-color);
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.common-col-btn {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.common-col-btn:hover {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.3);
+    color: #fbbf24;
+}
+
+/* ── Series Chips ──────────────── */
 .series-chip-bar {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 6px 14px;
+    padding: 8px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     overflow-x: auto;
     flex-wrap: nowrap;
-    /* ← critical: never wrap */
     flex-shrink: 0;
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 .series-chip-bar::-webkit-scrollbar {
@@ -69,11 +122,27 @@
     border-radius: 2px;
 }
 
+.chip-separator {
+    width: 1px;
+    height: 18px;
+    background: var(--border-color);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
+.chip-group-label {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    white-space: nowrap;
+    margin-right: 2px;
+}
+
 .series-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
+    gap: 5px;
+    padding: 3px 9px;
     border-radius: 20px;
     border: 1px solid transparent;
     font-size: 0.72rem;
@@ -81,12 +150,13 @@
     transition: all 0.12s;
     white-space: nowrap;
     flex-shrink: 0;
-    background: rgba(255, 255, 255, 0.04);
-    opacity: 0.45;
+    background: rgba(255, 255, 255, 0.03);
+    opacity: 0.55;
 }
 
 .series-chip.active {
     opacity: 1;
+    background: rgba(255, 255, 255, 0.07);
 }
 
 .series-chip:hover {
@@ -94,70 +164,79 @@
     background: rgba(255, 255, 255, 0.08);
 }
 
-/* ── Baseline info bar ───────────────────────────── */
+/* ── Baseline Info ─────────────── */
 .baseline-info-bar {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 7px 16px;
-    background: rgba(251, 191, 36, 0.06);
-    border-bottom: 1px solid rgba(251, 191, 36, 0.2);
+    padding: 6px 16px;
+    background: rgba(251, 191, 36, 0.05);
+    border-bottom: 1px solid rgba(251, 191, 36, 0.15);
     font-size: 0.8rem;
     color: var(--text-secondary);
     flex-shrink: 0;
-    flex-wrap: wrap;
+    min-height: 32px;
 }
 
-.baseline-info-bar strong {
-    color: #fbbf24;
-}
-
-/* ── Scrollable chart area ───────────────────────── */
+/* ── Chart Area ────────────────── */
 .normalize-chart-scroll {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 16px;
+    padding: 10px;
+    background: var(--bg-primary);
 }
 
-/* ── Chart wrapper — fixed height = proper Recharts size ── */
 .normalize-chart-wrapper {
     position: relative;
     width: 100%;
     min-height: 700px;
+    /* Ensure vertical scroll */
 }
 
 .normalize-chart-wrapper.selecting-baseline {
     cursor: crosshair;
 }
 
-/* Floating hint — must NOT block mouse events */
 .normalize-mode-hint {
     position: absolute;
-    top: 8px;
+    top: 10px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 10;
-    font-size: 0.72rem;
+    z-index: 20;
+    font-size: 0.7rem;
     color: var(--text-muted);
-    background: rgba(15, 23, 42, 0.85);
-    padding: 3px 12px;
+    background: rgba(15, 23, 42, 0.9);
+    padding: 4px 12px;
     border-radius: 20px;
     pointer-events: none;
-    /* ← never intercepts mouse events */
     user-select: none;
-    border: 1px solid rgba(251, 191, 36, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     white-space: nowrap;
 }
 
-/* ── Footer stats ────────────────────────────────── */
+/* ── Empty State ───────────────── */
+.normalize-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 1rem;
+    text-align: center;
+    padding: 20px;
+}
+
+/* ── Footer ────────────────────── */
 .normalize-footer {
     display: flex;
     gap: 16px;
-    padding: 8px 16px;
+    padding: 6px 16px;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-color);
-    font-size: 0.76rem;
+    font-size: 0.74rem;
     color: var(--text-muted);
     flex-shrink: 0;
     flex-wrap: wrap;
@@ -173,16 +252,4 @@
 .normalize-footer .stat strong {
     color: var(--text-secondary);
     font-weight: 600;
-}
-
-/* ── Empty state ─────────────────────────────────── */
-.normalize-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 12px;
-    color: var(--text-muted);
-    font-size: 0.95rem;
 }
