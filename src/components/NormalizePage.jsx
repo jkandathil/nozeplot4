@@ -557,31 +557,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                         </span>
                     ))}
 
-                    {/* Filter Controls (Inline) */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12 }}>
-                        <Layers size={14} color="var(--text-muted)" style={{ marginRight: 4 }} title="Noise Filter" />
-                        <select
-                            value={filterType}
-                            onChange={(e) => setFilterType(e.target.value)}
-                            style={{
-                                background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-                                color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px 4px', borderRadius: 4, cursor: 'pointer'
-                            }}>
-                            <option value="none">No Filter</option>
-                            <option value="ma">Moving Avg</option>
-                            <option value="gaussian">Gaussian</option>
-                        </select>
-                        {filterType !== 'none' && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{filterType === 'ma' ? 'Width:' : 'Sigma:'} {filterWindow}</span>
-                                <input
-                                    type="range" min="1" max="50" step="1"
-                                    value={filterWindow} onChange={(e) => setFilterWindow(Number(e.target.value))}
-                                    style={{ width: 60, height: 4, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                                />
-                            </div>
-                        )}
-                    </div>
+
                 </div>
 
                 {/* Common Columns Shortcuts */}
@@ -601,7 +577,31 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                 )}
 
                 <div className="header-controls">
-                    {isNormalized && <span className="norm-badge">✓ (y−ȳ₀)/ȳ₀</span>}
+                    {/* Filter Controls Moved Here */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 12, paddingRight: 12, borderRight: '1px solid var(--border-color)' }}>
+                        <Layers size={14} color="var(--text-muted)" title="Noise Filter" />
+                        <select
+                            value={filterType}
+                            onChange={(e) => setFilterType(e.target.value)}
+                            style={{
+                                background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                                color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px', borderRadius: 4, cursor: 'pointer'
+                            }}>
+                            <option value="none">No Filter</option>
+                            <option value="ma">MA</option>
+                            <option value="gaussian">Gauss</option>
+                        </select>
+                        {filterType !== 'none' && (
+                            <input
+                                type="range" min="1" max="50" step="1"
+                                value={filterWindow} onChange={(e) => setFilterWindow(Number(e.target.value))}
+                                title={`Strength: ${filterWindow}`}
+                                style={{ width: 50, height: 4, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                            />
+                        )}
+                    </div>
+
+                    {isNormalized && <span className="norm-badge">✓ Norm</span>}
                     {baselineLeft && (
                         <button onClick={clearBaseline} className="clear-btn">
                             <RotateCcw size={12} /> Clear
