@@ -187,17 +187,22 @@
 /* ── Chart Area ────────────────── */
 .normalize-chart-scroll {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 10px;
+    overflow: hidden;
+    /* Remove scroll, let chart fit */
+    padding: 0;
+    /* Remove padding for max space */
     background: var(--bg-primary);
+    display: flex;
+    flex-direction: column;
+    position: relative;
 }
 
 .normalize-chart-wrapper {
     position: relative;
     width: 100%;
-    min-height: 700px;
-    /* Ensure vertical scroll */
+    height: 100%;
+    /* Fill parent */
+    flex: 1;
 }
 
 .normalize-chart-wrapper.selecting-baseline {

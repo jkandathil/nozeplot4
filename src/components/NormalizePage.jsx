@@ -515,7 +515,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                         {isDragging ? '🎯 Release to set baseline' : isNormalized ? '📊 showing % change' : '🖱️ Drag to set baseline'}
                     </div>
 
-                    <ResponsiveContainer width="100%" height={740}>
+                    <ResponsiveContainer width="100%" height="99%">
                         <LineChart data={displayData} margin={{ top: 40, right: 30, left: 10, bottom: 60 }}
                             onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />

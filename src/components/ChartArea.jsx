@@ -441,12 +441,12 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                 </div>
             </div>
 
-            <div className="charts-scroll-container">
+            <div className={`charts-scroll-container ${viewMode}`}>
                 {viewMode === 'single' ? (
                     <div
                         ref={chartWrapperRef}
                         className="chart-container-wrapper glass-panel single-chart-view"
-                        style={{ height: '700px', width: '100%', position: 'relative' }}
+                        style={{ height: '100%', width: '100%', position: 'relative' }}
                     >
                         <div className="zoom-hint" style={{
                             position: 'absolute',
