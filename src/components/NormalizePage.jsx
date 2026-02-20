@@ -319,6 +319,88 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     };
 
 
+    /* ── Filter Logic ── */
+    const [filterType, setFilterType] = useState('none'); // 'none', 'ma', 'gaussian'
+    const [filterWindow, setFilterWindow] = useState(5); // Window size or Sigma * 2
+
+    const filteredData = useMemo(() => {
+        if (filterType === 'none' || filterWindow <= 1 || !mergedData.length) return mergedData;
+
+        // Helper: Get numeric keys to filter
+        // We filter ALL display keys (Main + Compare) to keep them synced
+        const keysToFilter = allDisplayKeys;
+
+        const result = new Array(mergedData.length);
+        const len = mergedData.length;
+
+        // 1. Moving Average (Centered)
+        if (filterType === 'ma') {
+            const half = Math.floor(filterWindow / 2);
+            for (let i = 0; i < len; i++) {
+                const row = { ...mergedData[i] };
+                const start = Math.max(0, i - half);
+                const end = Math.min(len, i + half + 1);
+                const count = end - start;
+
+                keysToFilter.forEach(key => {
+                    if (typeof row[key] !== 'number') return;
+                    let sum = 0;
+                    let valid = 0;
+                    for (let j = start; j < end; j++) {
+                        const val = mergedData[j][key];
+                        if (typeof val === 'number') {
+                            sum += val;
+                            valid++;
+                        }
+                    }
+                    if (valid > 0) row[key] = sum / valid;
+                });
+                result[i] = row;
+            }
+        }
+        // 2. Gaussian Smoothing (Simple Kernel)
+        else if (filterType === 'gaussian') {
+            // Sigma approx filterWindow / 4 for visual equivalence range
+            const sigma = Math.max(0.5, filterWindow / 4);
+            const radius = Math.ceil(sigma * 3);
+            const kernel = [];
+            let kSum = 0;
+            for (let x = -radius; x <= radius; x++) {
+                const g = Math.exp(-(x * x) / (2 * sigma * sigma));
+                kernel.push(g);
+                kSum += g;
+            }
+            // Normalize kernel
+            const normKernel = kernel.map(v => v / kSum);
+
+            for (let i = 0; i < len; i++) {
+                const row = { ...mergedData[i] };
+                keysToFilter.forEach(key => {
+                    if (typeof row[key] !== 'number') return;
+                    let sum = 0;
+                    let wSum = 0;
+                    for (let k = 0; k < normKernel.length; k++) {
+                        const idx = i + (k - radius);
+                        if (idx >= 0 && idx < len) {
+                            const val = mergedData[idx][key];
+                            if (typeof val === 'number') {
+                                sum += val * normKernel[k];
+                                wSum += normKernel[k];
+                            }
+                        }
+                    }
+                    if (wSum > 0) row[key] = sum / wSum;
+                });
+                result[i] = row;
+            }
+        } else {
+            return mergedData;
+        }
+
+        return result;
+    }, [mergedData, filterType, filterWindow, allDisplayKeys]);
+
+
     /* ── 7. Baseline / Normalization Logic ── */
     const [baselineLeft, setBaselineLeft] = useState(null);
     const [baselineRight, setBaselineRight] = useState(null);
@@ -336,30 +418,30 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     }, [data, fileName, compareDataList]);
 
     const baselineRange = useMemo(() => {
-        if (!baselineLeft || !baselineRight || !mergedData.length) return null;
-        let s = mergedData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-        let e = mergedData.findIndex(d => String(d[xKey]) === String(baselineRight));
+        if (!baselineLeft || !baselineRight || !filteredData.length) return null;
+        let s = filteredData.findIndex(d => String(d[xKey]) === String(baselineLeft));
+        let e = filteredData.findIndex(d => String(d[xKey]) === String(baselineRight));
         if (s < 0) s = 0;
-        if (e < 0) e = mergedData.length - 1;
+        if (e < 0) e = filteredData.length - 1;
         if (s > e) [s, e] = [e, s];
         return { startIdx: s, endIdx: e };
-    }, [baselineLeft, baselineRight, mergedData, xKey]);
+    }, [baselineLeft, baselineRight, filteredData, xKey]);
 
     const baselineAvgs = useMemo(() => {
         if (!baselineRange) return null;
         const { startIdx, endIdx } = baselineRange;
-        const slice = mergedData.slice(startIdx, endIdx + 1);
+        const slice = filteredData.slice(startIdx, endIdx + 1);
         const avgs = {};
         allDisplayKeys.forEach(key => {
             const vals = slice.map(r => r[key]).filter(v => typeof v === 'number' && isFinite(v));
             avgs[key] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
         });
         return avgs;
-    }, [baselineRange, mergedData, allDisplayKeys]);
+    }, [baselineRange, filteredData, allDisplayKeys]);
 
     const displayData = useMemo(() => {
-        if (!baselineAvgs) return mergedData;
-        return mergedData.map(row => {
+        if (!baselineAvgs) return filteredData;
+        return filteredData.map(row => {
             const out = { [xKey]: row[xKey] };
             allDisplayKeys.forEach(key => {
                 const avg = baselineAvgs[key];
@@ -372,7 +454,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
             });
             return out;
         });
-    }, [baselineAvgs, mergedData, allDisplayKeys, xKey]);
+    }, [baselineAvgs, filteredData, allDisplayKeys, xKey]);
 
     const isNormalized = !!baselineAvgs;
 
@@ -395,8 +477,8 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const handleMouseUp = () => {
         if (!isDragging) return;
         const finalRight = dragRight || baselineLeft;
-        const lIdx = mergedData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-        const rIdx = mergedData.findIndex(d => String(d[xKey]) === String(finalRight));
+        const lIdx = filteredData.findIndex(d => String(d[xKey]) === String(baselineLeft));
+        const rIdx = filteredData.findIndex(d => String(d[xKey]) === String(finalRight));
         if (lIdx <= rIdx) {
             setBaselineRight(finalRight);
         } else {
@@ -409,10 +491,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
     /* ── Wheel Zoom ── */
     const handleWheel = useCallback((e) => {
-        if (!mergedData || mergedData.length === 0) return;
+        if (!filteredData || filteredData.length === 0) return;
         e.preventDefault();
         const zoomIn = e.deltaY < 0;
-        const lastIdx = mergedData.length - 1;
+        const lastIdx = filteredData.length - 1;
         const startIdx = brushStartIdx;
         const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
         const currentSpan = endIdx - startIdx;
@@ -421,7 +503,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         const delta = Math.max(1, Math.floor(currentSpan * 0.15));
         let pivotIdx = Math.floor(startIdx + currentSpan / 2);
         if (hoverLabel) {
-            const hi = mergedData.findIndex(d => String(d[xKey]) === String(hoverLabel));
+            const hi = filteredData.findIndex(d => String(d[xKey]) === String(hoverLabel));
             if (hi >= startIdx && hi <= endIdx) pivotIdx = hi;
         }
         const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
@@ -436,12 +518,13 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         }
         setBrushStartIdx(newStart);
         setBrushEndIdx(newEnd);
-    }, [mergedData, brushStartIdx, brushEndIdx, xKey, hoverLabel]);
+    }, [filteredData, brushStartIdx, brushEndIdx, xKey, hoverLabel]);
 
     useEffect(() => {
         const el = chartWrapperRef.current;
         if (!el) return;
         el.addEventListener('wheel', handleWheel, { passive: false });
+        // Handle filter type change reset if needed? No, keep zoom.
         return () => el.removeEventListener('wheel', handleWheel);
     }, [handleWheel]);
 
@@ -473,6 +556,32 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                             {f.shortName}
                         </span>
                     ))}
+
+                    {/* Filter Controls (Inline) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12 }}>
+                        <Layers size={14} color="var(--text-muted)" style={{ marginRight: 4 }} title="Noise Filter" />
+                        <select
+                            value={filterType}
+                            onChange={(e) => setFilterType(e.target.value)}
+                            style={{
+                                background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                                color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px 4px', borderRadius: 4, cursor: 'pointer'
+                            }}>
+                            <option value="none">No Filter</option>
+                            <option value="ma">Moving Avg</option>
+                            <option value="gaussian">Gaussian</option>
+                        </select>
+                        {filterType !== 'none' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{filterType === 'ma' ? 'Width:' : 'Sigma:'} {filterWindow}</span>
+                                <input
+                                    type="range" min="1" max="50" step="1"
+                                    value={filterWindow} onChange={(e) => setFilterWindow(Number(e.target.value))}
+                                    style={{ width: 60, height: 4, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                                />
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Common Columns Shortcuts */}
