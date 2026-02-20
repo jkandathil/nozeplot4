@@ -11,9 +11,10 @@ import {
     Brush,
     ReferenceArea
 } from 'recharts';
-import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react';
+import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, Layers } from 'lucide-react';
 import { motion } from 'framer-motion';
 import MultiFileSelect from './MultiFileSelect';
+import { applyNoiseFilter } from '../utils/filterUtils';
 import './ChartArea.css';
 
 const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
@@ -157,7 +158,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     // by using row-index alignment as fallback when value matching fails.
     // Extends the merged array to the MAXIMUM length across all files so that
     // comparison files with MORE rows than the main file are not truncated.
-    const processedChartData = useMemo(() => {
+    const rawProcessedData = useMemo(() => {
         if (!chartData || chartData.length === 0) return [];
         if (!compareDataList || compareDataList.length === 0) return chartData;
 
@@ -227,6 +228,19 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
         return merged;
     }, [chartData, compareDataList, xKey]);
+
+    /* ── Filter Logic ── */
+    const [filterType, setFilterType] = useState('none');
+    const [filterWindow, setFilterWindow] = useState(5);
+
+    const processedChartData = useMemo(() => {
+        if (!rawProcessedData || !rawProcessedData.length || filterType === 'none')
+            return rawProcessedData || []; // Ensure array return if null
+
+        const sample = rawProcessedData[0];
+        const keys = Object.keys(sample).filter(k => k !== xKey && typeof sample[k] === 'number');
+        return applyNoiseFilter(rawProcessedData, keys, filterType, filterWindow);
+    }, [rawProcessedData, filterType, filterWindow, xKey]);
 
     // Reset zoom when data changes
     React.useEffect(() => {
@@ -432,6 +446,34 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                             placeholder="Compare with..."
                         />
                     </div>
+
+                    <div className="separator" />
+
+                    {/* Filter Controls */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+                        <Layers size={14} color="var(--text-muted)" title="Noise Filter" />
+                        <select
+                            value={filterType}
+                            onChange={(e) => setFilterType(e.target.value)}
+                            style={{
+                                background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px', borderRadius: 4, cursor: 'pointer'
+                            }}>
+                            <option value="none">No Filter</option>
+                            <option value="ma">MA</option>
+                            <option value="gaussian">Gauss</option>
+                        </select>
+                        {filterType !== 'none' && (
+                            <input
+                                type="range" min="1" max="50" step="1"
+                                value={filterWindow} onChange={(e) => setFilterWindow(Number(e.target.value))}
+                                title={`Strength: ${filterWindow}`}
+                                style={{ width: 50, height: 4, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                            />
+                        )}
+                    </div>
+
+                    <div className="separator" />
 
                     <div className="separator" />
 
