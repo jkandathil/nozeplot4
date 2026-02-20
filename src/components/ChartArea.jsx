@@ -15,6 +15,7 @@ import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, Zoom
 import { motion } from 'framer-motion';
 import MultiFileSelect from './MultiFileSelect';
 import { applyNoiseFilter } from '../utils/filterUtils';
+import LazyChart from './LazyChart';
 import './ChartArea.css';
 
 const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
@@ -624,50 +625,53 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                         <Maximize2 size={14} />
                                     </button>
                                 </div>
-                                <div className="mini-chart-wrapper">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={processedChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                                            <XAxis
-                                                dataKey={xKey}
-                                                stroke="#64748b"
-                                                tick={{ fill: '#64748b', fontSize: 10 }}
-                                                height={30}
-                                                minTickGap={20}
-                                                tickFormatter={formatXAxis}
-                                            />
-                                            <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
-                                            <Tooltip content={<CustomTooltip />} />
-                                            <React.Fragment key={key}>
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey={key}
-                                                    stroke={COLORS[index % COLORS.length]}
-                                                    strokeWidth={2}
-                                                    dot={false}
-                                                    activeDot={{ r: 4 }}
-                                                    name={key}
-                                                    isAnimationActive={false}
+                                <div className="mini-chart-wrapper" style={{ height: 300 }}>
+                                    <LazyChart height={300}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <LineChart data={processedChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                                                <XAxis
+                                                    dataKey={xKey}
+                                                    stroke="#64748b"
+                                                    tick={{ fill: '#64748b', fontSize: 10 }}
+                                                    height={30}
+                                                    minTickGap={20}
+                                                    tickFormatter={formatXAxis}
                                                 />
-                                                {/* Render Comparison Lines */}
-                                                {compareKeysMap[key] && compareKeysMap[key].map((comp, cIdx) => (
+                                                <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
+                                                <Tooltip content={<CustomTooltip />} />
+                                                <React.Fragment key={key}>
                                                     <Line
-                                                        key={comp.key}
                                                         type="monotone"
-                                                        dataKey={comp.key}
-                                                        stroke={COMPARE_COLORS[comp.colorIndex % COMPARE_COLORS.length]}
+                                                        dataKey={key}
+                                                        stroke={COLORS[index % COLORS.length]}
                                                         strokeWidth={2}
-                                                        strokeOpacity={0.8}
                                                         dot={false}
-                                                        activeDot={{ r: 3, strokeWidth: 0 }}
-                                                        name={`${key} (${comp.fileName})`}
-                                                        connectNulls
+                                                        activeDot={{ r: 4 }}
+                                                        name={key}
                                                         isAnimationActive={false}
                                                     />
-                                                ))}
-                                            </React.Fragment>
-                                        </LineChart>
-                                    </ResponsiveContainer>
+                                                    {/* Render Comparison Lines */}
+                                                    {compareKeysMap[key] && compareKeysMap[key].map((comp, cIdx) => (
+                                                        <Line
+                                                            key={comp.key}
+                                                            type="monotone"
+                                                            dataKey={comp.key}
+                                                            stroke={COMPARE_COLORS[comp.colorIndex % COMPARE_COLORS.length]}
+                                                            strokeWidth={2}
+                                                            strokeOpacity={0.8}
+                                                            dot={false}
+                                                            activeDot={{ r: 3, strokeWidth: 0 }}
+                                                            name={`${key} (${comp.fileName})`}
+                                                            connectNulls
+                                                            isAnimationActive={false}
+                                                        />
+                                                    ))}
+                                                </React.Fragment>
+
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </LazyChart>
                                 </div>
                             </div>
                         ))}
