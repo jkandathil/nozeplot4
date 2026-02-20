@@ -235,24 +235,36 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         setVisibleSeries(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
     };
 
-    /* activateCommon: Show this column for ALL files */
-    const activateCommon = (colName) => {
+    /* activateCommon: Show ONLY this column for ALL files (Exclusive Mode) */
+    const activateCommon = (colName, isMulti = false) => {
         const keysToActive = [];
-        // Add main
+
+        // 1. Identify all keys corresponding to this column
         if (seriesKeys.includes(colName)) keysToActive.push(colName);
-        // Add all compares
+
         cmpFiles.forEach((f, idx) => {
-            if (f.seriesKeys.includes(colName)) {
+            // prefixedKeysMap is stable
+            if (prefixedKeysMap[idx] && prefixedKeysMap[idx][colName]) {
                 keysToActive.push(prefixedKeysMap[idx][colName]);
             }
         });
-        // Check if all are already active -> Toggle OFF
-        const allActive = keysToActive.every(k => visibleSeries.includes(k));
-        if (allActive) {
-            setVisibleSeries(prev => prev.filter(k => !keysToActive.includes(k)));
+
+        if (keysToActive.length === 0) return;
+
+        // 2. Update Selection
+        if (isMulti) {
+            // Toggle Logic (if holding Ctrl/Cmd)
+            const allActive = keysToActive.every(k => visibleSeries.includes(k));
+            if (allActive) {
+                // If all are already active, remove them
+                setVisibleSeries(prev => prev.filter(k => !keysToActive.includes(k)));
+            } else {
+                // Add them to existing selection
+                setVisibleSeries(prev => [...new Set([...prev, ...keysToActive])]);
+            }
         } else {
-            // Add unique
-            setVisibleSeries(prev => [...new Set([...prev, ...keysToActive])]);
+            // Exclusive Logic (default): Replace entire selection
+            setVisibleSeries(keysToActive);
         }
     };
 
@@ -418,7 +430,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                     <div className="common-cols-bar">
                         <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginRight: 6 }}>Quick Compare:</span>
                         {commonColumns.map(col => (
-                            <button key={col} onClick={() => activateCommon(col)} className="common-col-btn">
+                            <button key={col}
+                                onClick={(e) => activateCommon(col, e.ctrlKey || e.metaKey)}
+                                title="Click to view only this column (Ctrl+Click to add)"
+                                className={`common-col-btn${visibleSeries.includes(col) ? ' active' : ''}`}>
                                 <Copy size={10} style={{ marginRight: 3 }} />
                                 {col}
                             </button>
