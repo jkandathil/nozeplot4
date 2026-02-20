@@ -450,13 +450,13 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     <div className="separator" />
 
                     {/* Filter Controls */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 12, padding: '2px 6px', background: 'rgba(255,255,255,0.03)', borderRadius: 4, flexShrink: 0 }}>
                         <Layers size={14} color="var(--text-muted)" title="Noise Filter" />
                         <select
                             value={filterType}
                             onChange={(e) => setFilterType(e.target.value)}
                             style={{
-                                background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                background: 'transparent', border: '1px solid var(--border-color)',
                                 color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px', borderRadius: 4, cursor: 'pointer'
                             }}>
                             <option value="none">No Filter</option>
@@ -472,8 +472,6 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                             />
                         )}
                     </div>
-
-                    <div className="separator" />
 
                     <div className="separator" />
 
