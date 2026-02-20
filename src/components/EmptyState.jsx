@@ -28,7 +28,7 @@ const EmptyState = ({ isDragActive, hasFiles }) => {
 
                 <p className="description">
                     {hasFiles
-                        ? "Visualize your data with our stunning charts."
+                        ? "Visualize your data"
                         : "Supports .csv, .txt, .xlsx (coming soon). Folder upload supported."}
                 </p>
 
