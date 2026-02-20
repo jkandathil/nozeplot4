@@ -231,8 +231,58 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         }
     }, [seriesKeys.join(','), cmpFiles.length]); // Only re-run if main keys change or compare count changes
 
-    const toggleSeries = (key) => {
-        setVisibleSeries(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+    const toggleSeries = (key, isMulti = true) => {
+        // 1. Identify the base column name
+        let colName = key;
+
+        // Check if it's a prefixed key (from comparison file)
+        // Format: "ShortName::ColName" or just "ColName"
+        // We need to reverse lookup or parse.
+        // Since we don't have a direct reverse map easily accessible in this scope without searching,
+        // we can iterate through prefixedKeysMap to find the colName.
+
+        let found = false;
+        // Check main series first
+        if (seriesKeys.includes(key)) {
+            colName = key;
+            found = true;
+        } else {
+            // Check comparison maps
+            Object.values(prefixedKeysMap).forEach(map => {
+                const entry = Object.entries(map).find(([orig, prefixed]) => prefixed === key);
+                if (entry) {
+                    colName = entry[0];
+                    found = true;
+                }
+            });
+        }
+
+        if (!found) return; // Should not happen
+
+        // 2. Find ALL keys corresponding to this base column
+        const keysToToggle = [];
+        if (seriesKeys.includes(colName)) keysToToggle.push(colName);
+
+        cmpFiles.forEach((f, idx) => {
+            if (prefixedKeysMap[idx] && prefixedKeysMap[idx][colName]) {
+                keysToToggle.push(prefixedKeysMap[idx][colName]);
+            }
+        });
+
+        // 3. Determine new state
+        // If the *clicked* key is currently active, we turn ALL off.
+        // If the *clicked* key is inactive, we turn ALL on.
+        const isClickActive = visibleSeries.includes(key);
+        const shouldActivate = !isClickActive;
+
+        setVisibleSeries(prev => {
+            const current = new Set(prev);
+            keysToToggle.forEach(k => {
+                if (shouldActivate) current.add(k);
+                else current.delete(k);
+            });
+            return Array.from(current);
+        });
     };
 
     /* activateCommon: Show ONLY this column for ALL files (Exclusive Mode) */
