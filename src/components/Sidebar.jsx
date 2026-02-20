@@ -216,6 +216,37 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     </span>
                                 </div>
                                 <button
+                                    className={`compare-btn ${compareFileIds?.includes(file.id) || selectedFileId === file.id ? 'active' : ''}`}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onFileSelect(file.id, true);
+                                    }}
+                                    title={selectedFileId === file.id ? "Main File (Click to deselect)" : (compareFileIds?.includes(file.id) ? "Remove comparison" : "Add to comparison")}
+                                    style={{
+                                        background: 'transparent', border: 'none', cursor: 'pointer',
+                                        marginRight: 4, display: 'flex', alignItems: 'center', opacity: 0.8
+                                    }}
+                                >
+                                    {selectedFileId === file.id ? (
+                                        /* Main File: Blue Check */
+                                        <div style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            <div style={{ width: 13, height: 13, border: '1.5px solid #38bdf8', background: 'rgba(56,189,248,0.2)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                <div style={{ width: 7, height: 4, borderLeft: '1.5px solid white', borderBottom: '1.5px solid white', transform: 'rotate(-45deg) translate(1px, -1px)' }} />
+                                            </div>
+                                        </div>
+                                    ) : compareFileIds?.includes(file.id) ? (
+                                        /* Compare File: Amber Check */
+                                        <div style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            <div style={{ width: 13, height: 13, border: '1.5px solid #fbbf24', background: 'rgba(251,191,36,0.2)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                <div style={{ width: 7, height: 4, borderLeft: '1.5px solid white', borderBottom: '1.5px solid white', transform: 'rotate(-45deg) translate(1px, -1px)' }} />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        /* Inactive: Empty Box */
+                                        <div style={{ width: 13, height: 13, border: '1.5px solid #94a3b8', borderRadius: 3, opacity: 0.5 }} />
+                                    )}
+                                </button>
+                                <button
                                     className="delete-file-btn"
                                     onClick={(e) => {
                                         e.stopPropagation();

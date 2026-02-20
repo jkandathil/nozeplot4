@@ -1,232 +1,159 @@
-/* Sidebar Styles */
-
 .sidebar {
     width: 250px;
-    background-color: var(--bg-primary);
+    height: 100vh;
+    background-color: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
-    padding: 24px;
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.2);
-    z-index: 100;
-    position: sticky;
-    top: 0;
+    flex-shrink: 0;
 }
 
 .sidebar-header {
-    margin-bottom: 24px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
 }
 
 .logo {
     display: flex;
     align-items: center;
-    font-family: 'Outfit', sans-serif;
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--accent-primary);
-    letter-spacing: -0.01em;
+    gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .logo-icon {
     width: 40px;
     height: 40px;
-    object-fit: contain;
-    margin-right: 12px;
-    border-radius: 50%;
 }
 
-.section-title {
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    font-size: 0.75rem;
+.logo span {
+    font-size: 1.1rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    margin-bottom: 12px;
-    padding-left: 12px;
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 .upload-section {
+    padding: 0 1rem 1rem;
     display: flex;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 0.5rem;
 }
 
-.btn-primary.upload-btn {
+.btn-primary {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    flex: 1;
+    gap: 0.5rem;
+    padding: 0.6rem;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
 }
 
 .upload-btn-folder {
+    width: 40px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: var(--bg-secondary);
-    color: var(--text-secondary);
+    background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    padding: 8px 12px;
-    border-radius: var(--border-radius-md);
+    border-radius: 6px;
     cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.upload-btn-folder:hover {
-    background-color: var(--bg-tertiary);
-    color: var(--accent-primary);
-    border-color: var(--accent-primary);
+    color: var(--text-secondary);
 }
 
 .search-box {
-    display: flex;
-    align-items: center;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    padding: 8px 12px;
-    margin-bottom: 24px;
-    gap: 8px;
+    padding: 0 1rem 0.5rem;
+    position: relative;
 }
 
 .search-icon {
+    position: absolute;
+    left: 1.6rem;
+    top: 50%;
+    transform: translateY(-50%);
     color: var(--text-muted);
 }
 
 .search-input {
-    background: none;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
     width: 100%;
-    font-size: 0.875rem;
+    padding: 0.5rem 0.5rem 0.5rem 2.2rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
 }
-
-.search-input::placeholder {
-    color: var(--text-muted);
-}
-
 
 .file-list-container {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    /* Important for flex child with scroll */
+    overflow-y: auto;
+    padding: 0.5rem 0.5rem 0.5rem 0.8rem;
+}
+
+.section-title {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+    padding-left: 0.5rem;
 }
 
 .file-list {
     list-style: none;
     padding: 0;
     margin: 0;
-    overflow-y: auto;
-    overflow-x: visible;
-    /* Padding to safely show tooltips? No, overflow-x visible on scroll container is tricky.
-       Better approach: fixed tooltip or portal. 
-       Let's try simply allowing overflow x on the list if possible, but the scroll bar is Y.
-    */
-    padding-right: 4px;
-    /* Space for scrollbar */
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
-
-
 
 .file-item {
     display: flex;
     align-items: center;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
+    padding: 0.5rem;
+    border-radius: 6px;
     cursor: pointer;
-    transition: all var(--transition-fast);
+    transition: all 0.15s;
     color: var(--text-secondary);
-    font-size: 0.875rem;
-    position: relative;
-    margin-bottom: 4px;
+    border: 1px solid transparent;
 }
 
-
-.custom-tooltip {
-    position: fixed;
-    /* Fixed relative to viewport */
-    left: 260px;
-    /* Sidebar width + margin */
-    /* top will be set via inline style or CSS logic? Can't set top easily with CSS only if fixed.
-       Alternative: Keep absolute but on body? No.
-       Alternative: Use a small hack.
-       The sidebar is 250px wide.
-       Actually, if we use `position: fixed`, we lose the "vertical alignment" with the parent unless we use JS.
-       BUT, we can use `position: absolute` and insure the PARENT doesn't hide overflow.
-    */
-    /* Let's try z-index high and ensuring parents don't clip. 
-       The `file-list` has `overflow-y: auto`. This creates a stacking context and clipping.
-       Pure CSS tooltips inside a scrollable area are hard.
-       
-       Better solution:
-       We will use a small JS fix in the component to position it? Or just `position: absolute` on the BODY?
-       Wait, let's revert to a simpler method: `title` attribute IS showing but maybe specific browser settings or styling.
-       
-       However, for "wow" factor, let's try a transform hack or accept the previous clipping issue? No.
-       
-       Let's use `position: fixed` relative to the file item? 
-       No, `position: fixed` is relative to window.
-       
-       Okay, let's use a very clever CSS trick: `container-type`? No.
-       
-       Let's stick to the previous implementation but move the tooltip to the RIGHT side?
-       It was on the right side.
-       
-       Okay, let's try increasing Z-index and removing overflow-x hidden on all parents.
-       
-       Actually, `overflow-y: auto` usually clips X too.
-       
-       Let's use a Portal? No, user wants simple code.
-       
-       Let's try this: Tooltip displays BELOW the item? No, user wants hovering.
-       
-       Let's just use the native `title` attribute which I ALREADY verified works in the DOM.
-       Why did the user say "no"?
-       Maybe the user didn't hover long enough.
-       
-       However, to be safe, I will use `position: fixed` and use a `onMouseEnter` event to set `top` dynamically? 
-       Yes, let's do that in the JSX.
-    */
-    display: none;
-    /* Controlled by JS/Inline style now */
-}
-
-.file-item:hover .custom-tooltip {
-    opacity: 1;
-}
-
-.file-item:hover,
-.file-item.active {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    box-shadow: inset 2px 0 0 var(--accent-primary);
+.file-item:hover {
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .file-item.active {
-    background-color: rgba(56, 189, 248, 0.1);
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.2);
     color: var(--accent-primary);
-    font-weight: 600;
 }
 
-.file-icon {
-    margin-right: 12px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
-
+/* Multi-select Compare Active style */
 .file-item.compare-active {
-    background-color: rgba(56, 189, 248, 0.05);
+    background: rgba(251, 191, 36, 0.08);
+    /* Amber tint */
+    border-color: rgba(251, 191, 36, 0.2);
     color: var(--text-primary);
-    box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.5);
 }
 
 .file-item.compare-active .file-icon {
-    color: rgba(56, 189, 248, 0.7);
+    color: #fbbf24;
+}
+
+.file-icon {
+    margin-right: 0.75rem;
+    color: var(--text-muted);
 }
 
 .file-item.active .file-icon {
@@ -234,79 +161,68 @@
 }
 
 .file-details {
+    flex: 1;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    flex: 1;
 }
 
 .file-name {
+    font-size: 0.85rem;
+    font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-bottom: 2px;
 }
 
 .file-meta {
-    font-size: 0.70rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
-}
-
-.active-indicator {
-    position: absolute;
-    right: 12px;
 }
 
 .delete-file-btn {
     opacity: 0;
-    transition: opacity 0.2s ease, color 0.2s ease, background 0.2s ease;
     background: transparent;
     border: none;
+    color: #ef4444;
+    /* red-500 */
     cursor: pointer;
-    color: var(--text-muted);
-    padding: 6px;
+    padding: 4px;
     border-radius: 4px;
-    margin-left: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    transition: all 0.2s;
 }
 
-.file-item:hover .delete-file-btn,
-.delete-file-btn:focus {
-    opacity: 1;
+.file-item:hover .delete-file-btn {
+    opacity: 0.6;
 }
 
 .delete-file-btn:hover {
-    color: #ef4444;
-    /* Red-500 */
+    opacity: 1 !important;
     background: rgba(239, 68, 68, 0.1);
 }
 
 .sidebar-footer {
-    margin-top: auto;
-    padding-top: 16px;
+    padding: 1rem;
     border-top: 1px solid var(--border-color);
 }
 
 .user-profile {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px;
-    border-radius: var(--border-radius-md);
-    background: var(--bg-tertiary);
+    gap: 0.75rem;
+    padding: 0.5rem;
+    border-radius: 8px;
 }
 
 .avatar {
-    width: 36px;
-    height: 36px;
-    background-color: var(--accent-secondary);
+    width: 32px;
+    height: 32px;
+    background: var(--gradient-primary);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 700;
+    font-weight: 600;
     color: white;
 }
 
@@ -316,11 +232,12 @@
 }
 
 .name {
+    font-size: 0.85rem;
     font-weight: 600;
-    font-size: 0.875rem;
+    color: var(--text-primary);
 }
 
 .role {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
 }
