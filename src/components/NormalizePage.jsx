@@ -12,8 +12,9 @@ import {
     ReferenceArea,
     Brush
 } from 'recharts';
-import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy } from 'lucide-react';
+import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
+import html2canvas from 'html2canvas';
 import './NormalizePage.css';
 
 /* Extended Palette for multi-file comparison */
@@ -414,6 +415,20 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const [hoverLabel, setHoverLabel] = useState(null);
     const chartWrapperRef = useRef(null);
 
+    const handleDownloadPng = async () => {
+        const el = chartWrapperRef.current;
+        if (!el) return;
+        try {
+            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const link = document.createElement('a');
+            link.download = `normalized_${fileName || 'chart'}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        } catch (err) {
+            console.error('Download PNG failed:', err);
+        }
+    };
+
     useEffect(() => {
         setBaselineLeft(null); setBaselineRight(null);
         setIsDragging(false); setDragRight('');
@@ -607,6 +622,13 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
                 <div className="header-controls">
 
+                    <button className="icon-btn" onClick={handleDownloadPng} title="Download View as PNG (Image)" style={{
+                        background: 'transparent', border: '1px solid var(--border-color)', borderRadius: '6px',
+                        padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer',
+                        color: 'var(--text-primary)', fontSize: '0.8rem', marginRight: '8px'
+                    }}>
+                        <ImageIcon size={14} /> PNG
+                    </button>
 
                     {isNormalized && <span className="norm-badge">✓ Norm</span>}
                     {baselineLeft && (

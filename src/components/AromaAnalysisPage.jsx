@@ -74,54 +74,54 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
 
     const handleZoomOutBtn = () => {
         try {
-        if (!plot?.data || plot.data.length === 0) return;
-        const lastIdx = plot.data.length - 1;
-        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
-        const currentSpan = endIdx - brushStartIdx;
-        const delta = Math.max(1, Math.floor(currentSpan * 0.35));
-        const newStart = Math.max(0, brushStartIdx - delta);
-        const newEnd = Math.min(lastIdx, endIdx + delta);
-        setBrushStartIdx(newStart);
-        setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
+            if (!plot?.data || plot.data.length === 0) return;
+            const lastIdx = plot.data.length - 1;
+            const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+            const currentSpan = endIdx - brushStartIdx;
+            const delta = Math.max(1, Math.floor(currentSpan * 0.35));
+            const newStart = Math.max(0, brushStartIdx - delta);
+            const newEnd = Math.min(lastIdx, endIdx + delta);
+            setBrushStartIdx(newStart);
+            setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
         } catch (err) { console.warn('handleZoomOutBtn error:', err); }
     };
 
     const handleWheel = React.useCallback((e) => {
         try {
-        if (!plot || !plot.data || plot.data.length === 0) return;
-        e.preventDefault();
+            if (!plot || !plot.data || plot.data.length === 0) return;
+            e.preventDefault();
 
-        const zoomIn = e.deltaY < 0;
-        const lastIdx = plot.data.length - 1;
-        const startIdx = brushStartIdx;
-        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+            const zoomIn = e.deltaY < 0;
+            const lastIdx = plot.data.length - 1;
+            const startIdx = brushStartIdx;
+            const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
 
-        const currentSpan = endIdx - startIdx;
-        const minSpan = 4;
-        if (currentSpan < minSpan && zoomIn) return;
+            const currentSpan = endIdx - startIdx;
+            const minSpan = 4;
+            if (currentSpan < minSpan && zoomIn) return;
 
-        const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
-        const delta = Math.max(1, Math.floor(currentSpan * intensity));
+            const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
+            const delta = Math.max(1, Math.floor(currentSpan * intensity));
 
-        let pivotIdx = Math.floor(startIdx + currentSpan / 2);
-        const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
+            let pivotIdx = Math.floor(startIdx + currentSpan / 2);
+            const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
 
-        let newStart, newEnd;
-        if (zoomIn) {
-            newStart = startIdx + Math.floor(delta * ratio);
-            newEnd = endIdx - Math.ceil(delta * (1 - ratio));
-        } else {
-            newStart = Math.max(0, startIdx - Math.floor(delta * ratio));
-            newEnd = Math.min(lastIdx, endIdx + Math.ceil(delta * (1 - ratio)));
-        }
+            let newStart, newEnd;
+            if (zoomIn) {
+                newStart = startIdx + Math.floor(delta * ratio);
+                newEnd = endIdx - Math.ceil(delta * (1 - ratio));
+            } else {
+                newStart = Math.max(0, startIdx - Math.floor(delta * ratio));
+                newEnd = Math.min(lastIdx, endIdx + Math.ceil(delta * (1 - ratio)));
+            }
 
-        if (newEnd - newStart < minSpan) {
-            newStart = Math.max(0, pivotIdx - 2);
-            newEnd = Math.min(lastIdx, pivotIdx + 2);
-        }
+            if (newEnd - newStart < minSpan) {
+                newStart = Math.max(0, pivotIdx - 2);
+                newEnd = Math.min(lastIdx, pivotIdx + 2);
+            }
 
-        setBrushStartIdx(newStart);
-        setBrushEndIdx(newEnd);
+            setBrushStartIdx(newStart);
+            setBrushEndIdx(newEnd);
         } catch (err) { console.warn('handleWheel zoom error:', err); }
     }, [plot, brushStartIdx, brushEndIdx]);
 
@@ -182,19 +182,52 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                 </div>
                 {plot?.data && plot.data.length > 2 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(0,0,0,0.2)', marginBottom: 8, borderRadius: 8 }}>
-                        <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Zoom:</span>
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>X-Axis Interval:</span>
+
+                        {/* Manual Input Range */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input
+                                type="number"
+                                style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
+                                value={String(plot.data[brushStartIdx]?.[plot.xAxisKey || 'index'] || '')}
+                                onChange={(e) => {
+                                    const targetX = e.target.value;
+                                    const xK = plot.xAxisKey || 'index';
+                                    const idx = plot.data.findIndex(r => String(r[xK]).startsWith(targetX));
+                                    if (idx !== -1 && idx <= (brushEndIdx || plot.data.length - 1)) {
+                                        setBrushStartIdx(idx);
+                                    }
+                                }}
+                                title="Start X"
+                            />
+                            <span style={{ color: '#94a3b8' }}>to</span>
+                            <input
+                                type="number"
+                                style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
+                                value={String(plot.data[brushEndIdx !== null ? brushEndIdx : plot.data.length - 1]?.[plot.xAxisKey || 'index'] || '')}
+                                onChange={(e) => {
+                                    const targetX = e.target.value;
+                                    const xK = plot.xAxisKey || 'index';
+                                    const idx = plot.data.findIndex(r => String(r[xK]).startsWith(targetX));
+                                    if (idx !== -1 && idx >= brushStartIdx) {
+                                        setBrushEndIdx(idx);
+                                    }
+                                }}
+                                title="End X"
+                            />
+                        </div>
+
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: 8 }}>Scroll/Pan:</span>
                         <input
                             type="range"
-                            min={2}
-                            max={Math.max(2, plot.data.length)}
-                            value={brushEndIdx !== null ? brushEndIdx - brushStartIdx + 1 : plot.data.length}
+                            min={0}
+                            max={Math.max(0, plot.data.length - visibleData.length)}
+                            value={brushStartIdx}
                             onChange={(e) => {
-                                const span = parseInt(e.target.value, 10);
-                                const lastIdx = plot.data.length - 1;
-                                const start = Math.max(0, Math.floor((lastIdx - span + 1) / 2));
-                                const end = Math.min(lastIdx, start + span - 1);
-                                setBrushStartIdx(start);
-                                setBrushEndIdx(end === lastIdx && start === 0 ? null : end);
+                                const newStart = parseInt(e.target.value, 10);
+                                const currentSpan = (brushEndIdx !== null ? brushEndIdx : plot.data.length - 1) - brushStartIdx;
+                                setBrushStartIdx(newStart);
+                                setBrushEndIdx(Math.min(plot.data.length - 1, newStart + currentSpan));
                             }}
                             style={{ flex: 1, height: 6, accentColor: '#10b981', cursor: 'pointer' }}
                         />
@@ -204,36 +237,36 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                     </div>
                 )}
                 <div ref={chartContainerRef} style={{ width: '100%', height: '100%', minHeight: 300, background: '#0f172a', borderRadius: 8, padding: 12 }}>
-                <ResponsiveContainer width="100%" height="100%" style={{ minHeight: 300 }}>
-                    {plot.isComposed ? (
-                        <ComposedChart
-                            key={`zoom-${brushStartIdx}-${brushEndIdx}`}
-                            data={visibleData.length > 0 ? visibleData : plot.data}
-                            margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
-                            onContextMenu={e => e.preventDefault()}
-                        >
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                            <XAxis dataKey={plot.xAxisKey || "index"} tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
-                            <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
-                            {plot.areas && plot.areas.map((area, aIdx) => <Area key={`area-${aIdx}`} type="monotone" dataKey={area.dataKey} name={area.name} fill={area.color} fillOpacity={0.15} stroke="none" isAnimationActive={false} />)}
-                            {plot.lines && plot.lines.map((line, lIdx) => <Line key={`line-${lIdx}`} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={plot.xAxisKey ? true : false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
-                        </ComposedChart>
-                    ) : (
-                        <LineChart
-                            key={`zoom-${brushStartIdx}-${brushEndIdx}`}
-                            data={visibleData.length > 0 ? visibleData : (plot.data || [])}
-                            margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
-                            onContextMenu={e => e.preventDefault()}
-                        >
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                            <XAxis dataKey="index" tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
-                            <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
-                            {(plot.lines || []).map((line, lIdx) => <Line key={lIdx} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
-                        </LineChart>
-                    )}
-                </ResponsiveContainer>
+                    <ResponsiveContainer width="100%" height="100%" style={{ minHeight: 300 }}>
+                        {plot.isComposed ? (
+                            <ComposedChart
+                                key={`zoom-${brushStartIdx}-${brushEndIdx}`}
+                                data={visibleData.length > 0 ? visibleData : plot.data}
+                                margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
+                                onContextMenu={e => e.preventDefault()}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                                <XAxis dataKey={plot.xAxisKey || "index"} tick={{ fill: '#94a3b8' }} stroke="#334155" />
+                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
+                                <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
+                                {plot.areas && plot.areas.map((area, aIdx) => <Area key={`area-${aIdx}`} type="monotone" dataKey={area.dataKey} name={area.name} fill={area.color} fillOpacity={0.15} stroke="none" isAnimationActive={false} />)}
+                                {plot.lines && plot.lines.map((line, lIdx) => <Line key={`line-${lIdx}`} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={plot.xAxisKey ? true : false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
+                            </ComposedChart>
+                        ) : (
+                            <LineChart
+                                key={`zoom-${brushStartIdx}-${brushEndIdx}`}
+                                data={visibleData.length > 0 ? visibleData : (plot.data || [])}
+                                margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
+                                onContextMenu={e => e.preventDefault()}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                                <XAxis dataKey="index" tick={{ fill: '#94a3b8' }} stroke="#334155" />
+                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
+                                <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
+                                {(plot.lines || []).map((line, lIdx) => <Line key={lIdx} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
+                            </LineChart>
+                        )}
+                    </ResponsiveContainer>
                 </div>
             </div>
         </div>

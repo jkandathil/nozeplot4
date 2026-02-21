@@ -9,8 +9,9 @@ import {
     Tooltip,
     Legend
 } from 'recharts';
-import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare } from 'lucide-react';
+import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
+import html2canvas from 'html2canvas';
 import MultiFileSelect from './MultiFileSelect';
 import LazyChart from './LazyChart';
 import './ChartArea.css';
@@ -91,6 +92,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
     // Ref for chart wrapper — used to attach non-passive wheel listener
     const chartWrapperRef = useRef(null);
+    const scrollContainerRef = useRef(null);
 
     // Identify X-axis and Series
     // Use date/time column if present; otherwise use count 1, 2, 3... (never first data column)
@@ -450,27 +452,23 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                 <h2 className="file-title">{fileName}</h2>
                 <span className="raw-badge" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(56,189,248,0.12)', padding: '2px 8px', borderRadius: 6, marginLeft: 8 }} title="Dashboard shows raw data only. Use Normalize tab for baseline normalization.">Raw Data</span>
                 <div className="chart-controls">
-                    {/* Zoom and Tooltip Controls only in Single View */}
-                    {viewMode === 'single' && (
-                        <>
-                            <button className={`icon-btn ${showTooltip ? 'active' : ''}`} onClick={() => setShowTooltip(!showTooltip)} title="Show Data Values">
-                                <MessageSquare size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Values</span>
-                            </button>
-                            <div className="separator" />
-                            <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomInBtn(); }} title="Zoom In (show fewer points)">
-                                <ZoomIn size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>In</span>
-                            </button>
-                            <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomOutBtn(); }} title="Zoom Out (show more points)">
-                                <ZoomOut size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>Out</span>
-                            </button>
-                            {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < processedChartData.length - 1)) && (
-                                <button className="icon-btn" onClick={zoomOut} title="Reset Zoom">
-                                    <RefreshCw size={16} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Reset</span>
-                                </button>
-                            )}
-                            <div className="separator" />
-                        </>
+                    {/* Zoom and Tooltip Controls available in both views! */}
+                    <button className={`icon-btn ${showTooltip ? 'active' : ''}`} onClick={() => setShowTooltip(!showTooltip)} title="Show Data Values">
+                        <MessageSquare size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Values</span>
+                    </button>
+                    <div className="separator" />
+                    <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomInBtn(); }} title="Zoom In (show fewer points)">
+                        <ZoomIn size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>In</span>
+                    </button>
+                    <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomOutBtn(); }} title="Zoom Out (show more points)">
+                        <ZoomOut size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>Out</span>
+                    </button>
+                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < processedChartData.length - 1)) && (
+                        <button className="icon-btn" onClick={zoomOut} title="Reset Zoom">
+                            <RefreshCw size={16} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Reset</span>
+                        </button>
                     )}
+                    <div className="separator" />
 
                     <button
                         className={`icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
@@ -501,13 +499,77 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
                     <div className="separator" />
 
-                    <button className="icon-btn" onClick={handleDownload} title="Export Chart">
-                        <Download size={20} />
+                    <button className="icon-btn" onClick={handleDownloadPng} title="Download View as PNG (Image)">
+                        <ImageIcon size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>PNG</span>
+                    </button>
+
+                    <button className="icon-btn" onClick={handleDownload} title="Export CSV Data">
+                        <Download size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>CSV</span>
                     </button>
                 </div>
             </div>
 
-            <div className={`charts-scroll-container ${viewMode}`}>
+            {/* Global Zoom Range Controller */}
+            {processedChartData && processedChartData.length > 4 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(15,23,42,0.8)', borderBottom: '1px solid var(--border-color)', zIndex: 10 }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>X-Axis Interval:</span>
+
+                    {/* Manual Input Range */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                            type="number"
+                            className="text-input"
+                            style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
+                            value={String(processedChartData[brushStartIdx]?.[xKey] || '')}
+                            onChange={(e) => {
+                                const targetX = e.target.value;
+                                const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
+                                if (idx !== -1 && idx <= (brushEndIdx || processedChartData.length - 1)) {
+                                    setBrushStartIdx(idx);
+                                }
+                            }}
+                            title={`Start ${xKey}`}
+                        />
+                        <span style={{ color: 'var(--text-muted)' }}>to</span>
+                        <input
+                            type="number"
+                            className="text-input"
+                            style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
+                            value={String(processedChartData[brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1]?.[xKey] || '')}
+                            onChange={(e) => {
+                                const targetX = e.target.value;
+                                const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
+                                if (idx !== -1 && idx >= brushStartIdx) {
+                                    setBrushEndIdx(idx);
+                                }
+                            }}
+                            title={`End ${xKey}`}
+                        />
+                    </div>
+
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 8 }}>Scroll/Pan:</span>
+                    <input
+                        type="range"
+                        min={0}
+                        max={Math.max(0, processedChartData.length - (singleViewData.length))}
+                        value={brushStartIdx}
+                        onChange={(e) => {
+                            const newStart = parseInt(e.target.value, 10);
+                            const currentSpan = (brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1) - brushStartIdx;
+                            setBrushStartIdx(newStart);
+                            setBrushEndIdx(newStart + currentSpan);
+                        }}
+                        style={{ flex: 1, height: 6, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                        title="Pan Left/Right"
+                    />
+
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>
+                        {singleViewData.length} pts
+                    </span>
+                </div>
+            )}
+
+            <div className={`charts-scroll-container ${viewMode}`} ref={scrollContainerRef}>
                 {viewMode === 'single' ? (
                     <div
                         ref={chartWrapperRef}
@@ -606,35 +668,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                 })}
                             </LineChart>
                         </ResponsiveContainer>
-                        {processedChartData && processedChartData.length > 4 && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.2)', borderRadius: 8, marginTop: 8 }}>
-                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Zoom:</span>
-                                <input
-                                    type="range"
-                                    min={4}
-                                    max={Math.max(4, processedChartData.length)}
-                                    value={brushEndIdx !== null ? brushEndIdx - brushStartIdx + 1 : processedChartData.length}
-                                    onChange={(e) => {
-                                        const span = parseInt(e.target.value, 10);
-                                        const lastIdx = processedChartData.length - 1;
-                                        const currentEnd = brushEndIdx !== null ? brushEndIdx : lastIdx;
-                                        const currentCenter = brushStartIdx + (currentEnd - brushStartIdx) / 2;
-                                        let start = Math.max(0, Math.floor(currentCenter - span / 2));
-                                        let end = start + span - 1;
-                                        if (end > lastIdx) {
-                                            end = lastIdx;
-                                            start = Math.max(0, end - span + 1);
-                                        }
-                                        setBrushStartIdx(start);
-                                        setBrushEndIdx(end === lastIdx && start === 0 ? null : end);
-                                    }}
-                                    style={{ flex: 1, height: 6, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                                />
-                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', minWidth: 60 }}>
-                                    {singleViewData.length} / {processedChartData.length} pts
-                                </span>
-                            </div>
-                        )}
+                        {/* Zoom range slider moved to the global header */}
                     </div>
                 ) : (
                     <div className="charts-grid">
