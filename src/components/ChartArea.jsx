@@ -269,31 +269,31 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
     const handleZoomInBtn = () => {
         try {
-        if (!processedChartData || processedChartData.length === 0) return;
-        const lastIdx = processedChartData.length - 1;
-        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
-        const currentSpan = endIdx - brushStartIdx;
-        if (currentSpan < 4) return;
-        const delta = Math.max(1, Math.floor(currentSpan * 0.35));
-        const newStart = brushStartIdx + delta;
-        const newEnd = endIdx - delta;
-        if (newEnd <= newStart) return;
-        setBrushStartIdx(newStart);
-        setBrushEndIdx(newEnd);
+            if (!processedChartData || processedChartData.length === 0) return;
+            const lastIdx = processedChartData.length - 1;
+            const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+            const currentSpan = endIdx - brushStartIdx;
+            if (currentSpan < 4) return;
+            const delta = Math.max(1, Math.floor(currentSpan * 0.35));
+            const newStart = brushStartIdx + delta;
+            const newEnd = endIdx - delta;
+            if (newEnd <= newStart) return;
+            setBrushStartIdx(newStart);
+            setBrushEndIdx(newEnd);
         } catch (err) { console.warn('handleZoomInBtn error:', err); }
     };
 
     const handleZoomOutBtn = () => {
         try {
-        if (!processedChartData || processedChartData.length === 0) return;
-        const lastIdx = processedChartData.length - 1;
-        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
-        const currentSpan = endIdx - brushStartIdx;
-        const delta = Math.max(1, Math.floor(currentSpan * 0.2));
-        const newStart = Math.max(0, brushStartIdx - delta);
-        const newEnd = Math.min(lastIdx, endIdx + delta);
-        setBrushStartIdx(newStart);
-        setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
+            if (!processedChartData || processedChartData.length === 0) return;
+            const lastIdx = processedChartData.length - 1;
+            const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+            const currentSpan = endIdx - brushStartIdx;
+            const delta = Math.max(1, Math.floor(currentSpan * 0.2));
+            const newStart = Math.max(0, brushStartIdx - delta);
+            const newEnd = Math.min(lastIdx, endIdx + delta);
+            setBrushStartIdx(newStart);
+            setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
         } catch (err) { console.warn('handleZoomOutBtn error:', err); }
     };
 
@@ -306,56 +306,65 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     // useCallback so the ref-based effect depends on it without stale closures
     const handleWheel = useCallback((e) => {
         try {
-        if (viewMode !== 'single' || !processedChartData || processedChartData.length === 0) return;
-        e.preventDefault();
+            if (viewMode !== 'single' || !processedChartData || processedChartData.length === 0) return;
+            e.preventDefault();
 
-        const zoomIn = e.deltaY < 0;
-        const lastIdx = processedChartData.length - 1;
-        const startIdx = brushStartIdx;
-        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+            const zoomIn = e.deltaY < 0;
+            const lastIdx = processedChartData.length - 1;
+            const startIdx = brushStartIdx;
+            const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
 
-        const currentSpan = endIdx - startIdx;
-        const minSpan = 4;
-        if (currentSpan < minSpan && zoomIn) return;
+            const currentSpan = endIdx - startIdx;
+            const minSpan = 4;
+            if (currentSpan < minSpan && zoomIn) return;
 
-        // Trackpad friendly smooth zoom
-        const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
-        const delta = Math.max(1, Math.floor(currentSpan * intensity));
+            // Trackpad friendly smooth zoom
+            const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
+            const delta = Math.max(1, Math.floor(currentSpan * intensity));
 
-        let pivotIdx = Math.floor(startIdx + currentSpan / 2);
-        if (currentHoverLabel) {
-            const hoverIdx = processedChartData.findIndex(item => String(item[xKey]) === String(currentHoverLabel));
-            if (hoverIdx >= startIdx && hoverIdx <= endIdx) pivotIdx = hoverIdx;
-        }
+            let pivotIdx = Math.floor(startIdx + currentSpan / 2);
+            if (currentHoverLabel) {
+                const hoverIdx = processedChartData.findIndex(item => String(item[xKey]) === String(currentHoverLabel));
+                if (hoverIdx >= startIdx && hoverIdx <= endIdx) pivotIdx = hoverIdx;
+            }
 
-        const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
-        let newStart, newEnd;
+            const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
+            let newStart, newEnd;
 
-        if (zoomIn) {
-            newStart = startIdx + Math.floor(delta * ratio);
-            newEnd = endIdx - Math.ceil(delta * (1 - ratio));
-        } else {
-            newStart = Math.max(0, startIdx - Math.floor(delta * ratio));
-            newEnd = Math.min(lastIdx, endIdx + Math.ceil(delta * (1 - ratio)));
-        }
+            if (zoomIn) {
+                newStart = startIdx + Math.floor(delta * ratio);
+                newEnd = endIdx - Math.ceil(delta * (1 - ratio));
+            } else {
+                newStart = Math.max(0, startIdx - Math.floor(delta * ratio));
+                newEnd = Math.min(lastIdx, endIdx + Math.ceil(delta * (1 - ratio)));
+            }
 
-        if (newEnd - newStart < minSpan) {
-            newStart = Math.max(0, pivotIdx - 2);
-            newEnd = Math.min(lastIdx, pivotIdx + 2);
-        }
+            if (newEnd - newStart < minSpan) {
+                newStart = Math.max(0, pivotIdx - 2);
+                newEnd = Math.min(lastIdx, pivotIdx + 2);
+            }
 
-        setBrushStartIdx(newStart);
-        setBrushEndIdx(newEnd);
+            setBrushStartIdx(newStart);
+            setBrushEndIdx(newEnd);
         } catch (err) { console.warn('handleWheel zoom error:', err); }
     }, [viewMode, processedChartData, brushStartIdx, brushEndIdx, xKey, currentHoverLabel]);
 
-    // Attach wheel listener as non-passive so preventDefault() actually works.
+    // Keep a stable reference to the latest handleWheel callback
+    const handleWheelRef = useRef(handleWheel);
     useEffect(() => {
+        handleWheelRef.current = handleWheel;
+    }, [handleWheel]);
+
+    // Attach wheel listener as non-passive so preventDefault() actually works.
+    // By depending only on viewMode, we avoid reattaching the listener 60 times a second during zoom.
+    useEffect(() => {
+        if (viewMode !== 'single') return;
         const el = chartWrapperRef.current;
         if (!el) return;
-        el.addEventListener('wheel', handleWheel, { passive: false });
-        return () => el.removeEventListener('wheel', handleWheel);
-    }, [handleWheel]);
+        const listener = (e) => handleWheelRef.current(e);
+        el.addEventListener('wheel', listener, { passive: false });
+        return () => el.removeEventListener('wheel', listener);
+    }, [viewMode]);
 
     const zoomOut = () => {
         setBrushStartIdx(0);
@@ -560,9 +569,10 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                         <span style={{ color: '#e2e8f0', fontSize: '0.8rem' }}>{value}</span>
                                     )}
                                 />
-                                {singleViewKeys.map((key, index) => (
-                                    <React.Fragment key={key}>
+                                {singleViewKeys.flatMap((key, index) => {
+                                    const lines = [
                                         <Line
+                                            key={`main-${key}`}
                                             type="monotone"
                                             dataKey={key}
                                             stroke={COLORS[allSeriesKeys.indexOf(key) % COLORS.length]}
@@ -572,24 +582,28 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                             name={key}
                                             isAnimationActive={false}
                                         />
-                                        {/* Render Comparison Lines */}
-                                        {compareKeysMap[key] && compareKeysMap[key].map((comp, cIdx) => (
-                                            <Line
-                                                key={comp.key}
-                                                type="monotone"
-                                                dataKey={comp.key}
-                                                stroke={COMPARE_COLORS[(comp.colorIndex + allSeriesKeys.indexOf(key)) % COMPARE_COLORS.length]}
-                                                strokeWidth={2}
-                                                strokeOpacity={0.9}
-                                                dot={false}
-                                                activeDot={{ r: 4, strokeWidth: 0 }}
-                                                name={`${key} (${comp.fileName})`}
-                                                connectNulls
-                                                isAnimationActive={false}
-                                            />
-                                        ))}
-                                    </React.Fragment>
-                                ))}
+                                    ];
+                                    if (compareKeysMap[key]) {
+                                        compareKeysMap[key].forEach(comp => {
+                                            lines.push(
+                                                <Line
+                                                    key={comp.key}
+                                                    type="monotone"
+                                                    dataKey={comp.key}
+                                                    stroke={COMPARE_COLORS[(comp.colorIndex + allSeriesKeys.indexOf(key)) % COMPARE_COLORS.length]}
+                                                    strokeWidth={2}
+                                                    strokeOpacity={0.9}
+                                                    dot={false}
+                                                    activeDot={{ r: 4, strokeWidth: 0 }}
+                                                    name={`${key} (${comp.fileName})`}
+                                                    connectNulls
+                                                    isAnimationActive={false}
+                                                />
+                                            );
+                                        });
+                                    }
+                                    return lines;
+                                })}
                             </LineChart>
                         </ResponsiveContainer>
                         {processedChartData && processedChartData.length > 4 && (
@@ -603,8 +617,14 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                     onChange={(e) => {
                                         const span = parseInt(e.target.value, 10);
                                         const lastIdx = processedChartData.length - 1;
-                                        const start = Math.max(0, Math.floor((lastIdx - span + 1) / 2));
-                                        const end = Math.min(lastIdx, start + span - 1);
+                                        const currentEnd = brushEndIdx !== null ? brushEndIdx : lastIdx;
+                                        const currentCenter = brushStartIdx + (currentEnd - brushStartIdx) / 2;
+                                        let start = Math.max(0, Math.floor(currentCenter - span / 2));
+                                        let end = start + span - 1;
+                                        if (end > lastIdx) {
+                                            end = lastIdx;
+                                            start = Math.max(0, end - span + 1);
+                                        }
                                         setBrushStartIdx(start);
                                         setBrushEndIdx(end === lastIdx && start === 0 ? null : end);
                                     }}
@@ -651,8 +671,9 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                 />
                                                 <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
                                                 {/* Tooltip removed */}
-                                                <React.Fragment key={key}>
+                                                {[
                                                     <Line
+                                                        key={`main-${key}`}
                                                         type="monotone"
                                                         dataKey={key}
                                                         stroke={COLORS[index % COLORS.length]}
@@ -661,9 +682,8 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                         activeDot={{ r: 4 }}
                                                         name={key}
                                                         isAnimationActive={false}
-                                                    />
-                                                    {/* Render Comparison Lines */}
-                                                    {compareKeysMap[key] && compareKeysMap[key].map((comp, cIdx) => (
+                                                    />,
+                                                    ...(compareKeysMap[key] ? compareKeysMap[key].map((comp, cIdx) => (
                                                         <Line
                                                             key={comp.key}
                                                             type="monotone"
@@ -677,8 +697,8 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                             connectNulls
                                                             isAnimationActive={false}
                                                         />
-                                                    ))}
-                                                </React.Fragment>
+                                                    )) : [])
+                                                ]}
 
                                             </LineChart>
                                         </ResponsiveContainer>
