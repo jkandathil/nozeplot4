@@ -392,6 +392,20 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         setViewMode('single');
     };
 
+    const handleDownloadPng = async () => {
+        const el = scrollContainerRef.current;
+        if (!el) return;
+        try {
+            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const link = document.createElement('a');
+            link.download = `plot_${fileName || 'data'}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        } catch (err) {
+            console.error('Download PNG failed:', err);
+        }
+    };
+
     const handleDownload = () => {
         // Simple CSV export of the current data
         if (!processedChartData || processedChartData.length === 0) return;
