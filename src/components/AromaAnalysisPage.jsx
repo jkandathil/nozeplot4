@@ -4,7 +4,7 @@ import {
     LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart, Area, Brush, CartesianGrid
 } from 'recharts';
 import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download } from 'lucide-react';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import './AromaAnalysisPage.css';
 
 /**
@@ -136,10 +136,14 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
         const el = chartContainerRef.current;
         if (!el) return;
         try {
-            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const dataUrl = await toPng(el, {
+                backgroundColor: '#0f172a',
+                pixelRatio: 2,
+                style: { margin: 0 }
+            });
             const link = document.createElement('a');
             link.download = `${(plot?.title || 'plot').replace(/[^a-z0-9]/gi, '_')}.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.href = dataUrl;
             link.click();
         } catch (err) {
             console.error('Download failed:', err);

@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import MultiFileSelect from './MultiFileSelect';
 import LazyChart from './LazyChart';
 import './ChartArea.css';
@@ -396,10 +396,14 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         const el = scrollContainerRef.current;
         if (!el) return;
         try {
-            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const dataUrl = await toPng(el, {
+                backgroundColor: '#0f172a',
+                pixelRatio: 2,
+                style: { margin: 0 }
+            });
             const link = document.createElement('a');
             link.download = `plot_${fileName || 'data'}.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.href = dataUrl;
             link.click();
         } catch (err) {
             console.error('Download PNG failed:', err);

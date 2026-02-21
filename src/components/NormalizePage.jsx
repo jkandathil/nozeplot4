@@ -14,7 +14,7 @@ import {
 } from 'recharts';
 import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 import './NormalizePage.css';
 
 /* Extended Palette for multi-file comparison */
@@ -419,10 +419,14 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         const el = chartWrapperRef.current;
         if (!el) return;
         try {
-            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const dataUrl = await toPng(el, {
+                backgroundColor: '#0f172a',
+                pixelRatio: 2,
+                style: { margin: 0, paddingRight: '20px' }
+            });
             const link = document.createElement('a');
             link.download = `normalized_${fileName || 'chart'}.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.href = dataUrl;
             link.click();
         } catch (err) {
             console.error('Download PNG failed:', err);
