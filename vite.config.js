@@ -6,7 +6,7 @@ export default defineConfig({
   base: '/nozeplot4/',
   plugins: [react()],
   server: {
-    host: true,
+    host: 'localhost',
     port: 5174,
   },
 })

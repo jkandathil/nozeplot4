@@ -9,10 +9,9 @@ import {
     Tooltip,
     Legend
 } from 'recharts';
-import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, Layers, MessageSquare } from 'lucide-react';
+import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare } from 'lucide-react';
 import { motion } from 'framer-motion';
 import MultiFileSelect from './MultiFileSelect';
-import { applyNoiseFilter } from '../utils/filterUtils';
 import LazyChart from './LazyChart';
 import './ChartArea.css';
 
@@ -94,17 +93,24 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     const chartWrapperRef = useRef(null);
 
     // Identify X-axis and Series
+    // Use date/time column if present; otherwise use count 1, 2, 3... (never first data column)
     const { seriesKeys: mainSeriesKeys, xKey, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
 
         const keys = Object.keys(data[0]);
-        let x = keys[0];
-        const potentialX = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time'));
-        if (potentialX) x = potentialX;
+        const potentialX = keys.find(k => {
+            const low = k.toLowerCase();
+            return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
+        });
 
-        const series = keys.filter(k => k !== x && typeof data[0][k] === 'number');
-
-        return { seriesKeys: series, xKey: x, chartData: data };
+        if (potentialX) {
+            const series = keys.filter(k => k !== potentialX && typeof data[0][k] === 'number');
+            return { seriesKeys: series, xKey: potentialX, chartData: data };
+        }
+        // No date/time: use index 1, 2, 3...
+        const series = keys.filter(k => typeof data[0][k] === 'number');
+        const chartDataWithIndex = data.map((row, i) => ({ ...row, index: i + 1 }));
+        return { seriesKeys: series, xKey: 'index', chartData: chartDataWithIndex };
     }, [data]);
 
     // Compute UNION of all series keys (Main + Comparisons)
@@ -157,19 +163,24 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         if (!chartData || chartData.length === 0) return [];
         if (!compareDataList || compareDataList.length === 0) return chartData;
 
-        // For each comparison file: detect its xKey and build value-based lookup
+        // For each comparison file: use date/time if present, else index 1,2,3...
         const compLookups = compareDataList.map(c => {
             const lookup = {};
             if (!c.data || c.data.length === 0) return { lookup, compXKey: null, data: [] };
 
             const keys = Object.keys(c.data[0]);
-            const compXKey = keys.find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('time')) || keys[0];
+            const compTimeCol = keys.find(k => {
+                const low = k.toLowerCase();
+                return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
+            });
+            const compXKey = compTimeCol || 'index';
+            const compData = compTimeCol ? c.data : c.data.map((row, i) => ({ ...row, index: i + 1 }));
 
-            c.data.forEach(row => {
-                const xVal = row[compXKey] ?? row[xKey];
+            compData.forEach((row, i) => {
+                const xVal = compTimeCol ? row[compTimeCol] : i + 1;
                 if (xVal !== undefined && xVal !== null) lookup[String(xVal)] = row;
             });
-            return { lookup, compXKey, data: c.data };
+            return { lookup, compXKey, data: compData };
         });
 
         // Determine the maximum number of rows across all files
@@ -187,12 +198,10 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
             if (rowIdx < chartData.length) {
                 baseRow = { ...chartData[rowIdx] };
             } else {
-                // Main file has no row here – use the first comparison file's x-value
-                // so we still have a valid x coordinate
+                // Main file has no row here – use index (1,2,3...) or first comp's x-value
                 const firstComp = compLookups.find(cl => rowIdx < cl.data.length);
                 if (!firstComp) break;
-                const compXKey = firstComp.compXKey;
-                const xVal = firstComp.data[rowIdx][compXKey] ?? firstComp.data[rowIdx][xKey];
+                const xVal = xKey === 'index' ? rowIdx + 1 : (firstComp.data[rowIdx][firstComp.compXKey] ?? firstComp.data[rowIdx][xKey] ?? rowIdx + 1);
                 baseRow = { [xKey]: xVal };
             }
 
@@ -224,19 +233,8 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         return merged;
     }, [chartData, compareDataList, xKey]);
 
-    /* ── Filter Logic ── */
-    const [filterType, setFilterType] = useState('none');
-    const [filterWindow, setFilterWindow] = useState(5);
-
-    const processedChartData = useMemo(() => {
-        if (!rawProcessedData || !rawProcessedData.length || filterType === 'none')
-            return rawProcessedData || []; // Ensure array return if null
-
-        const sample = rawProcessedData[0];
-        const keys = Object.keys(sample).filter(k => k !== xKey && typeof sample[k] === 'number');
-        return applyNoiseFilter(rawProcessedData, keys, filterType, filterWindow);
-
-    }, [rawProcessedData, filterType, filterWindow, xKey]);
+    /* Dashboard shows raw data only. Use Normalize tab for filtering and baseline normalization. */
+    const processedChartData = rawProcessedData;
 
     // Optimize Grid View: Downsample data to ~200 points for smooth scrolling
     const gridChartData = useMemo(() => {
@@ -490,32 +488,6 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                             onChange={onCompareSelect}
                             placeholder="Compare with..."
                         />
-                    </div>
-
-                    <div className="separator" />
-
-                    {/* Filter Controls */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 12, padding: '2px 6px', background: 'rgba(255,255,255,0.03)', borderRadius: 4, flexShrink: 0 }}>
-                        <Layers size={14} color="var(--text-muted)" title="Noise Filter" />
-                        <select
-                            value={filterType}
-                            onChange={(e) => setFilterType(e.target.value)}
-                            style={{
-                                background: 'transparent', border: '1px solid var(--border-color)',
-                                color: 'var(--text-primary)', fontSize: '0.75rem', padding: '2px', borderRadius: 4, cursor: 'pointer'
-                            }}>
-                            <option value="none">No Filter</option>
-                            <option value="ma">MA</option>
-                            <option value="gaussian">Gauss</option>
-                        </select>
-                        {filterType !== 'none' && (
-                            <input
-                                type="range" min="1" max="50" step="1"
-                                value={filterWindow} onChange={(e) => setFilterWindow(Number(e.target.value))}
-                                title={`Strength: ${filterWindow}`}
-                                style={{ width: 50, height: 4, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                            />
-                        )}
                     </div>
 
                     <div className="separator" />

@@ -3,7 +3,8 @@ import { motion } from 'framer-motion';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart, Area, Brush, CartesianGrid
 } from 'recharts';
-import { RefreshCw, Play, Settings, Activity, Maximize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import './AromaAnalysisPage.css';
 
 /**
@@ -42,6 +43,7 @@ function applyMovingAverage(data, windowSize, keysToFilter) {
 
 const ZoomablePlotViewer = ({ plot, onClose }) => {
     const chartWrapperRef = React.useRef(null);
+    const chartContainerRef = React.useRef(null);
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null);
 
@@ -130,13 +132,32 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
         return () => el.removeEventListener('wheel', handleWheel);
     }, [handleWheel]);
 
+    const handleDownloadPng = async () => {
+        const el = chartContainerRef.current;
+        if (!el) return;
+        try {
+            const canvas = await html2canvas(el, { backgroundColor: '#0f172a', scale: 2, useCORS: true });
+            const link = document.createElement('a');
+            link.download = `${(plot?.title || 'plot').replace(/[^a-z0-9]/gi, '_')}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        } catch (err) {
+            console.error('Download failed:', err);
+        }
+    };
+
     if (!plot || !plot.data) return null;
+
+    const yAxisLabel = plot.yAxisLabel || 'Value';
 
     return (
         <div className="zoomable-plot-modal glass-panel" onClick={(e) => e.stopPropagation()} style={{ pointerEvents: 'auto' }}>
             <div className="modal-header" style={{ flexShrink: 0 }}>
                 <h3>{plot?.title || 'Plot'}</h3>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative', zIndex: 1001 }}>
+                    <button type="button" className="icon-btn small" onClick={(e) => { e.stopPropagation(); handleDownloadPng(); }} title="Download as PNG" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(16,185,129,0.1)' }}>
+                        <Download size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Download PNG</span>
+                    </button>
                     <button type="button" className="icon-btn small" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomInBtn(); }} title="Zoom In (fewer points)" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(16,185,129,0.1)' }}>
                         <ZoomIn size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Zoom In</span>
                     </button>
@@ -182,17 +203,18 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                         </span>
                     </div>
                 )}
+                <div ref={chartContainerRef} style={{ width: '100%', height: '100%', minHeight: 300, background: '#0f172a', borderRadius: 8, padding: 12 }}>
                 <ResponsiveContainer width="100%" height="100%" style={{ minHeight: 300 }}>
                     {plot.isComposed ? (
                         <ComposedChart
                             key={`zoom-${brushStartIdx}-${brushEndIdx}`}
                             data={visibleData.length > 0 ? visibleData : plot.data}
-                            margin={{ top: 20, right: 30, left: 10, bottom: 20 }}
+                            margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
                             onContextMenu={e => e.preventDefault()}
                         >
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                             <XAxis dataKey={plot.xAxisKey || "index"} tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} />
+                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
                             <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
                             {plot.areas && plot.areas.map((area, aIdx) => <Area key={`area-${aIdx}`} type="monotone" dataKey={area.dataKey} name={area.name} fill={area.color} fillOpacity={0.15} stroke="none" isAnimationActive={false} />)}
                             {plot.lines && plot.lines.map((line, lIdx) => <Line key={`line-${lIdx}`} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={plot.xAxisKey ? true : false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
@@ -201,17 +223,18 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                         <LineChart
                             key={`zoom-${brushStartIdx}-${brushEndIdx}`}
                             data={visibleData.length > 0 ? visibleData : (plot.data || [])}
-                            margin={{ top: 20, right: 30, left: 10, bottom: 20 }}
+                            margin={{ top: 20, right: 30, left: 40, bottom: 20 }}
                             onContextMenu={e => e.preventDefault()}
                         >
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                             <XAxis dataKey="index" tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} />
+                            <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
                             <Legend wrapperStyle={{ fontSize: '0.85rem', color: '#e2e8f0', bottom: 20 }} iconType="circle" />
                             {(plot.lines || []).map((line, lIdx) => <Line key={lIdx} type="monotone" dataKey={line.dataKey} name={line.name} stroke={line.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />)}
                         </LineChart>
                     )}
                 </ResponsiveContainer>
+                </div>
             </div>
         </div>
     );
@@ -219,7 +242,7 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
 
 const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     // Form config
-    const [sensingElements, setSensingElements] = useState('A1, A2, A3, B1, C1, H1');
+    const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, B1, B6, C1, H1, GASR0, ANLT0');
     const [tempCols, setTempCols] = useState('BT1, AQT0');
     const [humCols, setHumCols] = useState('AQH0, TRHH0');
     const [filterWindow, setFilterWindow] = useState(5);
@@ -402,16 +425,16 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
         // Plot container config variables
         const plots = [];
 
-        // 1. Group files by concentration
+        // 1. Group files by concentration (ALAAC logic: only ppb, never ppm)
         const extractConcentration = (name) => {
-            const basename = name.split(/[/\\]/).pop(); // Extract actual filename only, ignore parent dir like '0-90ppb'
-            const m = basename.match(/(\d+(?:\.\d+)?)\s*(ppb|ppm)/i);
-            if (m) return `${parseFloat(m[1])} ${m[2].toLowerCase()}`;
+            const basename = name.split(/[/\\]/).pop();
+            const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
+            if (m) return `${parseFloat(m[1])} ppb`;
             return 'Unknown';
         };
 
         const extractConcValue = (name) => {
-            const m = name.match(/(\d+(?:\.\d+)?)\s*(ppb|ppm)/i);
+            const m = name.match(/(\d+(?:\.\d+)?)ppb/i);
             return m ? parseFloat(m[1]) : 0;
         };
 
@@ -447,9 +470,13 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                 hMatchKeys[fIdx] = keys.find(k => hCodes.some(c => k.includes(c)) && !k.startsWith('abs-'));
                 absHMatchKeys[fIdx] = keys.find(k => k.startsWith('abs-'));
 
-                // Map Sensing Elements once per file
+                // Map Sensing Elements once per file (align with processing: use includes for flexible matching)
                 sensingPrefixes.forEach(prefix => {
-                    const matchedKey = keys.find(k => k === prefix || k.startsWith(`${prefix}_`) || k.endsWith(`_${prefix}`));
+                    const low = prefix.toLowerCase();
+                    const matchedKey = keys.find(k => {
+                        const kLow = k.toLowerCase();
+                        return kLow === low || kLow.startsWith(`${low}_`) || kLow.endsWith(`_${low}`) || kLow.includes(low);
+                    });
                     if (matchedKey) {
                         filePrefixCache[fIdx][prefix] = matchedKey;
                     }
@@ -526,7 +553,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         }
                     }
                 });
-                plots.push({ title: `Time Series Average: ${prefix}`, data: combinedData, lines, areas, isComposed: true });
+                plots.push({ title: `Time Series Average: ${prefix}`, data: combinedData, lines, areas, isComposed: true, yAxisLabel: 'Response (%)' });
             }
         });
 
@@ -543,7 +570,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         isComposed: true,
                         xAxisKey: 'concLabel',
                         lines: [{ dataKey: `${prefix}_maxResponse`, name: `Max Response`, color }],
-                        areas: [{ dataKey: `${prefix}_range`, name: `Spread (±1σ)`, color }]
+                        areas: [{ dataKey: `${prefix}_range`, name: `Spread (±1σ)`, color }],
+                        yAxisLabel: 'Max Response (%)'
                     });
                 }
             });
@@ -586,7 +614,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     }
                 });
                 if (hasData) {
-                    plots.push({ title: `Computed Property: ${type}`, data: combinedData, lines, isComposed: false });
+                    const yLabels = { 'T': 'Temperature (°C)', 'H': 'Humidity (%)', 'Abs-H': 'Abs. Humidity (g/m³)' };
+                    plots.push({ title: `Computed Property: ${type}`, data: combinedData, lines, isComposed: false, yAxisLabel: yLabels[type] || 'Value' });
                 }
             } else {
                 const areas = [];
@@ -624,7 +653,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         lines.push({ dataKey: `${gName}_${type}_mean`, name: `${gName} Average`, color });
                         areas.push({ dataKey: `${gName}_${type}_range`, name: `${gName} Spread (±1σ)`, color });
                     });
-                    plots.push({ title: `Computed Property Average: ${type}`, data: combinedData, lines, areas, isComposed: true });
+                    const yLabels = { 'T': 'Temperature (°C)', 'H': 'Humidity (%)', 'Abs-H': 'Abs. Humidity (g/m³)' };
+                    plots.push({ title: `Computed Property Average: ${type}`, data: combinedData, lines, areas, isComposed: true, yAxisLabel: yLabels[type] || 'Value' });
                 }
             }
         });
@@ -652,12 +682,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             <div className="aroma-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div className="icon-wrapper">
-                        <Activity size={24} color="#10b981" />
+                        <LineChartIcon size={18} color="#10b981" />
                     </div>
-                    <div>
-                        <h1 className="page-title">Aroma Sensor Batch Analysis</h1>
-                        <p className="page-subtitle">Configure model-like processing to plot data across multiple trial files.</p>
-                    </div>
+                    <h1 className="page-title">Aroma Sensor Batch Analysis</h1>
                 </div>
             </div>
 

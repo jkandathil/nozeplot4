@@ -1,0 +1,1 @@
+sed -i '' 's/let lIdx = plot.data.findIndex(i => i\[xKey\] == refAreaLeft);/console.log("zoomSelection:", {refAreaLeft, refAreaRight, xKey, activePayload: plot.data[0]}); let lIdx = plot.data.findIndex(i => i[xKey] == refAreaLeft);/g' src/components/AromaAnalysisPage.jsx

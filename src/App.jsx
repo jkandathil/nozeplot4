@@ -369,8 +369,6 @@ function App() {
 
       {/* Main Content */}
       <main className="main-content">
-
-
         <div className="content-area">
           <AnimatePresence mode="wait">
             {activePage === 'normalize' ? (

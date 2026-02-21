@@ -20,9 +20,9 @@
     padding-bottom: 16px;
 }
 
-.icon-wrapper {
+.aroma-header .icon-wrapper {
     background: rgba(16, 185, 129, 0.15);
-    padding: 10px;
+    padding: 6px;
     border-radius: 12px;
     display: flex;
     align-items: center;
@@ -30,12 +30,21 @@
     border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
+.aroma-header .page-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1;
+    transform: translateY(-2px);
+}
+
 .aroma-content {
     flex: 1;
     display: flex;
     gap: 24px;
-    height: calc(100% - 80px);
-    /* Fill space below header */
+    min-height: 0;
+    height: calc(100% - 60px);
 }
 
 /* -- config panel -- */

@@ -35,14 +35,14 @@ const getLineStyle = (index) => {
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
+/* Returns date/time column if present, else null (caller uses index 1,2,3...) */
 function detectXKey(row) {
-    if (!row) return '';
+    if (!row) return null;
     const keys = Object.keys(row);
-    return keys.find(k =>
-        k.toLowerCase().includes('date') ||
-        k.toLowerCase().includes('time') ||
-        k.toLowerCase().includes('stamp')
-    ) || keys[0];
+    return keys.find(k => {
+        const low = k.toLowerCase();
+        return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
+    }) || null;
 }
 
 function shortName(fileName = '') {
@@ -92,8 +92,13 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const { xKey, seriesKeys, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
         const x = detectXKey(data[0]);
-        const series = Object.keys(data[0]).filter(k => k !== x && typeof data[0][k] === 'number');
-        return { xKey: x, seriesKeys: series, chartData: data };
+        if (x) {
+            const series = Object.keys(data[0]).filter(k => k !== x && typeof data[0][k] === 'number');
+            return { xKey: x, seriesKeys: series, chartData: data };
+        }
+        const series = Object.keys(data[0]).filter(k => typeof data[0][k] === 'number');
+        const chartDataWithIndex = data.map((row, i) => ({ ...row, index: i + 1 }));
+        return { xKey: 'index', seriesKeys: series, chartData: chartDataWithIndex };
     }, [data]);
 
     /* ── 2. Prepare Compare Data List ── */
@@ -102,15 +107,13 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         return compareDataList.map((file, idx) => {
             if (!file?.data || file.data.length === 0) return null;
             const x = detectXKey(file.data[0]);
-            const series = Object.keys(file.data[0]).filter(k => k !== x && typeof file.data[0][k] === 'number');
-            return {
-                id: idx,
-                fileName: file.fileName,
-                shortName: shortName(file.fileName),
-                xKey: x,
-                seriesKeys: series,
-                data: file.data
-            };
+            if (x) {
+                const series = Object.keys(file.data[0]).filter(k => k !== x && typeof file.data[0][k] === 'number');
+                return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: x, seriesKeys: series, data: file.data };
+            }
+            const series = Object.keys(file.data[0]).filter(k => typeof file.data[0][k] === 'number');
+            const dataWithIndex = file.data.map((row, i) => ({ ...row, index: i + 1 }));
+            return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: 'index', seriesKeys: series, data: dataWithIndex };
         }).filter(Boolean);
     }, [compareDataList]);
 
@@ -161,10 +164,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
             // Main file data
             if (i < chartData.length) {
-                row[xKey] = chartData[i][xKey]; // Use main X key
+                row[xKey] = chartData[i][xKey];
                 seriesKeys.forEach(k => { row[k] = chartData[i][k]; });
             } else {
-                row[xKey] = i; // Fallback X
+                row[xKey] = xKey === 'index' ? i + 1 : i;
                 seriesKeys.forEach(k => { row[k] = null; });
             }
 
