@@ -1,0 +1,823 @@
+{
+  "uuid":        "UUID-NAME",
+  "type":        "DEVICE",
+  "name":        "sample",
+  "description": "Configuration",
+  "clients":     "string",
+  "domains":     "string",
+  "data":        {
+    "gcs_upload":        {
+      "upload":          true,
+      "credential_path": "~/Upload_Key.json",
+      "bucket_name":     "oms-data-characterization-results"
+    },
+    "logging":           {
+      "columns_to_log": ["device_id"]
+    },
+    "dataset_options":   {
+      "curated_filename":      "curated",
+      "paths":                 {
+        "clear_paths": true,
+        "raw_data":    "./data"
+      },
+      "timestamp_column_name": "payloadCreateAt",
+      "gcs":                   {
+        "gcs_download":           true,
+        "credentials_path":       "~/Download_Key.json",
+        "bucket_name":            "data_collection_airflow",
+        "parent_folders":         ["annotations"],
+        "metadata_file":          "~/metadata.json",
+        "local_download_dir":     "./data",
+        "data_type":              "raw",
+        "max_retries":            15,
+        "retry_interval_seconds": 60
+      },
+      "dataset_name":          "test",
+      "analyte_name":          "NO",
+      "event_column_name":     "event_name",
+      "sampling_rates":        {
+        "default": 1.0
+      },
+      "device_id_columns":     ["sensor_module_id", "component_sn"]
+    },
+    "prep_pipeline":     {
+      "name":     "PREP_PIPELINE",
+      "pipeline": [
+        {
+          "name":   "filter_signal",
+          "type":   "filter_signal",
+          "params": {
+            "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "CHRA": [1, 8],
+                "CHRB": [1, 8],
+                "CHRC": [1, 8],
+                "CHRD": [1, 8],
+                "CHRE": [1, 8],
+                "CHRF": [1, 8],
+                "CHRG": [1, 8],
+                "CHRH": [1, 8],
+                "CHR":  [0, 31],
+                "A": [1, 8],
+                "B": [1, 8],
+                "C": [1, 8],
+                "D": [1, 8],
+                "E": [1, 8],
+                "F": [1, 8],
+                "G": [1, 8],
+                "H": [1, 8]
+              }
+            },
+            "method":           "savitzky_golay",
+            "window_length":    30
+          }
+        },
+        {
+          "name":   "normalize_signals",
+          "type":   "normalize_signals",
+          "params": {
+            "reference_event_flag": "BL",
+            "method":               "baseline",
+            "save_csv":             true,
+            "sensing_elements":     {
+              "include": ["GASR0"],
+              "exclude": [],
+              "expand":  {
+                "CHRA": [1, 8],
+                "CHRB": [1, 8],
+                "CHRC": [1, 8],
+                "CHRD": [1, 8],
+                "CHRE": [1, 8],
+                "CHRF": [1, 8],
+                "CHRG": [1, 8],
+                "CHRH": [1, 8],
+                "CHR":  [0, 31],
+                "A": [1, 8],
+                "B": [1, 8],
+                "C": [1, 8],
+                "D": [1, 8],
+                "E": [1, 8],
+                "F": [1, 8],
+                "G": [1, 8],
+                "H": [1, 8]
+              }
+            }
+          }
+        },
+        {
+          "name":   "compute_absolute_humidity",
+          "type":   "compute_absolute_humidity",
+          "params": {
+            "temperature_col_codes": ["T0"],
+            "humidity_col_codes": ["H0"]
+            }
+        }
+      ]
+    },
+    "analysis_pipeline": {
+      "name":     "ANALYSIS_PIPELINE",
+      "pipeline": [
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_Selected_Elements"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": { 
+            "skipped_events": {"FeNOMeasurement":{"end": 5},"RecoveryOff":"skip"},
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4,"display_trial_number":true, "trial_number_position":"start"},
+            "output_kwargs": {
+              "filename": "individual_plots_Selected_Elements_skip_events"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": { 
+            "skipped_events": {"Exposure":{"end": 5},"Recoveryoff":"skip"},
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4,"display_trial_number":true, "trial_number_position":"start"},
+            "output_kwargs": {
+              "filename": "individual_plots_Selected_Elements_skip_events"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": { 
+            "skipped_events": {"BL":"skip","HT":"skip","BSA":{"start":5}},
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4,"display_trial_number":true, "trial_number_position":"start"},
+            "output_kwargs": {
+              "filename": "individual_plots_Selected_Elements_FeNO"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": [],
+              "expand":  {
+                "normalized_CHRA": [1,8],
+                "normalized_CHRB": [1,8],
+                "CHRA": [1,8],
+                "CHRB": [1,8],
+                "normalized_A": [1,8],
+                "normalized_B": [1,8],
+                "A": [1,8],
+                "B": [1,8],
+                "normalized_CHR": [0,31]
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_P1"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": [],
+              "expand":  {
+                "normalized_CHRC": [1,8],
+                "normalized_CHRD": [1,8],
+                "CHRC": [1,8],
+                "CHRD": [1,8],
+                "normalized_C": [1,8],
+                "normalized_D": [1,8],
+                "C": [1,8],
+                "D": [1,8]
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_P2"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": [],
+              "expand":  {
+                "normalized_CHRE": [1,8],
+                "normalized_CHRF": [1,8],
+                "CHRE": [1,8],
+                "CHRF": [1,8],
+                "normalized_E": [1,8],
+                "normalized_F": [1,8],
+                "E": [1,8],
+                "F": [1,8]
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_P3"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": [],
+              "expand":  {
+                "normalized_CHRG": [1,8],
+                "normalized_CHRH": [1,8],
+                "CHRG": [1,8],
+                "CHRH": [1,8],
+                "normalized_G": [1,8],
+                "normalized_H": [1,8],
+                "G": [1,8],
+                "H": [1,8]
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_P4"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_GASR0", "T0", "H0", "P0","abs-","FLW0"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_BME"
+            }
+          }
+        },
+        {
+          "name": "individual_line_plots",
+          "type": "individual_line_plots",
+          "params": {
+            "sensing_elements": {
+              "include": ["ST0", "ST1","BT1","BT2","TRHH0","TRHSN","TRHT0","DPT0","DPP0","AQGR0", "AQH0", "AQP0", "AQT0"],
+              "expand":  {}
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "plot_kwargs": { "linewidth": 3 , "num_columns": 4},
+            "output_kwargs": {
+              "filename": "individual_plots_External_sensors"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["normalized_GASR0", "T0", "H0", "P0","abs-","FLW0"]
+            },
+            "save_csv":         true,
+            "output_kwargs":    {
+              "filename": "BME_mpl"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "plotly",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["normalized_GASR0", "T0", "H0", "P0","abs-","FLW0"]
+            },
+            "save_csv":         false,
+            "output_kwargs":    {
+              "filename": "BME"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["ST0", "ST1","BT1","BT2","TRHH0","TRHSN","TRHT0","DPT0","DPP0","AQGR0", "AQH0", "AQP0", "AQT0"]
+            },
+            "save_csv":         true,
+            "output_kwargs":    {
+              "filename": "external_sensors_mpl"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "plotly",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["ST0", "ST1","BT1","BT2","TRHH0","TRHSN","TRHT0","DPT0","DPP0","AQGR0", "AQH0", "AQP0", "AQT0"]
+            },
+            "save_csv":         false,
+            "output_kwargs":    {
+              "filename": "external_sensors"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "plotly",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRA": [1, 8],
+                "normalized_CHRB": [1, 8],
+                "normalized_CHRC": [1, 8],
+                "normalized_CHRD": [1, 8],
+                "normalized_CHR":  [0, 31],
+                "normalized_A": [1, 8],
+                "normalized_B": [1, 8],
+                "normalized_C": [1, 8],
+                "normalized_D": [1, 8]
+              }
+            },
+            "save_csv":         true,
+            "output_kwargs":    {
+              "filename": "P1"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRA": [1, 8],
+                "normalized_CHRB": [1, 8],
+                "normalized_CHRC": [1, 8],
+                "normalized_CHRD": [1, 8],
+                "normalized_CHR":  [0, 31],
+                "normalized_A": [1, 8],
+                "normalized_B": [1, 8],
+                "normalized_C": [1, 8],
+                "normalized_D": [1, 8]
+              }
+            },
+            "save_csv":         false,
+            "output_kwargs":    {
+              "filename": "P1_mpl"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "plotly",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRE": [1, 8],
+                "normalized_CHRF": [1, 8],
+                "normalized_CHRG": [1, 8],
+                "normalized_CHRH": [1, 8],
+                "normalized_E": [1, 8],
+                "normalized_F": [1, 8],
+                "normalized_G": [1, 8],
+                "normalized_H": [1, 8]
+              }
+            },
+            "save_csv":         true,
+            "output_kwargs":    {
+              "filename": "P2"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRE": [1, 8],
+                "normalized_CHRF": [1, 8],
+                "normalized_CHRG": [1, 8],
+                "normalized_CHRH": [1, 8],
+                "normalized_E": [1, 8],
+                "normalized_F": [1, 8],
+                "normalized_G": [1, 8],
+                "normalized_H": [1, 8]
+              }
+            },
+            "save_csv":         false,
+            "output_kwargs":    {
+              "filename": "P2_mpl"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "plotly",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5"],
+              "exclude": [],
+              "expand":  {}
+            },
+            "save_csv":         false,
+            "output_kwargs":    {
+              "filename": "Selected_Elements"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "plot_kwargs":      {
+              "linewidth": 5
+            },
+            "group_by":         {
+              "using": "concentration_exact_value"
+            },
+            "average":          "median",
+            "shadow_type":      "iqr",
+            "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5"],
+              "exclude": [],
+              "expand":  {}
+            },
+            "save_csv":         true,
+            "output_kwargs":    {
+              "filename": "Selected_Elements_mpl"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "skip_missing_events": true,
+           "trim_events":      {
+              "AmbientSamplingRFC": {
+                "end": 5
+              },
+              "BreathSampleCollection": {
+                "all": false
+              },
+              "FeNOWindow": {
+                "all": false
+              },
+              "FeNOMeasurement": {
+                "all": false
+              },
+              "CleaningCycle": {
+                "start": 5
+              }
+            },
+            "plot_kwargs": {"linewidth" : 5},
+            "group_by":             {
+              "using": "concentration_exact_value"
+            },
+            "average":              "median",
+            "shadow_type":          "iqr",
+         "sensing_elements": {
+              "include": ["normalized_CHRA1","normalized_CHRA4","normalized_CHRB6","normalized_CHRF5","normalized_CHRG4","normalized_CHRG5","normalized_CHRH4","normalized_CHRH5",
+                          "normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5"],
+              "exclude": [],
+              "expand":  {}
+            },
+            "save_csv":             false,
+            "output_kwargs":        {
+              "filename": "Selected_Elements_mpl_Exposure"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "skip_missing_events": true,
+           "trim_events":      {
+              "AmbientSamplingRFC": {
+                "end": 5
+              },
+              "BreathSampleCollection": {
+                "all": false
+              },
+              "FeNOWindow": {
+                "all": false
+              },
+              "FeNOMeasurement": {
+                "all": false
+              },
+              "CleaningCycle": {
+                "start": 5
+              }
+            },
+            "plot_kwargs": {"linewidth" : 5},
+            "group_by":             {
+              "using": "concentration_exact_value"
+            },
+            "average":              "median",
+            "shadow_type":          "iqr",
+         "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRA": [1, 8],
+                "normalized_CHRB": [1, 8],
+                "normalized_CHRC": [1, 8],
+                "normalized_CHRD": [1, 8],
+                "normalized_CHR":  [0, 31],
+                "normalized_A": [1, 8],
+                "normalized_B": [1, 8],
+                "normalized_C": [1, 8],
+                "normalized_D": [1, 8]
+              }
+            },
+            "save_csv":             false,
+            "output_kwargs":        {
+              "filename": "P1_mpl_Exposure"
+            }
+          }
+        },
+        {
+          "name":   "monotonic_average_plots",
+          "type":   "monotonic_average_plots",
+          "params": {
+            "plot_type": "mpl",
+            "skip_missing_events": true,
+           "trim_events":      {
+              "AmbientSamplingRFC": {
+                "end": 5
+              },
+              "BreathSampleCollection": {
+                "all": false
+              },
+              "FeNOWindow": {
+                "all": false
+              },
+              "FeNOMeasurement": {
+                "all": false
+              },
+              "CleaningCycle": {
+                "start": 5
+              }
+            },
+            "plot_kwargs": {"linewidth" : 5},
+            "group_by":             {
+              "using": "concentration_exact_value"
+            },
+            "average":              "median",
+            "shadow_type":          "iqr",
+         "sensing_elements": {
+              "include": [],
+              "exclude": [],
+              "expand":  {
+                "normalized_CHRE": [1, 8],
+                "normalized_CHRF": [1, 8],
+                "normalized_CHRG": [1, 8],
+                "normalized_CHRH": [1, 8],
+                "normalized_E": [1, 8],
+                "normalized_F": [1, 8],
+                "normalized_G": [1, 8],
+                "normalized_H": [1, 8]
+              }
+            },
+            "save_csv":             false,
+            "output_kwargs":        {
+              "filename": "P2_mpl_Exposure"
+            }
+          }
+        },
+        {
+          "name": "compute_signal_metrics",
+          "type": "compute_signal_metrics",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "events_of_interest": ["FW","FM"],
+            "stats_windows":{"auc":[0,1],"magnitude":[0.8,1],"slope":[0,0.2]},
+            "averaging": true,
+            "averaging_method":"median",
+            "variation_metric": "iqr",
+            "save_csv": true,
+            "output_kwargs": {
+              "filename": "Sensitivity"
+            }
+          }
+        },
+        {
+          "name": "compute_signal_metrics",
+          "type": "compute_signal_metrics",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "events_of_interest": ["FeNOWindow","FeNOMeasurement"],
+            "stats_windows":{"auc":[0,1],"magnitude":[0.8,1],"slope":[0,0.2]},
+            "averaging": true,
+            "averaging_method":"median",
+            "variation_metric": "iqr",
+            "save_csv": true,
+            "output_kwargs": {
+              "filename": "Sensitivity"
+            }
+          }
+        },
+        {
+          "name": "compute_signal_metrics",
+          "type": "compute_signal_metrics",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "events_of_interest": ["BL"],
+            "stats_windows":{"peak2peak":[0,1],"slope":[0,1],"median":[0.8,1],"std":[0.8,1]},
+            "averaging": false,
+            "averaging_method":"median",
+            "variation_metric": "iqr",
+            "save_csv": true,
+            "output_kwargs": {
+              "filename": "Baseline_Stability"
+            }
+          }
+        },
+        {
+          "name": "compute_signal_metrics",
+          "type": "compute_signal_metrics",
+          "params": {
+            "sensing_elements": {
+              "include": ["normalized_A1","normalized_A4","normalized_B6","normalized_F5","normalized_G4","normalized_G5","normalized_H4","normalized_H5",
+                          "A1","A4","B6","F5","G4","G5","H4","H5","CHRA1","CHRA4","CHRB6","CHRF5","CHRG4","CHRG5","CHRH4","CHRH5"],
+              "expand":  {
+              }
+            },
+            "group_by": { "using": "concentration_exact_value" },
+            "events_of_interest": ["AmbientSamplingRFC"],
+            "stats_windows":{"peak2peak":[0,1],"slope":[0,1],"median":[0.8,1],"std":[0.8,1]},
+            "averaging": false,
+            "averaging_method":"median",
+            "variation_metric": "iqr",
+            "save_csv": true,
+            "output_kwargs": {
+              "filename": "Baseline_Stability"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

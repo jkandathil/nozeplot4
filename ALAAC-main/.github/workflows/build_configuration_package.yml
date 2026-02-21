@@ -1,0 +1,47 @@
+name: Build and create ALAAC package
+on:
+  push:
+    tags:
+      - "v*.*.*"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Extract version number
+        id: extract_version
+        run: echo "::set-output name=version::$(echo ${GITHUB_REF#refs/tags/v})"
+      - name: Get runner IP address
+        id: get-ip
+        run: |
+          RUNNER_IP=$(curl http://checkip.amazonaws.com)
+          echo "Runner IP is $RUNNER_IP"
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+      - name: Add IP to Security Group for Nexus
+        run: |
+          aws ec2 authorize-security-group-ingress --group-id ${{ vars.PD1_SECURITY_GROUP_ID }} --protocol tcp --port 443 --cidr $RUNNER_IP/32
+          aws ec2 authorize-security-group-ingress --group-id ${{ vars.PD1_SECURITY_GROUP_ID }} --protocol tcp --port 80 --cidr $RUNNER_IP/32
+        env:
+          AWS_DEFAULT_REGION: ${{ vars.PD1_AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ vars.PD1_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PD1_AWS_SECRET_ACCESS_KEY }}
+      - id: docker-push-tagged
+        name: Build and Push package to Nexus
+        uses: docker/build-push-action@v3
+        with:
+          push: false
+          build-args: |
+            NEXUS_PYPI_USER=${{ secrets.NEXUS_PYPI_USER }}
+            NEXUS_PYPI_PASSWD=${{ secrets.NEXUS_PYPI_PASSWD }}
+            NEXUS_PYPI_REPO_URL=${{ secrets.NEXUS_PYPI_REPO_URL }}
+            PACKAGE_VERSION=${{ steps.extract_version.outputs.version }}
+      - name: Remove IP from Security Group
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id ${{ vars.PD1_SECURITY_GROUP_ID }} --protocol tcp --port 443 --cidr $RUNNER_IP/32
+          aws ec2 revoke-security-group-ingress --group-id ${{ vars.PD1_SECURITY_GROUP_ID }} --protocol tcp --port 80 --cidr $RUNNER_IP/32
+        env:
+          AWS_DEFAULT_REGION: ${{ vars.PD1_AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ vars.PD1_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PD1_AWS_SECRET_ACCESS_KEY }}

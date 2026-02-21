@@ -1,0 +1,29 @@
+repos:
+  - repo: local
+    hooks:
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        language: python
+        entry: poetry run end-of-file-fixer
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        language: python
+        entry: poetry run trailing-whitespace-fixer
+      - id: check-added-large-files
+        name: check-added-large-files
+        language: python
+        entry: poetry run check-added-large-files
+      - id: check-merge-conflict
+        name: check-merge-conflict
+        language: python
+        entry: poetry run check-merge-conflict
+      - id: black
+        name: black
+        language: python
+        entry: poetry run black
+        args: [ "--force-exclude",'\.', "--include", '\.py' ]
+      - id: isort
+        name: isort
+        language: python
+        entry: poetry run isort
+        args: [ "--profile", "black" ]

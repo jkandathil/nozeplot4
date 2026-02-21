@@ -241,7 +241,15 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         const sample = rawProcessedData[0];
         const keys = Object.keys(sample).filter(k => k !== xKey && typeof sample[k] === 'number');
         return applyNoiseFilter(rawProcessedData, keys, filterType, filterWindow);
+
     }, [rawProcessedData, filterType, filterWindow, xKey]);
+
+    // Optimize Grid View: Downsample data to ~200 points for smooth scrolling
+    const gridChartData = useMemo(() => {
+        if (!processedChartData || processedChartData.length <= 200) return processedChartData;
+        const step = Math.ceil(processedChartData.length / 200);
+        return processedChartData.filter((_, i) => i % step === 0);
+    }, [processedChartData]);
 
     // Reset zoom when data changes
     React.useEffect(() => {
@@ -628,18 +636,18 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                 <div className="mini-chart-wrapper" style={{ height: 300 }}>
                                     <LazyChart height={300}>
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={processedChartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
-                                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                                            <LineChart data={gridChartData} margin={{ top: 10, right: 10, left: 5, bottom: 5 }}>
+                                                {/* Grid removed for performance */}
                                                 <XAxis
                                                     dataKey={xKey}
                                                     stroke="#64748b"
                                                     tick={{ fill: '#64748b', fontSize: 10 }}
                                                     height={30}
-                                                    minTickGap={20}
+                                                    minTickGap={30}
                                                     tickFormatter={formatXAxis}
                                                 />
                                                 <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
-                                                <Tooltip content={<CustomTooltip />} />
+                                                {/* Tooltip removed */}
                                                 <React.Fragment key={key}>
                                                     <Line
                                                         type="monotone"

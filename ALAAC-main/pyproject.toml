@@ -1,0 +1,59 @@
+[project]
+name = "nzalaac"
+requires-python = ">=3.10"
+description = "Noze Sensor Characterization Batch Assessment "
+dynamic = ["version"]
+license = { text = "Proprietary" }
+authors = [
+    { name = "Alaa Wardeh", email = "awardeh@noze.ca" },
+]
+maintainers = [
+    { name = "Alaa Wardeh", email = "awardeh@noze.ca" },
+]
+
+[tool.poetry]
+version = "1.0.5.post1"
+readme = "README.md"
+packages = [{ include = "nzalaac" }]
+
+
+[tool.poetry.dependencies]
+pandas = "~=2.3.1"
+numpy = "~=1.26.4"
+python = ">=3.10, <3.11"
+scipy = "1.11.4"
+poetry-core = ">=2.0.0,<3.0.0"
+seaborn = "^0.13.2"
+matplotlib = "^3.10.3"
+pandas-stubs = "^2.3.2.250926"
+plotly = "^6.5.0"
+typing-extensions = "4.14"
+kaleido = [{ version = "0.2.1", platform = "darwin" },
+    { version = "0.2.1", platform = "linux" },
+    { version = "^1.2.0", platform = "win32" }]
+
+google-cloud-storage = "^3.6.0"
+
+
+[tool.poetry.group.dev.dependencies]
+black = { version = "~25.1.0", python = ">=3.10, <3.11" }
+isort = "^7.0.0"
+pre-commit = "^4.5.0"
+pre-commit-hooks = "^6.0.0"
+
+
+[[tool.poetry.source]]
+name = "cloudscent"
+url = "https://pd2-nexus.noze.live/repository/pypi/simple"
+priority = "primary"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+target-version = ['py310']

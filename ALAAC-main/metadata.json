@@ -1,0 +1,16 @@
+{
+    "protocols": {
+        "InterPump-0ppbNO-0-150ccm-Maxwell-Q425": [
+            "3ebc428d-a0c4-4242-88ae-3694ee1f892d",
+            "4771131a-d726-441f-8c22-b9b8e1079cbd"
+        ],
+        "InterPump-25ppbNO-0-150ccm-Maxwell-Q425": [
+            "37afab6c-a002-48cd-8c4b-abeff1ddfc35",
+            "574ba66e-324b-4d9a-ad72-850fba14ae6f"
+        ]
+    },
+    "data": {
+        "batchId": "MQTF",
+        "computer": "test"
+    }
+}
