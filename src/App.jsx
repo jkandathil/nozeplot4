@@ -20,6 +20,7 @@ import Sidebar from './components/Sidebar';
 import ChartArea from './components/ChartArea';
 import EmptyState from './components/EmptyState';
 import NormalizePage from './components/NormalizePage';
+import AromaAnalysisPage from './components/AromaAnalysisPage';
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -70,7 +71,7 @@ function App() {
 
     const formattedFiles = validFiles.map(file => ({
       id: Math.random().toString(36).substr(2, 9),
-      name: file.name,
+      name: file.webkitRelativePath || file.name,
       path: file.webkitRelativePath || file.name,
       file: file,
       type: file.type
@@ -146,7 +147,7 @@ function App() {
             });
 
             resolve({
-              fileName: fileObj.name,
+              fileName: fileObj.name, // This is now the relative path if uploaded from a folder
               data: jsonData,
               meta: { fields: jsonData.length > 0 ? Object.keys(jsonData[0]) : [] }
             });
@@ -163,7 +164,7 @@ function App() {
           skipEmptyLines: true,
           complete: (results) => {
             resolve({
-              fileName: fileObj.name,
+              fileName: fileObj.name,  // This is now the relative path if uploaded from a folder
               data: results.data,
               meta: results.meta
             });
@@ -276,8 +277,19 @@ function App() {
     }
   };
 
-  const handleSelectAll = () => {
-    if (!selectedFileId) return;
+  const handleSelectAll = async () => {
+    if (files.length === 0) return;
+
+    if (!selectedFileId) {
+      // If no file is selected, select the first one as main, rest as compare
+      const firstFileId = files[0].id;
+      await handleFileSelect(firstFileId, false);
+      const otherFileIds = files.slice(1).map(f => f.id);
+      if (otherFileIds.length > 0) {
+        handleCompareSelect(otherFileIds);
+      }
+      return;
+    }
 
     // Get all other files
     const otherFileIds = files
@@ -367,6 +379,14 @@ function App() {
                 data={parsedData?.data}
                 fileName={parsedData?.fileName}
                 compareDataList={compareDataList}
+              />
+            ) : activePage === 'aromaAnalysis' ? (
+              <AromaAnalysisPage
+                key="aromaAnalysis"
+                data={parsedData?.data}
+                fileName={parsedData?.fileName}
+                compareDataList={compareDataList}
+                availableFiles={files}
               />
             ) : !selectedFileId ? (
               <EmptyState

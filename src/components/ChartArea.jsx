@@ -7,11 +7,9 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
-    Legend,
-    Brush,
-    ReferenceArea
+    Legend
 } from 'recharts';
-import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, Layers } from 'lucide-react';
+import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, Layers, MessageSquare } from 'lucide-react';
 import { motion } from 'framer-motion';
 import MultiFileSelect from './MultiFileSelect';
 import { applyNoiseFilter } from '../utils/filterUtils';
@@ -52,14 +50,14 @@ const CustomTooltip = ({ active, payload, label }) => {
         });
 
         return (
-            <div className="custom-tooltip glass-panel">
-                <p className="label">{`${label}`}</p>
+            <div className="custom-tooltip glass-panel" style={{ maxHeight: '60vh', overflowY: 'auto', pointerEvents: 'auto', minWidth: '220px' }}>
+                <p className="label" style={{ width: '100%', position: 'sticky', top: 0, background: 'rgba(15, 23, 42, 0.95)', zIndex: 2 }}>{`${label}`}</p>
                 {Object.keys(groups).map((key) => {
                     const group = groups[key];
                     return (
-                        <div key={key} style={{ marginBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 4 }}>
-                            <p style={{ color: group.color, fontWeight: 700, marginBottom: 2 }}>{key}</p>
-                            <div style={{ paddingLeft: 8, fontSize: '0.8rem' }}>
+                        <div key={key} style={{ marginBottom: 6, paddingBottom: 4, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            <p style={{ color: group.color, fontWeight: 700, marginBottom: 1, fontSize: '0.75rem' }}>{key}</p>
+                            <div style={{ paddingLeft: 4, fontSize: '0.7rem' }}>
                                 {group.main && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                                         <span style={{ color: '#e2e8f0', opacity: 0.9 }}>Main:</span>
@@ -87,14 +85,10 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     const [focusSeries, setFocusSeries] = useState(null);
 
     // Index-based zoom: controls Brush startIndex/endIndex.
-    // domain-based approach doesn't work for type="category" XAxis in Recharts.
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null); // null = last index
     const [currentHoverLabel, setCurrentHoverLabel] = useState(null);
-    const [isRightClicking, setIsRightClicking] = useState(false);
-    const [refAreaLeft, setRefAreaLeft] = useState('');
-    const [refAreaRight, setRefAreaRight] = useState('');
-    const [animation, setAnimation] = useState(true);
+    const [showTooltip, setShowTooltip] = useState(false);
 
     // Ref for chart wrapper — used to attach non-passive wheel listener
     const chartWrapperRef = useRef(null);
@@ -246,22 +240,74 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
     // Optimize Grid View: Downsample data to ~200 points for smooth scrolling
     const gridChartData = useMemo(() => {
-        if (!processedChartData || processedChartData.length <= 200) return processedChartData;
-        const step = Math.ceil(processedChartData.length / 200);
-        return processedChartData.filter((_, i) => i % step === 0);
-    }, [processedChartData]);
+        if (!processedChartData || processedChartData.length === 0) return [];
+
+        let start = brushStartIdx;
+        let end = brushEndIdx !== null ? brushEndIdx : (processedChartData.length - 1);
+
+        // Ensure valid indices
+        start = Math.max(0, start);
+        end = Math.min(processedChartData.length - 1, end);
+        if (start > end) [start, end] = [end, start];
+
+        const slicedData = processedChartData.slice(start, end + 1);
+        if (slicedData.length <= 200) return slicedData;
+
+        const step = Math.ceil(slicedData.length / 200);
+        return slicedData.filter((_, i) => i % step === 0);
+    }, [processedChartData, brushStartIdx, brushEndIdx]);
+
+    // Single view: slice data by zoom range (avoids Recharts Brush crash)
+    const singleViewData = useMemo(() => {
+        if (!processedChartData || processedChartData.length === 0) return [];
+        const lastIdx = processedChartData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const start = Math.max(0, Math.min(brushStartIdx, lastIdx));
+        const end = Math.max(0, Math.min(lastIdx, endIdx));
+        if (start > end) return processedChartData;
+        const sliced = processedChartData.slice(start, end + 1);
+        return sliced.length > 0 ? sliced : processedChartData;
+    }, [processedChartData, brushStartIdx, brushEndIdx]);
+
+    const handleZoomInBtn = () => {
+        try {
+        if (!processedChartData || processedChartData.length === 0) return;
+        const lastIdx = processedChartData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const currentSpan = endIdx - brushStartIdx;
+        if (currentSpan < 4) return;
+        const delta = Math.max(1, Math.floor(currentSpan * 0.35));
+        const newStart = brushStartIdx + delta;
+        const newEnd = endIdx - delta;
+        if (newEnd <= newStart) return;
+        setBrushStartIdx(newStart);
+        setBrushEndIdx(newEnd);
+        } catch (err) { console.warn('handleZoomInBtn error:', err); }
+    };
+
+    const handleZoomOutBtn = () => {
+        try {
+        if (!processedChartData || processedChartData.length === 0) return;
+        const lastIdx = processedChartData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const currentSpan = endIdx - brushStartIdx;
+        const delta = Math.max(1, Math.floor(currentSpan * 0.2));
+        const newStart = Math.max(0, brushStartIdx - delta);
+        const newEnd = Math.min(lastIdx, endIdx + delta);
+        setBrushStartIdx(newStart);
+        setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
+        } catch (err) { console.warn('handleZoomOutBtn error:', err); }
+    };
 
     // Reset zoom when data changes
     React.useEffect(() => {
         setBrushStartIdx(0);
         setBrushEndIdx(null);
-        setRefAreaLeft('');
-        setRefAreaRight('');
-        setAnimation(true);
-    }, [data, fileName]);
+    }, [data, fileName, compareDataList]);
 
     // useCallback so the ref-based effect depends on it without stale closures
     const handleWheel = useCallback((e) => {
+        try {
         if (viewMode !== 'single' || !processedChartData || processedChartData.length === 0) return;
         e.preventDefault();
 
@@ -274,8 +320,9 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         const minSpan = 4;
         if (currentSpan < minSpan && zoomIn) return;
 
-        const zoomFactor = 0.15;
-        const delta = Math.max(1, Math.floor(currentSpan * zoomFactor));
+        // Trackpad friendly smooth zoom
+        const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
+        const delta = Math.max(1, Math.floor(currentSpan * intensity));
 
         let pivotIdx = Math.floor(startIdx + currentSpan / 2);
         if (currentHoverLabel) {
@@ -301,7 +348,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
         setBrushStartIdx(newStart);
         setBrushEndIdx(newEnd);
-        setAnimation(false);
+        } catch (err) { console.warn('handleWheel zoom error:', err); }
     }, [viewMode, processedChartData, brushStartIdx, brushEndIdx, xKey, currentHoverLabel]);
 
     // Attach wheel listener as non-passive so preventDefault() actually works.
@@ -312,36 +359,9 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         return () => el.removeEventListener('wheel', handleWheel);
     }, [handleWheel]);
 
-    // Drag-to-zoom: use the selected area labels to find their indices
-    const zoomSelection = () => {
-        if (!refAreaLeft || !refAreaRight) {
-            setRefAreaLeft('');
-            setRefAreaRight('');
-            setIsRightClicking(false);
-            return;
-        }
-
-        let lIdx = processedChartData.findIndex(i => String(i[xKey]) === String(refAreaLeft));
-        let rIdx = processedChartData.findIndex(i => String(i[xKey]) === String(refAreaRight));
-
-        if (lIdx < 0) lIdx = 0;
-        if (rIdx < 0) rIdx = processedChartData.length - 1;
-        if (lIdx > rIdx) [lIdx, rIdx] = [rIdx, lIdx];
-
-        setRefAreaLeft('');
-        setRefAreaRight('');
-        setBrushStartIdx(lIdx);
-        setBrushEndIdx(rIdx);
-        setAnimation(false);
-        setIsRightClicking(false);
-    };
-
     const zoomOut = () => {
         setBrushStartIdx(0);
         setBrushEndIdx(null);
-        setRefAreaLeft('');
-        setRefAreaRight('');
-        setAnimation(true);
     };
 
     const formatXAxis = (tickItem) => {
@@ -421,12 +441,28 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         >
             <div className="chart-header">
                 <h2 className="file-title">{fileName}</h2>
+                <span className="raw-badge" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(56,189,248,0.12)', padding: '2px 8px', borderRadius: 6, marginLeft: 8 }} title="Dashboard shows raw data only. Use Normalize tab for baseline normalization.">Raw Data</span>
                 <div className="chart-controls">
-                    {/* Zoom Out Button only in Single View */}
-                    {viewMode === 'single' && (brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < processedChartData.length - 1)) && (
-                        <button className="icon-btn" onClick={zoomOut} title="Reset Zoom">
-                            <RefreshCw size={16} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Reset</span>
-                        </button>
+                    {/* Zoom and Tooltip Controls only in Single View */}
+                    {viewMode === 'single' && (
+                        <>
+                            <button className={`icon-btn ${showTooltip ? 'active' : ''}`} onClick={() => setShowTooltip(!showTooltip)} title="Show Data Values">
+                                <MessageSquare size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Values</span>
+                            </button>
+                            <div className="separator" />
+                            <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomInBtn(); }} title="Zoom In (show fewer points)">
+                                <ZoomIn size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>In</span>
+                            </button>
+                            <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomOutBtn(); }} title="Zoom Out (show more points)">
+                                <ZoomOut size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>Out</span>
+                            </button>
+                            {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < processedChartData.length - 1)) && (
+                                <button className="icon-btn" onClick={zoomOut} title="Reset Zoom">
+                                    <RefreshCw size={16} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Reset</span>
+                                </button>
+                            )}
+                            <div className="separator" />
+                        </>
                     )}
 
                     <button
@@ -512,29 +548,15 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                             border: '1px solid var(--border-color)',
                             boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
                         }}>
-                            <span style={{ color: 'var(--accent-primary)' }}>Drag chart</span> or <span style={{ color: 'var(--accent-primary)' }}>Move slider</span> bottom to zoom
+                            <span style={{ color: 'var(--accent-primary)' }}>Zoom In</span> / <span style={{ color: 'var(--accent-primary)' }}>Zoom Out</span> buttons or scroll — {brushStartIdx > 0 || (brushEndIdx !== null && processedChartData && brushEndIdx < processedChartData.length - 1) ? 'zoomed' : 'full range'}
                         </div>
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart
-                                data={processedChartData}
-                                margin={{ top: 30, right: 40, left: 20, bottom: 80 }}
-                                onMouseDown={(e) => {
-                                    if (e && e.activeLabel) {
-                                        setIsRightClicking(true);
-                                        setRefAreaLeft(e.activeLabel);
-                                    } else if (e) {
-                                        setIsRightClicking(true);
-                                    }
-                                }}
+                                data={singleViewData}
+                                margin={{ top: 10, right: 30, left: 0, bottom: 20 }}
                                 onMouseMove={(e) => {
-                                    if (e && e.activeLabel) {
-                                        setCurrentHoverLabel(e.activeLabel);
-                                        if (isRightClicking) {
-                                            setRefAreaRight(e.activeLabel);
-                                        }
-                                    }
+                                    if (e && e.activeLabel !== undefined) setCurrentHoverLabel(e.activeLabel);
                                 }}
-                                onMouseUp={zoomSelection}
                                 onContextMenu={(e) => e.preventDefault()}
                             >
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
@@ -552,30 +574,19 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                     domain={['auto', 'auto']}
                                     width={55}
                                 />
-                                <Tooltip content={<CustomTooltip />} />
+                                {showTooltip && (
+                                    <Tooltip
+                                        content={<CustomTooltip />}
+                                        position={{ x: 60, y: 10 }}
+                                        wrapperStyle={{ zIndex: 100 }}
+                                    />
+                                )}
                                 <Legend
                                     verticalAlign="bottom"
-                                    wrapperStyle={{ paddingTop: '10px', bottom: 50 }}
+                                    wrapperStyle={{ paddingTop: '10px', bottom: 20 }}
                                     formatter={(value) => (
                                         <span style={{ color: '#e2e8f0', fontSize: '0.8rem' }}>{value}</span>
                                     )}
-                                />
-                                <Brush
-                                    dataKey={xKey}
-                                    height={28}
-                                    stroke="#38bdf8"
-                                    fill="#1e293b"
-                                    travellerWidth={8}
-                                    tickFormatter={formatXAxis}
-                                    y={600}
-                                    startIndex={brushStartIdx}
-                                    endIndex={brushEndIdx !== null ? brushEndIdx : (processedChartData.length - 1)}
-                                    onChange={(range) => {
-                                        if (range && range.startIndex !== undefined) {
-                                            setBrushStartIdx(range.startIndex);
-                                            setBrushEndIdx(range.endIndex);
-                                        }
-                                    }}
                                 />
                                 {singleViewKeys.map((key, index) => (
                                     <React.Fragment key={key}>
@@ -587,7 +598,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                             dot={false}
                                             activeDot={{ r: 6 }}
                                             name={key}
-                                            isAnimationActive={animation}
+                                            isAnimationActive={false}
                                         />
                                         {/* Render Comparison Lines */}
                                         {compareKeysMap[key] && compareKeysMap[key].map((comp, cIdx) => (
@@ -602,16 +613,36 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                 activeDot={{ r: 4, strokeWidth: 0 }}
                                                 name={`${key} (${comp.fileName})`}
                                                 connectNulls
-                                                isAnimationActive={animation}
+                                                isAnimationActive={false}
                                             />
                                         ))}
                                     </React.Fragment>
                                 ))}
-                                {refAreaLeft && refAreaRight ? (
-                                    <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent-primary)" fillOpacity={0.15} />
-                                ) : null}
                             </LineChart>
                         </ResponsiveContainer>
+                        {processedChartData && processedChartData.length > 4 && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'rgba(0,0,0,0.2)', borderRadius: 8, marginTop: 8 }}>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Zoom:</span>
+                                <input
+                                    type="range"
+                                    min={4}
+                                    max={Math.max(4, processedChartData.length)}
+                                    value={brushEndIdx !== null ? brushEndIdx - brushStartIdx + 1 : processedChartData.length}
+                                    onChange={(e) => {
+                                        const span = parseInt(e.target.value, 10);
+                                        const lastIdx = processedChartData.length - 1;
+                                        const start = Math.max(0, Math.floor((lastIdx - span + 1) / 2));
+                                        const end = Math.min(lastIdx, start + span - 1);
+                                        setBrushStartIdx(start);
+                                        setBrushEndIdx(end === lastIdx && start === 0 ? null : end);
+                                    }}
+                                    style={{ flex: 1, height: 6, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                                />
+                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', minWidth: 60 }}>
+                                    {singleViewData.length} / {processedChartData.length} pts
+                                </span>
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="charts-grid">

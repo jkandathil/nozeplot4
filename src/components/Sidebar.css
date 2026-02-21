@@ -173,6 +173,9 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    direction: rtl;
+    /* Shows end of long file paths instead of truncating */
+    text-align: left;
 }
 
 .file-meta {

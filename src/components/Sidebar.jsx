@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square } from 'lucide-react';
+import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square, LineChart } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
@@ -70,12 +70,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 gap: 6,
                 padding: '8px 12px',
                 borderBottom: '1px solid var(--border-color)',
-                flexShrink: 0
+                flexShrink: 0,
+                flexWrap: 'wrap'
             }}>
                 <button
                     onClick={() => onPageChange?.('dashboard')}
                     style={{
-                        flex: 1,
+                        flex: '1 1 40%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -97,7 +98,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <button
                     onClick={() => onPageChange?.('normalize')}
                     style={{
-                        flex: 1,
+                        flex: '1 1 40%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -115,6 +116,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Baseline Normalization"
                 >
                     <Activity size={14} /> Normalize
+                </button>
+                <button
+                    onClick={() => onPageChange?.('aromaAnalysis')}
+                    style={{
+                        flex: '1 1 100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'aromaAnalysis' ? 'rgba(16,185,129,0.15)' : 'transparent',
+                        color: activePage === 'aromaAnalysis' ? '#10b981' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Aroma Sensor Data Analysis"
+                >
+                    <LineChart size={14} /> Aroma
                 </button>
             </div>
 
@@ -167,10 +190,10 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <h3 className="section-title" style={{ margin: 0 }}>Workspace ({files.length})</h3>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {/* Select All Button */}
-                        {selectedFileId && files.length > 1 && onSelectAll && (
+                        {files.length > 1 && onSelectAll && (
                             <button
                                 onClick={(e) => { e.stopPropagation(); onSelectAll(); }}
-                                title={compareFileIds?.length === (files.length - 1) ? "Deselect All" : "Select All for Compare"}
+                                title={compareFileIds?.length === (files.length - 1) && selectedFileId ? "Deselect All" : "Select All for Compare"}
                                 style={{
                                     background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px',
@@ -179,7 +202,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
                                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
                             >
-                                {compareFileIds?.length === (files.length - 1) ?
+                                {compareFileIds?.length === (files.length - 1) && selectedFileId ?
                                     <CheckSquare size={16} color="#fbbf24" strokeWidth={2} /> :
                                     <Square size={16} color="#94a3b8" strokeWidth={2} />
                                 }
