@@ -716,7 +716,6 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                             <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 11 }}
                                 domain={['auto', 'auto']} width={isNormalized ? 72 : 58} tickFormatter={formatYAxis} />
                             <Tooltip content={<NormalizeTooltip isNormalized={isNormalized} />} />
-                            <Legend verticalAlign="bottom" formatter={(v) => <span style={{ color: '#e2e8f0', fontSize: '0.72rem' }}>{v}</span>} />
                             <Brush dataKey={xKey} height={24} stroke="#fbbf24" fill="#1e293b" travellerWidth={8}
                                 startIndex={brushStartIdx} endIndex={brushEndIdx !== null ? brushEndIdx : Math.max(0, displayData.length - 1)}
                                 onChange={(r) => { if (r && r.startIndex !== undefined) { setBrushStartIdx(r.startIndex); setBrushEndIdx(r.endIndex); } }}
