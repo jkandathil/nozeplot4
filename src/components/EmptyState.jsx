@@ -3,7 +3,7 @@ import { UploadCloud, FileSpreadsheet } from 'lucide-react';
 import { motion } from 'framer-motion';
 import './EmptyState.css';
 
-const EmptyState = ({ isDragActive, hasFiles }) => {
+const EmptyState = ({ isDragActive, hasFiles, onBrowse }) => {
     return (
         <div className={`empty-state ${isDragActive ? 'active' : ''}`}>
             <motion.div
@@ -33,7 +33,7 @@ const EmptyState = ({ isDragActive, hasFiles }) => {
                 </p>
 
                 {!hasFiles && (
-                    <div className="cta-button">
+                    <div className="cta-button" onClick={onBrowse} style={{ cursor: 'pointer' }}>
                         Browse Files
                     </div>
                 )}

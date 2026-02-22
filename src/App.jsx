@@ -91,7 +91,7 @@ function App() {
     addFiles(acceptedFiles);
   }, [addFiles]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
     accept: {
       'text/csv': ['.csv'],
@@ -391,6 +391,7 @@ function App() {
                 key="empty"
                 isDragActive={isDragActive}
                 hasFiles={files.length > 0}
+                onBrowse={open}
               />
             ) : (
               <ChartArea
