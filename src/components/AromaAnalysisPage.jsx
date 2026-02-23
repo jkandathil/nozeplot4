@@ -778,8 +778,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                 {(channelPlotsData || []).length > 0 && (
                     <button
                         onClick={handleDownloadSigmaCSV}
-                        className="btn-primary"
-                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                        style={{ flex: 'none', width: 'auto', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
                         title="Download Calibration Data (Mean & Spread) as CSV"
                     >
                         <Download size={16} /> Download Sigma CSV
