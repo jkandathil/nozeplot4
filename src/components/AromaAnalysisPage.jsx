@@ -710,7 +710,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     }, [processedBatch]);
 
     const handleDownloadSigmaCSV = () => {
-        const monotonicPlot = generatedPlots.find(p => p.title && p.title.includes('Monotonic Response Curve'));
+        const monotonicPlot = (processedBatch?.plots || []).find(p => p.title && p.title.includes('Monotonic Response Curve'));
         if (!monotonicPlot || !monotonicPlot.data) {
             alert('No calibration data available to download. Please process a batch first.');
             return;
@@ -775,7 +775,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     </div>
                     <h1 className="page-title">Aroma Sensor Batch Analysis</h1>
                 </div>
-                {generatedPlots.length > 0 && (
+                {(processedBatch?.plots || []).length > 0 && (
                     <button
                         onClick={handleDownloadSigmaCSV}
                         className="btn-primary"
