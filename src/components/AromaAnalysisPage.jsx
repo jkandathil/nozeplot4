@@ -709,6 +709,58 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
 
     }, [processedBatch]);
 
+    const handleDownloadSigmaCSV = () => {
+        const monotonicPlot = generatedPlots.find(p => p.title && p.title.includes('Monotonic Response Curve'));
+        if (!monotonicPlot || !monotonicPlot.data) {
+            alert('No calibration data available to download. Please process a batch first.');
+            return;
+        }
+
+        const data = monotonicPlot.data;
+        const headers = Object.keys(data[0]);
+
+        // Flatten the arrays into separate min/max columns
+        const flatHeaders = [];
+        headers.forEach(h => {
+            if (h.endsWith('_range')) {
+                const base = h.replace('_range', '');
+                flatHeaders.push(`${base}_sigma_min`, `${base}_sigma_max`);
+            } else {
+                flatHeaders.push(h);
+            }
+        });
+
+        // Build CSV rows
+        const csvContent = [
+            flatHeaders.join(','),
+            ...data.map(row => flatHeaders.map(fh => {
+                let val = '';
+                if (fh.endsWith('_sigma_min')) {
+                    const rangeProp = fh.replace('_sigma_min', '_range');
+                    val = row[rangeProp] ? row[rangeProp][0] : '';
+                } else if (fh.endsWith('_sigma_max')) {
+                    const rangeProp = fh.replace('_sigma_max', '_range');
+                    val = row[rangeProp] ? row[rangeProp][1] : '';
+                } else {
+                    val = row[fh];
+                }
+                // Handle missing values or quotes if needed
+                return val !== undefined && val !== null ? val : '';
+            }).join(','))
+        ].join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `aroma_sigma_spread_data${fileName ? '_' + fileName.split('.')[0] : ''}.csv`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
     return (
         <motion.div
             className="aroma-analysis-container"
@@ -716,13 +768,23 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
         >
-            <div className="aroma-header">
+            <div className="aroma-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div className="icon-wrapper">
                         <LineChartIcon size={18} color="#10b981" />
                     </div>
                     <h1 className="page-title">Aroma Sensor Batch Analysis</h1>
                 </div>
+                {generatedPlots.length > 0 && (
+                    <button
+                        onClick={handleDownloadSigmaCSV}
+                        className="btn-primary"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+                        title="Download Calibration Data (Mean & Spread) as CSV"
+                    >
+                        <Download size={16} /> Download Sigma CSV
+                    </button>
+                )}
             </div>
 
             <div className="aroma-content">
