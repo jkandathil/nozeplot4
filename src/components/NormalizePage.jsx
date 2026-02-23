@@ -208,32 +208,70 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
     // Initialize on load or when file selection changes
     useEffect(() => {
-        // Identifies common columns across main and all compare files
-        let common = seriesKeys;
-        if (cmpFiles.length > 0) {
-            const allSets = [new Set(seriesKeys), ...cmpFiles.map(f => new Set(f.seriesKeys))];
-            common = seriesKeys.filter(k => allSets.every(s => s.has(k)));
-        }
+        setVisibleSeries(prevVisible => {
+            const stillValidBase = prevVisible.some(k => seriesKeys.includes(k));
 
-        // If common columns exist, select up to 4 of them for ALL files
-        if (common.length > 0) {
-            const initial = [];
-            const cols = common.slice(0, 4);
-            cols.forEach(c => {
-                initial.push(c); // Main
-                cmpFiles.forEach((f, idx) => {
-                    // prefixedKeysMap is stable as it depends on cmpFiles
-                    if (prefixedKeysMap[idx] && prefixedKeysMap[idx][c]) {
-                        initial.push(prefixedKeysMap[idx][c]);
+            if (prevVisible.length === 0 || (!stillValidBase && seriesKeys.length > 0)) {
+                // Identifies common columns across main and all compare files
+                let common = seriesKeys;
+                if (cmpFiles.length > 0) {
+                    const allSets = [new Set(seriesKeys), ...cmpFiles.map(f => new Set(f.seriesKeys))];
+                    common = seriesKeys.filter(k => allSets.every(s => s.has(k)));
+                }
+
+                // If common columns exist, select up to 4 of them for ALL files
+                if (common.length > 0) {
+                    const initial = [];
+                    const cols = common.slice(0, 4);
+                    cols.forEach(c => {
+                        initial.push(c); // Main
+                        cmpFiles.forEach((f, idx) => {
+                            // prefixedKeysMap is stable as it depends on cmpFiles
+                            if (prefixedKeysMap[idx] && prefixedKeysMap[idx][c]) {
+                                initial.push(prefixedKeysMap[idx][c]);
+                            }
+                        });
+                    });
+                    return initial;
+                } else {
+                    // Fallback: Just main file keys
+                    return seriesKeys.slice(0, 5);
+                }
+            } else {
+                // Preserve previous selections and fold in any new comparison file's equivalents
+                const baseNames = new Set();
+                prevVisible.forEach(key => {
+                    if (seriesKeys.includes(key)) {
+                        baseNames.add(key);
+                    } else {
+                        Object.values(prefixedKeysMap).forEach(map => {
+                            const entry = Object.entries(map).find(([orig, prefixed]) => prefixed === key);
+                            if (entry) baseNames.add(entry[0]);
+                        });
                     }
                 });
-            });
-            setVisibleSeries(initial);
-        } else {
-            // Fallback: Just main file keys
-            setVisibleSeries(seriesKeys.slice(0, 5));
-        }
-    }, [seriesKeys.join(','), cmpFiles.length]); // Only re-run if main keys change or compare count changes
+
+                const newVisible = new Set(prevVisible.filter(k => {
+                    if (seriesKeys.includes(k)) return true;
+                    let isKnownCompare = false;
+                    Object.values(prefixedKeysMap).forEach(map => {
+                        if (Object.values(map).includes(k)) isKnownCompare = true;
+                    });
+                    return isKnownCompare;
+                }));
+
+                baseNames.forEach(baseName => {
+                    cmpFiles.forEach((f, idx) => {
+                        if (prefixedKeysMap[idx] && prefixedKeysMap[idx][baseName]) {
+                            newVisible.add(prefixedKeysMap[idx][baseName]);
+                        }
+                    });
+                });
+
+                return Array.from(newVisible);
+            }
+        });
+    }, [seriesKeys.join(','), cmpFiles.length, prefixedKeysMap]);
 
     const toggleSeries = (key, isMulti = true) => {
         // 1. Identify the base column name
