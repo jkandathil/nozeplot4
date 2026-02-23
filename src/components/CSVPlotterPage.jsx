@@ -192,7 +192,7 @@ const CSVPlotterPage = () => {
 
                         <label
                             className="btn-primary"
-                            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 20px', borderRadius: '8px', background: '#38bdf8', color: '#fff' }}
+                            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 20px', borderRadius: '8px', background: '#38bdf8', color: '#fff', flex: 'none', width: 'auto', margin: '0 auto' }}
                         >
                             <UploadCloud size={18} /> Select CSV File
                             <input
