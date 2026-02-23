@@ -179,7 +179,7 @@ const CSVPlotterPage = () => {
                     <div className="icon-wrapper">
                         <UploadCloud size={18} color="#f43f5e" />
                     </div>
-                    <h1 className="page-title">CSV Plotter</h1>
+                    <h1 className="page-title">SE Analysis</h1>
                 </div>
             </div>
 
@@ -188,7 +188,7 @@ const CSVPlotterPage = () => {
                     <div className="empty-state" style={{ padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155' }}>
                         <UploadCloud size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
                         <h2 style={{ color: '#f8fafc', marginBottom: '8px' }}>Upload a CSV File</h2>
-                        <p style={{ color: '#94a3b8', marginBottom: '20px' }}>Upload your Aroma Full Analysis CSV or any other data file to plot custom columns.</p>
+                        <p style={{ color: '#94a3b8', marginBottom: '20px' }}>Upload your SE Analysis CSV or any other data file to plot custom columns.</p>
 
                         <label
                             className="btn-primary"

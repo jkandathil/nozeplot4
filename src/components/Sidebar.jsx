@@ -120,7 +120,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <button
                     onClick={() => onPageChange?.('aromaAnalysis')}
                     style={{
-                        flex: '1 1 100%',
+                        flex: '1 1 40%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -157,9 +157,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
                         transition: 'all 0.15s'
                     }}
-                    title="Plot Custom CSV Data"
+                    title="SE Analysis from Custom CSV Data"
                 >
-                    <FileSpreadsheet size={14} /> CSV Plotter
+                    <FileSpreadsheet size={14} /> SE Analysis
                 </button>
             </div>
 
