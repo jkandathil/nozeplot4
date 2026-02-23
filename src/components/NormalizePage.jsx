@@ -70,18 +70,26 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
             <p style={{ color: '#94a3b8', marginBottom: 6, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.07)', paddingBottom: 4 }}>
                 {String(label)}
             </p>
-            {payload.map((entry, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 14, color: entry.color, marginBottom: 3, alignItems: 'center' }}>
-                    <span style={{ opacity: 0.9, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 180, fontSize: '0.76rem' }}>
-                        {entry.name}
-                    </span>
-                    <strong style={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
-                        {isNormalized
-                            ? `${entry.value >= 0 ? '+' : ''}${(entry.value * 100).toFixed(2)}%`
-                            : typeof entry.value === 'number' ? entry.value.toFixed(3) : entry.value}
-                    </strong>
-                </div>
-            ))}
+            {payload.map((entry, i) => {
+                // Remove the cmpX_ prefix from the tooltip name for clean display
+                let displayName = entry.name;
+                if (typeof displayName === 'string' && displayName.startsWith('cmp')) {
+                    const match = displayName.match(/^cmp\d+_(.*)/);
+                    if (match) displayName = match[1];
+                }
+                return (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 14, color: entry.color, marginBottom: 3, alignItems: 'center' }}>
+                        <span style={{ opacity: 0.9, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 180, fontSize: '0.76rem' }}>
+                            {displayName}
+                        </span>
+                        <strong style={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
+                            {isNormalized
+                                ? `${entry.value >= 0 ? '+' : ''}${(entry.value * 100).toFixed(2)}%`
+                                : typeof entry.value === 'number' ? entry.value.toFixed(3) : entry.value}
+                        </strong>
+                    </div>
+                );
+            })}
         </div>
     );
 };
@@ -144,7 +152,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         cmpFiles.forEach((f, idx) => {
             map[idx] = {};
             f.seriesKeys.forEach(k => {
-                map[idx][k] = `${f.shortName}::${k}`;
+                map[idx][k] = `cmp${idx}_${f.shortName}::${k}`;
             });
         });
         return map;
