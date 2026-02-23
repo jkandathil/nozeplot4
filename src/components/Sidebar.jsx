@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square, LineChart } from 'lucide-react';
+import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square, LineChart, FileSpreadsheet } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
@@ -138,6 +138,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Aroma Sensor Data Analysis"
                 >
                     <LineChart size={14} /> Aroma
+                </button>
+                <button
+                    onClick={() => onPageChange?.('csvPlotter')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
+                        color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Plot Custom CSV Data"
+                >
+                    <FileSpreadsheet size={14} /> CSV Plotter
                 </button>
             </div>
 

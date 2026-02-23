@@ -21,6 +21,7 @@ import ChartArea from './components/ChartArea';
 import EmptyState from './components/EmptyState';
 import NormalizePage from './components/NormalizePage';
 import AromaAnalysisPage from './components/AromaAnalysisPage';
+import CSVPlotterPage from './components/CSVPlotterPage';
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -385,6 +386,10 @@ function App() {
                 fileName={parsedData?.fileName}
                 compareDataList={compareDataList}
                 availableFiles={files}
+              />
+            ) : activePage === 'csvPlotter' ? (
+              <CSVPlotterPage
+                key="csvPlotter"
               />
             ) : !selectedFileId ? (
               <EmptyState
