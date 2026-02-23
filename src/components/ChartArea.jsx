@@ -708,8 +708,8 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                         <Maximize2 size={14} />
                                     </button>
                                 </div>
-                                <div className="mini-chart-wrapper" style={{ height: 300 }}>
-                                    <LazyChart height={300}>
+                                <div className="mini-chart-wrapper" style={{ flex: 1, minHeight: 0 }}>
+                                    <LazyChart height={200}>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart data={gridChartData} margin={{ top: 10, right: 10, left: 5, bottom: 5 }}>
                                                 {/* Grid removed for performance */}
