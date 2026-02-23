@@ -709,14 +709,14 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
 
     }, [processedBatch]);
 
-    const handleDownloadSigmaCSV = () => {
-        const monotonicPlot = (channelPlotsData || []).find(p => p.title && p.title.includes('Monotonic Response Curve'));
-        if (!monotonicPlot || !monotonicPlot.data) {
-            alert('No calibration data available to download. Please process a batch first.');
+    const handleDownloadFullDataCSV = () => {
+        const timeSeriesPlot = (channelPlotsData || []).find(p => p.title && p.title.includes('Time Series Average:'));
+        if (!timeSeriesPlot || !timeSeriesPlot.data) {
+            alert('No analyzed data available to download. Please process a batch first.');
             return;
         }
 
-        const data = monotonicPlot.data;
+        const data = timeSeriesPlot.data;
         const headers = Object.keys(data[0]);
 
         // Flatten the arrays into separate min/max columns
@@ -753,7 +753,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `aroma_sigma_spread_data${fileName ? '_' + fileName.split('.')[0] : ''}.csv`;
+        link.download = `aroma_full_analysis_data${fileName ? '_' + fileName.split('.')[0] : ''}.csv`;
         link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
@@ -777,11 +777,11 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                 </div>
                 {(channelPlotsData || []).length > 0 && (
                     <button
-                        onClick={handleDownloadSigmaCSV}
+                        onClick={handleDownloadFullDataCSV}
                         style={{ flex: 'none', width: 'auto', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '6px', fontSize: '0.8rem', background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
-                        title="Download Calibration Data (Mean & Spread) as CSV"
+                        title="Download Full Time Series Analysis Data as CSV"
                     >
-                        <Download size={16} /> Download Sigma CSV
+                        <Download size={16} /> Download Full Data CSV
                     </button>
                 )}
             </div>
