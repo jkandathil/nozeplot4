@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import Papa from 'papaparse';
 import { ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { UploadCloud, Search, Trash2 } from 'lucide-react';
+import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
 import './AromaAnalysisPage.css'; // Reuse existing styles
 
 const COLORS = [
@@ -16,6 +16,92 @@ const CSVPlotterPage = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedColumns, setSelectedColumns] = useState([]);
     const [xAxisKey, setXAxisKey] = useState('');
+
+    const [brushStartIdx, setBrushStartIdx] = useState(0);
+    const [brushEndIdx, setBrushEndIdx] = useState(null);
+    const chartWrapperRef = useRef(null);
+
+    const visibleData = useMemo(() => {
+        if (!csvData || csvData.length === 0) return [];
+        const lastIdx = csvData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const start = Math.max(0, Math.min(brushStartIdx, lastIdx));
+        const end = Math.max(0, Math.min(lastIdx, endIdx));
+        if (start > end) return csvData;
+        const sliced = csvData.slice(start, end + 1);
+        return sliced.length > 0 ? sliced : csvData;
+    }, [csvData, brushStartIdx, brushEndIdx]);
+
+    const handleZoomInBtn = () => {
+        if (!csvData || csvData.length === 0) return;
+        const lastIdx = csvData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const currentSpan = endIdx - brushStartIdx;
+        if (currentSpan < 2) return;
+        const delta = Math.max(1, Math.floor(currentSpan * 0.35));
+        const newStart = brushStartIdx + delta;
+        const newEnd = endIdx - delta;
+        if (newEnd <= newStart) return;
+        setBrushStartIdx(newStart);
+        setBrushEndIdx(newEnd);
+    };
+
+    const handleZoomOutBtn = () => {
+        if (!csvData || csvData.length === 0) return;
+        const lastIdx = csvData.length - 1;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+        const currentSpan = endIdx - brushStartIdx;
+        const delta = Math.max(1, Math.floor(currentSpan * 0.35));
+        const newStart = Math.max(0, brushStartIdx - delta);
+        const newEnd = Math.min(lastIdx, endIdx + delta);
+        setBrushStartIdx(newStart);
+        setBrushEndIdx(newEnd === lastIdx && newStart === 0 ? null : newEnd);
+    };
+
+    const handleWheel = useCallback((e) => {
+        if (!csvData || csvData.length === 0) return;
+        e.preventDefault();
+
+        const zoomIn = e.deltaY < 0;
+        const lastIdx = csvData.length - 1;
+        const startIdx = brushStartIdx;
+        const endIdx = brushEndIdx !== null ? brushEndIdx : lastIdx;
+
+        const currentSpan = endIdx - startIdx;
+        const minSpan = 4;
+        if (currentSpan < minSpan && zoomIn) return;
+
+        const intensity = Math.min(Math.abs(e.deltaY) * 0.002, 0.4);
+        const delta = Math.max(1, Math.floor(currentSpan * intensity));
+
+        let pivotIdx = Math.floor(startIdx + currentSpan / 2);
+        const ratio = currentSpan > 0 ? (pivotIdx - startIdx) / currentSpan : 0.5;
+
+        let newStart, newEnd;
+        if (zoomIn) {
+            newStart = startIdx + Math.floor(delta * ratio);
+            newEnd = endIdx - Math.ceil(delta * (1 - ratio));
+        } else {
+            newStart = Math.max(0, startIdx - Math.floor(delta * ratio));
+            newEnd = Math.min(lastIdx, endIdx + Math.ceil(delta * (1 - ratio)));
+        }
+
+        if (newEnd - newStart < minSpan) {
+            newStart = Math.max(0, pivotIdx - 2);
+            newEnd = Math.min(lastIdx, pivotIdx + 2);
+        }
+
+        setBrushStartIdx(newStart);
+        setBrushEndIdx(newEnd);
+    }, [csvData, brushStartIdx, brushEndIdx]);
+
+    useEffect(() => {
+        const el = chartWrapperRef.current;
+        if (!el) return;
+        el.addEventListener('wheel', handleWheel, { passive: false });
+        // It's important to keep the handler functional so it stays fast with large zooms.
+        return () => el.removeEventListener('wheel', handleWheel);
+    }, [handleWheel]);
 
     const handleFileUpload = (e) => {
         const file = e.target.files[0];
@@ -53,6 +139,8 @@ const CSVPlotterPage = () => {
                         return newRow;
                     });
                     setCsvData(processedData);
+                    setBrushStartIdx(0);
+                    setBrushEndIdx(null);
                 }
             },
             error: (err) => {
@@ -69,6 +157,8 @@ const CSVPlotterPage = () => {
         setSelectedColumns([]);
         setSearchTerm('');
         setXAxisKey('');
+        setBrushStartIdx(0);
+        setBrushEndIdx(null);
     };
 
     // Grouping logic for columns
@@ -287,38 +377,109 @@ const CSVPlotterPage = () => {
 
                         {/* Chart Area */}
                         <div style={{ flex: 1, background: '#1e293b', borderRadius: '12px', border: '1px solid #334155', padding: '20px', display: 'flex', flexDirection: 'column' }}>
-                            <h2 style={{ fontSize: '1.2rem', color: '#f8fafc', marginBottom: '20px', margin: 0 }}>Plot View</h2>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <h2 style={{ fontSize: '1.2rem', color: '#f8fafc', margin: 0 }}>Plot View</h2>
+
+                                {csvData.length > 0 && selectedColumns.length > 0 && (
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <button type="button" className="icon-btn small" onClick={handleZoomInBtn} title="Zoom In (fewer points)" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.1)', color: '#a855f7', display: 'flex', alignItems: 'center' }}>
+                                            <ZoomIn size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Zoom In</span>
+                                        </button>
+                                        <button type="button" className="icon-btn small" onClick={handleZoomOutBtn} title="Zoom Out (more points)" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.1)', color: '#a855f7', display: 'flex', alignItems: 'center' }}>
+                                            <ZoomOut size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Zoom Out</span>
+                                        </button>
+                                        {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
+                                            <button type="button" className="icon-btn small" onClick={() => { setBrushStartIdx(0); setBrushEndIdx(null); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'transparent', color: '#94a3b8', display: 'flex', alignItems: 'center' }}>
+                                                <RefreshCw size={14} style={{ marginRight: 4 }} /> Reset Zoom
+                                            </button>
+                                        )}
+                                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: '8px' }}>
+                                            {visibleData.length} / {csvData.length} pts
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
 
                             {selectedColumns.length === 0 ? (
                                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
                                     Select columns from the left sidebar to generate a plot
                                 </div>
                             ) : (
-                                <div style={{ flex: 1, minHeight: 0 }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={csvData} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                                            <XAxis
-                                                dataKey={xAxisKey}
-                                                stroke="#94a3b8"
-                                                tick={{ fill: '#94a3b8', fontSize: 12 }}
-                                                tickLine={{ stroke: '#334155' }}
-                                                label={{ value: xAxisKey, position: 'insideBottom', offset: -15, fill: '#94a3b8' }}
+                                <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(0,0,0,0.2)', marginBottom: 8, borderRadius: 8, flexShrink: 0 }}>
+                                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>X-Axis Interval:</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <input
+                                                    type="text"
+                                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
+                                                    value={String(csvData[brushStartIdx]?.[xAxisKey] || '')}
+                                                    onChange={(e) => {
+                                                        const targetX = e.target.value;
+                                                        const idx = csvData.findIndex(r => String(r[xAxisKey]).startsWith(targetX));
+                                                        if (idx !== -1 && idx <= (brushEndIdx || csvData.length - 1)) {
+                                                            setBrushStartIdx(idx);
+                                                        }
+                                                    }}
+                                                    title="Start X"
+                                                />
+                                                <span style={{ color: '#94a3b8' }}>to</span>
+                                                <input
+                                                    type="text"
+                                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
+                                                    value={String(csvData[brushEndIdx !== null ? brushEndIdx : csvData.length - 1]?.[xAxisKey] || '')}
+                                                    onChange={(e) => {
+                                                        const targetX = e.target.value;
+                                                        const idx = csvData.findIndex(r => String(r[xAxisKey]).startsWith(targetX));
+                                                        if (idx !== -1 && idx >= brushStartIdx) {
+                                                            setBrushEndIdx(idx);
+                                                        }
+                                                    }}
+                                                    title="End X"
+                                                />
+                                            </div>
+                                            <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: 8 }}>Scroll/Pan:</span>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={Math.max(0, csvData.length - visibleData.length)}
+                                                value={brushStartIdx}
+                                                onChange={(e) => {
+                                                    const newStart = parseInt(e.target.value, 10);
+                                                    const currentSpan = (brushEndIdx !== null ? brushEndIdx : csvData.length - 1) - brushStartIdx;
+                                                    setBrushStartIdx(newStart);
+                                                    setBrushEndIdx(Math.min(csvData.length - 1, newStart + currentSpan));
+                                                }}
+                                                style={{ flex: 1, height: 6, accentColor: '#a855f7', cursor: 'pointer' }}
                                             />
-                                            <YAxis
-                                                stroke="#94a3b8"
-                                                tick={{ fill: '#94a3b8', fontSize: 12 }}
-                                                tickLine={{ stroke: '#334155' }}
-                                            />
-                                            <Tooltip
-                                                contentStyle={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }}
-                                                itemStyle={{ color: '#f8fafc' }}
-                                            />
-                                            <Legend verticalAlign="top" height={36} wrapperStyle={{ paddingBottom: '20px' }} />
+                                        </div>
+                                    )}
+                                    <div style={{ flex: 1, minHeight: 0 }} ref={chartWrapperRef}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <ComposedChart data={visibleData.length > 0 ? visibleData : csvData} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                                                <XAxis
+                                                    dataKey={xAxisKey}
+                                                    stroke="#94a3b8"
+                                                    tick={{ fill: '#94a3b8', fontSize: 12 }}
+                                                    tickLine={{ stroke: '#334155' }}
+                                                    label={{ value: xAxisKey, position: 'insideBottom', offset: -15, fill: '#94a3b8' }}
+                                                />
+                                                <YAxis
+                                                    stroke="#94a3b8"
+                                                    tick={{ fill: '#94a3b8', fontSize: 12 }}
+                                                    tickLine={{ stroke: '#334155' }}
+                                                />
+                                                <Tooltip
+                                                    contentStyle={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }}
+                                                    itemStyle={{ color: '#f8fafc' }}
+                                                />
+                                                <Legend verticalAlign="top" height={36} wrapperStyle={{ paddingBottom: '20px' }} />
 
-                                            {plotElements}
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
+                                                {plotElements}
+                                            </ComposedChart>
+                                        </ResponsiveContainer>
+                                    </div>
                                 </div>
                             )}
                         </div>
