@@ -185,7 +185,7 @@ const CSVPlotterPage = () => {
 
             <div className="aroma-content" style={{ display: 'flex', gap: '20px', flexDirection: 'column' }}>
                 {!csvData.length ? (
-                    <div className="empty-state" style={{ padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155' }}>
+                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155' }}>
                         <UploadCloud size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
                         <h2 style={{ color: '#f8fafc', marginBottom: '8px' }}>Upload a CSV File</h2>
                         <p style={{ color: '#94a3b8', marginBottom: '20px' }}>Upload your SE Analysis CSV or any other data file to plot custom columns.</p>
