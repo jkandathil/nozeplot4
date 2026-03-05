@@ -1,0 +1,190 @@
+.gas-design-container {
+    padding: 24px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    color: var(--text-primary);
+}
+
+.design-header {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+}
+
+.design-content {
+    display: flex;
+    gap: 24px;
+    flex: 1;
+    overflow: hidden;
+}
+
+.toolbox-panel {
+    width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(15, 23, 42, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+    backdrop-filter: blur(10px);
+    overflow-y: auto;
+}
+
+.toolbox-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+    color: var(--text-primary);
+    border-bottom: 1px dashed var(--border-color);
+    padding-bottom: 8px;
+}
+
+.tool-item {
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    border-left: 4px solid var(--tool-color, #94a3b8);
+    cursor: grab;
+    font-size: 0.85rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+}
+
+.tool-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateX(2px);
+}
+
+.tool-item:active {
+    cursor: grabbing;
+}
+
+.flow-area {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Custom Node Styles */
+.custom-node {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    width: 160px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    font-family: inherit;
+    transition: box-shadow 0.2s, border-color 0.2s;
+    overflow: hidden;
+}
+
+.custom-node.selected {
+    box-shadow: 0 0 0 2px var(--border-color);
+}
+
+.node-header {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.node-body {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.input-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.input-row label {
+    font-size: 0.70rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.input-row input {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px inset rgba(255, 255, 255, 0.1);
+    color: #f8fafc;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.input-row select {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px inset rgba(255, 255, 255, 0.1);
+    color: #f8fafc;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.input-row input:focus,
+.input-row select:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.node-stats {
+    background: rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* React Flow Overrides */
+.react-flow__handle {
+    width: 14px !important;
+    height: 14px !important;
+    min-width: 14px !important;
+    min-height: 14px !important;
+    border-radius: 50% !important;
+    background: transparent !important;
+    border: none !important;
+}
+
+.react-flow__handle:hover {
+    background: rgba(255, 255, 255, 0.2) !important;
+}
+
+.react-flow__edge-path {
+    stroke: #94a3b8;
+    stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+    stroke: #38bdf8;
+    stroke-width: 3;
+}
+
+.react-flow__attribution {
+    display: none !important;
+}

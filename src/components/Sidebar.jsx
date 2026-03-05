@@ -1,9 +1,13 @@
 import React, { useRef, useState } from 'react';
-import { Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2, Activity, CheckSquare, Square, LineChart, FileSpreadsheet } from 'lucide-react';
+import {
+    Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
+    Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
+    Network, Calculator as CalcIcon, FlaskConical
+} from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, onSelectAll, userName = "User", activePage = 'dashboard', onPageChange }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, onSelectAll, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -163,6 +167,74 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 </button>
             </div>
 
+            {/* Utility Tools Section */}
+            <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 16, marginTop: 12 }}>
+                <button
+                    onClick={() => onPageChange?.('gasDesign')}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'gasDesign' ? 'rgba(168,85,247,0.15)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'gasDesign' ? '#a855f7' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Design of Gas Dilution System"
+                >
+                    <Network size={14} /> System
+                </button>
+                <button
+                    onClick={() => onPageChange?.('gasMath')}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'gasMath' ? 'rgba(56,189,248,0.15)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'gasMath' ? '#38bdf8' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Gas-Dilution Math Tool"
+                >
+                    <FlaskConical size={14} /> Dilution
+                </button>
+                <button
+                    onClick={() => setIsCalculatorOpen(!isCalculatorOpen)}
+                    style={{
+                        gridColumn: '1 / -1',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: isCalculatorOpen ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.02)',
+                        color: isCalculatorOpen ? '#10b981' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Popup Calculator"
+                >
+                    <CalcIcon size={14} /> Calculator
+                </button>
+            </div>
+
             <div className="upload-section">
                 <button className="btn-primary upload-btn" onClick={handleUploadClick}>
                     <UploadCloud className="icon" size={18} />
@@ -209,7 +281,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
             <div className="file-list-container">
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 className="section-title" style={{ margin: 0 }}>Workspace ({files.length})</h3>
+                    <h3 className="section-title" style={{ margin: 0, fontSize: '0.65rem', fontWeight: 600 }}>Workspace ({files.length})</h3>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {/* Select All Button */}
                         {files.length > 1 && onSelectAll && (

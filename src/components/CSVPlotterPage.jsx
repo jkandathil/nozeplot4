@@ -9,6 +9,57 @@ const COLORS = [
     '#f97316', '#0ea5e9', '#ec4899', '#84cc16', '#14b8a6'
 ];
 
+const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        return (
+            <div className="custom-tooltip" style={{
+                maxHeight: '400px',
+                overflowY: 'auto',
+                pointerEvents: 'auto',
+                minWidth: '220px',
+                background: 'rgba(15, 23, 42, 0.05)',
+                backdropFilter: 'blur(2px)',
+                WebkitBackdropFilter: 'blur(2px)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '8px',
+                padding: '10px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)'
+            }}>
+                <p className="label" style={{
+                    margin: '0 0 10px 0',
+                    fontWeight: 'bold',
+                    color: '#f8fafc',
+                    position: 'sticky',
+                    top: '-10px',
+                    paddingTop: '10px',
+                    paddingBottom: '5px',
+                    background: 'rgba(15, 23, 42, 0.05)',
+                    backdropFilter: 'blur(2px)',
+                    WebkitBackdropFilter: 'blur(2px)',
+                    zIndex: 2,
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.15)'
+                }}>{`${label}`}</p>
+                {payload.map((entry, index) => {
+                    let valueDisplay = entry.value;
+                    if (Array.isArray(entry.value)) {
+                        valueDisplay = `[${Number(entry.value[0]).toFixed(3)}, ${Number(entry.value[1]).toFixed(3)}]`;
+                    } else if (typeof entry.value === 'number') {
+                        valueDisplay = Number(entry.value).toFixed(3);
+                    }
+
+                    return (
+                        <div key={`item-${index}`} style={{ color: entry.color, padding: '4px 0', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ marginRight: '16px', opacity: 0.9 }}>{entry.name}:</span>
+                            <span style={{ fontWeight: 600 }}>{valueDisplay}</span>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+    return null;
+};
+
 const CSVPlotterPage = () => {
     const [fileName, setFileName] = useState('');
     const [csvData, setCsvData] = useState([]);
@@ -210,14 +261,60 @@ const CSVPlotterPage = () => {
     const plotElements = useMemo(() => {
         const areaElements = [];
         const lineElements = [];
+
+        // Parse concentration from column IDs to sort them and apply heatmap colors
+        const parsedColumns = selectedColumns.map(id => {
+            const match = id.match(/((?:\d*\.)?\d+)\s*ppb/i);
+            return {
+                id,
+                concentration: match ? parseFloat(match[1]) : null
+            };
+        });
+
+        // Sort parsed columns primarily by concentration (ascending), then alphabetically
+        parsedColumns.sort((a, b) => {
+            if (a.concentration !== null && b.concentration !== null) {
+                return a.concentration - b.concentration;
+            } else if (a.concentration !== null) {
+                return -1;
+            } else if (b.concentration !== null) {
+                return 1;
+            }
+            return a.id.localeCompare(b.id);
+        });
+
+        const validConcentrations = parsedColumns.filter(p => p.concentration !== null).map(p => p.concentration);
+        const useColorScale = validConcentrations.length > 0;
+
+        let minConc = 0;
+        let maxConc = 1;
+        if (useColorScale) {
+            minConc = Math.min(...validConcentrations);
+            maxConc = Math.max(...validConcentrations);
+        }
+
+        // Helper function to generate color from violet (low) to red (high)
+        const getColorForConcentration = (conc) => {
+            if (minConc === maxConc) return 'hsl(0, 85%, 60%)'; // Red if only one value
+            const ratio = (conc - minConc) / (maxConc - minConc);
+            // hue goes from 270 (violet/purple) down to 0 (red)
+            const hue = 270 * (1 - ratio);
+            return `hsl(${Math.round(hue)}, 85%, 60%)`;
+        };
+
         let colorIdx = 0;
 
-        selectedColumns.forEach(id => {
+        parsedColumns.forEach(({ id, concentration }) => {
             const group = groupedColumns.find(g => g.id === id);
             if (!group) return;
 
-            const color = COLORS[colorIdx % COLORS.length];
-            colorIdx++;
+            let color;
+            if (useColorScale && concentration !== null) {
+                color = getColorForConcentration(concentration);
+            } else {
+                color = COLORS[colorIdx % COLORS.length];
+                colorIdx++;
+            }
 
             if (group.type === 'group') {
                 if (group.hasSpread) {
@@ -471,8 +568,8 @@ const CSVPlotterPage = () => {
                                                     tickLine={{ stroke: '#334155' }}
                                                 />
                                                 <Tooltip
-                                                    contentStyle={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }}
-                                                    itemStyle={{ color: '#f8fafc' }}
+                                                    content={<CustomTooltip />}
+                                                    wrapperStyle={{ zIndex: 100 }}
                                                 />
                                                 <Legend verticalAlign="top" height={36} wrapperStyle={{ paddingBottom: '20px' }} />
 
