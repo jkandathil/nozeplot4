@@ -113,9 +113,10 @@
     padding: 8px 14px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
-    overflow-x: auto;
-    flex-wrap: nowrap;
+    overflow-y: auto;
+    flex-wrap: wrap;
     flex-shrink: 0;
+    max-height: 120px;
     scrollbar-width: thin;
 }
 

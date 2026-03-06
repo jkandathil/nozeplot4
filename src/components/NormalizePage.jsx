@@ -618,12 +618,17 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                 <div className="header-left">
                     <Activity size={15} color="#fbbf24" style={{ flexShrink: 0 }} />
                     <span className="normalize-title">{shortName(fileName)}</span>
-                    {cmpFiles.map((f, i) => (
+                    {cmpFiles.slice(0, 2).map((f, i) => (
                         <span key={i} className="normalize-title" style={{ color: PALETTE[(i + 1) % PALETTE.length], fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>vs</span>
                             {f.shortName}
                         </span>
                     ))}
+                    {cmpFiles.length > 2 && (
+                        <span className="normalize-title" style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: 6 }}>
+                            +{cmpFiles.length - 2} more...
+                        </span>
+                    )}
 
                     {/* Filter Controls (Inline) */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12 }}>
