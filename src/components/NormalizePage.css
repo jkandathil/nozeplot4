@@ -251,14 +251,26 @@
     font-size: 0.74rem;
     color: var(--text-muted);
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.normalize-footer::-webkit-scrollbar {
+    height: 4px;
+}
+
+.normalize-footer::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
 }
 
 .normalize-footer .stat {
     display: flex;
     gap: 4px;
     align-items: center;
+    white-space: nowrap;
 }
 
 .normalize-footer .stat strong {
