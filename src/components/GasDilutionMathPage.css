@@ -45,7 +45,7 @@
     overflow-y: auto;
 }
 
-.glass-panel {
+.math-content .glass-panel {
     background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--border-color);
     border-radius: 12px;

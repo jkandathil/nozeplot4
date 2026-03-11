@@ -285,7 +285,33 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const [filterWindow, setFilterWindow] = useState(5);
     const [baselinePts, setBaselinePts] = useState(50); // Default to 50pts for Automatic Normalization
     const [isProcessing, setIsProcessing] = useState(false);
+    const [gapStart, setGapStart] = useState('');
+    const [gapEnd, setGapEnd] = useState('');
     const [selectedPlot, setSelectedPlot] = useState(null);
+    const [sidebarWidth, setSidebarWidth] = useState(340);
+
+    const handleMouseDown = React.useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidth;
+
+        const onMouseMove = (moveEvent) => {
+            let newWidth = startWidth + (moveEvent.clientX - startX);
+            if (newWidth < 250) newWidth = 250;
+            if (newWidth > 600) newWidth = 600;
+            setSidebarWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+    }, [sidebarWidth]);
 
     // Results
     const [processedBatch, setProcessedBatch] = useState(null);
@@ -443,7 +469,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     files: newBatch,
                     sensingPrefixes: sElementsArr,
                     tCodes: tColsArr,
-                    hCodes: hColsArr
+                    hCodes: hColsArr,
+                    gapStartVal: gapStart !== '' ? parseInt(gapStart, 10) : null,
+                    gapEndVal: gapEnd !== '' ? parseInt(gapEnd, 10) : null
                 });
 
             } catch (err) {
@@ -457,7 +485,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const channelPlotsData = useMemo(() => {
         if (!processedBatch || processedBatch.files.length === 0) return null;
 
-        const { files, sensingPrefixes, tCodes, hCodes } = processedBatch;
+        const { files, sensingPrefixes, tCodes, hCodes, gapStartVal, gapEndVal } = processedBatch;
 
         // Plot container config variables
         const plots = [];
@@ -535,6 +563,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             let hasData = false;
 
             for (let i = 0; i < maxLen; i++) {
+                if (gapStartVal !== null && gapEndVal !== null && i >= gapStartVal && i <= gapEndVal) continue;
                 sortedGroupKeys.forEach((gName) => {
                     const values = [];
                     groups[gName].forEach(f => {
@@ -621,6 +650,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
 
             if (files.length <= 15) {
                 for (let i = 0; i < maxLen; i++) {
+                    if (gapStartVal !== null && gapEndVal !== null && i >= gapStartVal && i <= gapEndVal) continue;
                     files.forEach((f, fIdx) => {
                         let matchKey = null;
                         if (type === 'T') matchKey = tMatchKeys[fIdx];
@@ -657,6 +687,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             } else {
                 const areas = [];
                 for (let i = 0; i < maxLen; i++) {
+                    if (gapStartVal !== null && gapEndVal !== null && i >= gapStartVal && i <= gapEndVal) continue;
                     sortedGroupKeys.forEach((gName) => {
                         const values = [];
                         groups[gName].forEach(f => {
@@ -787,7 +818,20 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             </div>
 
             <div className="aroma-content">
-                <div className="config-panel glass-panel">
+                <div className="config-panel glass-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+                    {/* Drag Handle */}
+                    <div
+                        onMouseDown={handleMouseDown}
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: -5,
+                            width: '10px',
+                            height: '100%',
+                            cursor: 'col-resize',
+                            zIndex: 10,
+                        }}
+                    />
                     <h3 className="panel-title"><Settings size={16} /> Pipeline Configuration</h3>
 
                     <div className="form-group">
@@ -817,6 +861,29 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                 className="text-input"
                                 value={humCols}
                                 onChange={e => setHumCols(e.target.value)}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-group-row">
+                        <div className="form-group">
+                            <label>Truncate Gap Start (Idx)</label>
+                            <input
+                                type="number"
+                                className="text-input"
+                                value={gapStart}
+                                onChange={e => setGapStart(e.target.value)}
+                                placeholder="e.g. 500"
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>Truncate Gap End (Idx)</label>
+                            <input
+                                type="number"
+                                className="text-input"
+                                value={gapEnd}
+                                onChange={e => setGapEnd(e.target.value)}
+                                placeholder="e.g. 800"
                             />
                         </div>
                     </div>

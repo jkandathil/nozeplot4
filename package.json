@@ -18,6 +18,10 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.0",
     "lucide-react": "^0.564.0",
+    "ml-matrix": "^6.12.1",
+    "ml-pca": "^4.1.1",
+    "ml-random-forest": "^2.1.0",
+    "ml-regression-multivariate-linear": "^2.0.4",
     "nanoid": "^5.1.6",
     "papaparse": "^5.5.3",
     "react": "^19.2.0",
@@ -25,6 +29,7 @@
     "react-dropzone": "^15.0.0",
     "react-to-print": "^3.3.0",
     "recharts": "^3.7.0",
+    "tsne": "^1.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

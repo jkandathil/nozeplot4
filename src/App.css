@@ -125,7 +125,7 @@
 .modal-input {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  padding: 12px;
+  padding: 8px 12px;
   border-radius: var(--border-radius-md);
   color: var(--text-primary);
   font-size: 1rem;

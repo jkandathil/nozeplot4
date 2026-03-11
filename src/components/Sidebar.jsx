@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical
+    Network, Calculator as CalcIcon, FlaskConical, Brain
 } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
@@ -11,6 +11,30 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [sidebarWidth, setSidebarWidth] = useState(250);
+
+    const handleMouseDown = React.useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidth;
+
+        const onMouseMove = (moveEvent) => {
+            let newWidth = startWidth + (moveEvent.clientX - startX);
+            if (newWidth < 200) newWidth = 200;
+            if (newWidth > 600) newWidth = 600;
+            setSidebarWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+    }, [sidebarWidth]);
 
     const handleUploadClick = () => {
         fileInputRef.current?.click();
@@ -37,7 +61,23 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     };
 
     return (
-        <aside className="sidebar">
+        <aside className="sidebar" style={{ width: sidebarWidth, position: 'relative' }}>
+            {/* Drag Handle */}
+            <div
+                onMouseDown={handleMouseDown}
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: -3,
+                    width: '6px',
+                    height: '100%',
+                    cursor: 'col-resize',
+                    zIndex: 100,
+                    transition: 'background 0.2s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.4)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            />
             {hoveredFile && (
                 <div
                     className="fixed-tooltip"
@@ -233,19 +273,42 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 >
                     <CalcIcon size={14} /> Calculator
                 </button>
+                <button
+                    onClick={() => onPageChange?.('mlStudio')}
+                    style={{
+                        gridColumn: '1 / -1',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'mlStudio' ? 'rgba(244,63,94,0.15)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'mlStudio' ? '#f43f5e' : 'var(--text-muted)',
+                        transition: 'all 0.15s',
+                        marginBottom: '8px'
+                    }}
+                    title="Machine Learning & Prediction"
+                >
+                    <Brain size={14} /> ML Studio
+                </button>
             </div>
 
             <div className="upload-section">
                 <button className="btn-primary upload-btn" onClick={handleUploadClick}>
-                    <UploadCloud className="icon" size={18} />
-                    <span>Upload</span>
+                    <FileText className="icon" size={18} />
+                    <span>Upload Files</span>
                 </button>
                 <button
                     className="btn-secondary upload-btn-folder"
                     onClick={handleFolderUploadClick}
                     title="Upload Folder"
                 >
-                    <Folder className="icon" size={18} />
+                    <Folder className="icon" size={18} color="#38bdf8" />
                 </button>
                 <input
                     type="file"

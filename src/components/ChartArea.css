@@ -177,7 +177,7 @@
 
 /* Tooltip */
 .custom-tooltip {
-    background: rgba(15, 23, 42, 0.95);
+    background: rgba(15, 23, 42, 0.05);
     padding: 8px 12px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);

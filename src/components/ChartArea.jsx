@@ -51,7 +51,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 
         return (
             <div className="custom-tooltip glass-panel" style={{ maxHeight: '60vh', overflowY: 'auto', pointerEvents: 'auto', minWidth: '220px' }}>
-                <p className="label" style={{ width: '100%', position: 'sticky', top: 0, background: 'rgba(15, 23, 42, 0.95)', zIndex: 2 }}>{`${label}`}</p>
+                <p className="label" style={{ width: '100%', position: 'sticky', top: 0, background: 'rgba(15, 23, 42, 0.05)', zIndex: 2 }}>{`${label}`}</p>
                 {Object.keys(groups).map((key) => {
                     const group = groups[key];
                     return (

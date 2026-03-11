@@ -71,6 +71,30 @@ const CSVPlotterPage = () => {
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null);
     const chartWrapperRef = useRef(null);
+    const [sidebarWidth, setSidebarWidth] = useState(300);
+
+    const handleMouseDown = useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidth;
+
+        const onMouseMove = (moveEvent) => {
+            let newWidth = startWidth + (moveEvent.clientX - startX);
+            if (newWidth < 200) newWidth = 200;
+            if (newWidth > 600) newWidth = 600;
+            setSidebarWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+    }, [sidebarWidth]);
 
     const visibleData = useMemo(() => {
         if (!csvData || csvData.length === 0) return [];
@@ -409,7 +433,20 @@ const CSVPlotterPage = () => {
                 ) : (
                     <div style={{ display: 'flex', gap: '20px', height: 'calc(100vh - 120px)' }}>
                         {/* Sidebar controls */}
-                        <div style={{ width: '300px', background: '#1e293b', padding: '16px', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                        <div style={{ width: sidebarWidth, background: '#1e293b', padding: '16px', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'relative' }}>
+                            {/* Drag Handle */}
+                            <div
+                                onMouseDown={handleMouseDown}
+                                style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    right: -10,
+                                    width: '12px',
+                                    height: '100%',
+                                    cursor: 'col-resize',
+                                    zIndex: 10,
+                                }}
+                            />
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                 <h3 style={{ fontSize: '1rem', color: '#f8fafc', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fileName}>
                                     {fileName}

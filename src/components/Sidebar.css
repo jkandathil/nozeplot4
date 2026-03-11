@@ -59,7 +59,8 @@
 }
 
 .upload-btn-folder {
-    width: 40px;
+    width: 32px;
+    flex-shrink: 0;
     padding: 0;
     display: flex;
     align-items: center;

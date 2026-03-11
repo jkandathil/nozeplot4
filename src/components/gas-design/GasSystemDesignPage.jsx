@@ -215,6 +215,30 @@ const GasSystemDesignInner = () => {
     const [isConverterOpen, setIsConverterOpen] = useState(false);
     const [editingNodeId, setEditingNodeId] = useState(null);
     const { screenToFlowPosition } = useReactFlow();
+    const [sidebarWidth, setSidebarWidth] = useState(200);
+
+    const handleMouseDown = useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = sidebarWidth;
+
+        const onMouseMove = (moveEvent) => {
+            let newWidth = startWidth + (moveEvent.clientX - startX);
+            if (newWidth < 150) newWidth = 150;
+            if (newWidth > 400) newWidth = 400;
+            setSidebarWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+    }, [sidebarWidth]);
 
     const onNodesChange = useCallback((changes) => {
         setNodes((nds) => applyNodeChanges(changes, nds));
@@ -649,7 +673,20 @@ const GasSystemDesignInner = () => {
             </div>
 
             <div className="design-content">
-                <div className="toolbox-panel">
+                <div className="toolbox-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+                    {/* Drag Handle */}
+                    <div
+                        onMouseDown={handleMouseDown}
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: -5,
+                            width: '10px',
+                            height: '100%',
+                            cursor: 'col-resize',
+                            zIndex: 10,
+                        }}
+                    />
                     <h3 className="toolbox-title">Toolbox</h3>
                     <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 0, marginBottom: 12 }}>Drag these into the grid.</p>
 

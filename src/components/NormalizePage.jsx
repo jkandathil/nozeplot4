@@ -55,7 +55,9 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
     if (!active || !payload || !payload.length) return null;
     return (
         <div style={{
-            background: 'rgba(15,23,42,0.97)',
+            background: 'rgba(15,23,42,0.05)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 8,
             padding: '8px 12px',

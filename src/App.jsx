@@ -25,6 +25,7 @@ import CSVPlotterPage from './components/CSVPlotterPage';
 import GasDilutionMathPage from './components/GasDilutionMathPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
 import Calculator from './components/Calculator';
+import MLStudioPage from './components/MLStudioPage';
 import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
 function App() {
@@ -401,6 +402,11 @@ function App() {
             ) : activePage === 'csvPlotter' ? (
               <CSVPlotterPage
                 key="csvPlotter"
+              />
+            ) : activePage === 'mlStudio' ? (
+              <MLStudioPage
+                key="mlStudio"
+                files={files}
               />
             ) : !selectedFileId ? (
               <EmptyState

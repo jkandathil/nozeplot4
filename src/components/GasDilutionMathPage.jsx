@@ -13,6 +13,31 @@ const GasDilutionMathPage = () => {
     const [targetRH, setTargetRH] = useState(0); // %
     const [bubblerTemp, setBubblerTemp] = useState(25); // Celsius
 
+    const [leftColumnWidth, setLeftColumnWidth] = useState(500);
+
+    const handleMouseDown = React.useCallback((e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = leftColumnWidth;
+
+        const onMouseMove = (moveEvent) => {
+            let newWidth = startWidth + (moveEvent.clientX - startX);
+            if (newWidth < 300) newWidth = 300;
+            if (newWidth > 800) newWidth = 800;
+            setLeftColumnWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'default';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+    }, [leftColumnWidth]);
+
     const [mfcs, setMfcs] = useState([
         { id: '1', name: 'Ammonia', isDiluent: false, isHumidifier: false, maxFlow: 500 },
         { id: '2', name: 'Air (Dry)', isDiluent: true, isHumidifier: false, maxFlow: 500 },
@@ -99,7 +124,20 @@ const GasDilutionMathPage = () => {
                 <p className="subtitle">Calculate flow rates to reach a desired target concentration.</p>
             </div>
 
-            <div className="math-content">
+            <div className="math-content" style={{ gridTemplateColumns: `${leftColumnWidth}px 1fr`, position: 'relative' }}>
+                {/* Drag Handle */}
+                <div
+                    onMouseDown={handleMouseDown}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: leftColumnWidth + 6,
+                        width: '12px',
+                        height: '100%',
+                        cursor: 'col-resize',
+                        zIndex: 10,
+                    }}
+                />
                 <div className="input-section glass-panel">
                     <h3 className="section-title"><Settings size={18} /> Parameters</h3>
 
