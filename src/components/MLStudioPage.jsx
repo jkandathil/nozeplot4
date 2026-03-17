@@ -240,22 +240,33 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 let sumT = 0, countT = 0;
                                 let sumH = 0, countH = 0;
 
+                                // Fallback generic bins if specific names don't match perfectly
                                 const eventsData = {
-                                    'breathsamplecollection': { sums: new Array(64).fill(0), counts: 0 },
-                                    'fenowindow': { sums: new Array(64).fill(0), counts: 0 },
-                                    'fenomeasurement': { sums: new Array(64).fill(0), counts: 0 }
+                                    'phase1': { sums: new Array(64).fill(0), counts: 0 },
+                                    'phase2': { sums: new Array(64).fill(0), counts: 0 },
+                                    'phase3': { sums: new Array(64).fill(0), counts: 0 }
                                 };
+
+                                // Analyze sequence of events to map unknown names to phases
+                                let uniqueEvents = [];
+                                if (evCol) {
+                                    for (let r of file.data) {
+                                        if (r[evCol] && !uniqueEvents.includes(r[evCol])) uniqueEvents.push(r[evCol]);
+                                    }
+                                }
 
                                 for (const r of file.data) {
                                     if (tCol && typeof r[tCol] === 'number') { sumT += r[tCol]; countT++; }
                                     if (hCol && typeof r[hCol] === 'number') { sumH += r[hCol]; countH++; }
 
-                                    let evName = '';
-                                    if (evCol && r[evCol]) evName = String(r[evCol]).toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    let tgt = eventsData['phase1']; // Default fallback everything to phase1 if no events exist
 
-                                    const tgt = evName.includes('breathsamplecollection') ? eventsData['breathsamplecollection']
-                                        : evName.includes('fenowindow') ? eventsData['fenowindow']
-                                            : evName.includes('fenomeasurement') ? eventsData['fenomeasurement'] : null;
+                                    if (evCol && r[evCol]) {
+                                        const evStr = String(r[evCol]).toLowerCase().replace(/[^a-z0-9]/g, '');
+                                        if (evStr.includes('sample') || evStr.includes('collect') || evStr.includes('breath') || (uniqueEvents.indexOf(r[evCol]) === 0)) tgt = eventsData['phase1'];
+                                        else if (evStr.includes('window') || evStr.includes('wait') || (uniqueEvents.indexOf(r[evCol]) === 1)) tgt = eventsData['phase2'];
+                                        else if (evStr.includes('measure') || evStr.includes('eval') || (uniqueEvents.indexOf(r[evCol]) >= 2)) tgt = eventsData['phase3'];
+                                    }
 
                                     if (tgt) {
                                         tgt.counts++;
@@ -273,9 +284,9 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
 
                                 const featVec = [
                                     avgT, avgH,
-                                    ...makeMean(eventsData['breathsamplecollection']),
-                                    ...makeMean(eventsData['fenowindow']),
-                                    ...makeMean(eventsData['fenomeasurement'])
+                                    ...makeMean(eventsData['phase1']),
+                                    ...makeMean(eventsData['phase2']),
+                                    ...makeMean(eventsData['phase3'])
                                 ];
 
                                 extractedX.push(featVec);
@@ -284,7 +295,7 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                             }
 
                             if (extractedX.length < 2) {
-                                alert("Not enough valid files to train TF network securely.");
+                                alert("Not enough valid files with numbers mapped in Map Targets to train TF network securely.");
                                 setIsTraining(false);
                                 return;
                             }
