@@ -346,12 +346,21 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
 
                             const scaleArray = (arr) => arr.map(row => row.map((val, col) => (val - means[col]) / stds[col]));
 
+                            // Normalize Y-Targets recursively to prevent MSE gradient runaway
+                            let ySum = 0;
+                            for (let i = 0; i < yTrain.length; i++) ySum += yTrain[i];
+                            const yMean = ySum / yTrain.length;
+                            let ySumSq = 0;
+                            for (let i = 0; i < yTrain.length; i++) ySumSq += Math.pow(yTrain[i] - yMean, 2);
+                            const yStd = Math.sqrt(ySumSq / yTrain.length) || 1e-6;
+
                             const xsT = tf.tensor2d(scaleArray(xTrain));
-                            const ysT = tf.tensor2d(yTrain, [yTrain.length, 1]);
+                            const ysT = tf.tensor2d(yTrain.map(y => (y - yMean) / yStd), [yTrain.length, 1]);
+
                             let xsV = null, ysV = null;
                             if (xVal.length > 0) {
                                 xsV = tf.tensor2d(scaleArray(xVal));
-                                ysV = tf.tensor2d(yVal, [yVal.length, 1]);
+                                ysV = tf.tensor2d(yVal.map(y => (y - yMean) / yStd), [yVal.length, 1]);
                             }
 
                             await model.fit(xsT, ysT, {
@@ -365,15 +374,18 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 }
                             });
 
-                            const finalPreds = model.predict(tf.tensor2d(scaleArray(extractedX))).dataSync();
+                            const finalPredsNorm = model.predict(tf.tensor2d(scaleArray(extractedX))).dataSync();
+                            const finalPreds = Array.from(finalPredsNorm).map(p => (p * yStd) + yMean);
+
                             setTfModelRef(model);
 
                             // Calc Validation or Train R^2 Score
                             const evalY = yVal.length > 0 ? yVal : extractedY;
-                            const evalPreds = yVal.length > 0 ? model.predict(xsV).dataSync() : finalPreds;
+                            const evalPredsNorm = yVal.length > 0 ? model.predict(xsV).dataSync() : finalPredsNorm;
+                            const evalPreds = Array.from(evalPredsNorm).map(p => (p * yStd) + yMean);
 
-                            const yMean = evalY.reduce((a, b) => a + b, 0) / evalY.length;
-                            const ssTot = evalY.reduce((a, b) => a + Math.pow(b - yMean, 2), 0);
+                            const yMeanEval = evalY.reduce((a, b) => a + b, 0) / evalY.length;
+                            const ssTot = evalY.reduce((a, b) => a + Math.pow(b - yMeanEval, 2), 0);
                             const ssRes = evalY.reduce((a, b, i) => a + Math.pow(b - evalPreds[i], 2), 0);
                             const r2 = 1 - (ssRes / (ssTot || 1));
 
