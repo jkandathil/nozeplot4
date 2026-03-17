@@ -292,6 +292,12 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 extractedInfo.push({ fileName: file.name, actual: target });
                             }
 
+                            if (extractedX.length === 0) {
+                                alert("No valid targets mapped! Please type numbers into the 'Map Targets' input fields for the files you want to train on.");
+                                setIsTraining(false);
+                                return;
+                            }
+
                             // Shuffle indices
                             const indices = extractedX.map((_, i) => i);
                             tf.util.shuffle(indices);
