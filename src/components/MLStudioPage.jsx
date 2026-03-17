@@ -649,7 +649,23 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                     {/* Model Training Plot */}
                     <div className="plot-card glass-panel" style={{ gridColumn: '1 / -1' }}>
                         <h3 className="plot-title">Model Training Results</h3>
-                        {!modelResults ? (
+                        {isTraining && algorithm === 'TensorFlow' ? (
+                            <div style={{ height: 400 }}>
+                                <h4 style={{ textAlign: 'center', marginBottom: 8, color: '#38bdf8' }}>Training in Progress... Computing Epoch Limits</h4>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                                        <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
+                                        <XAxis type="number" dataKey="epoch" name="Epoch" stroke="var(--text-muted)" />
+                                        <YAxis type="number" yAxisId="left" name="Loss" stroke="#38bdf8" />
+                                        <YAxis type="number" yAxisId="right" orientation="right" name="Val Loss" stroke="#f59e0b" />
+                                        <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} />
+                                        <Legend />
+                                        <Scatter name="Training Loss" data={tfLossHistory} fill="#38bdf8" line yAxisId="left" />
+                                        <Scatter name="Validation Loss" data={tfLossHistory} fill="#f59e0b" line yAxisId="right" />
+                                    </ScatterChart>
+                                </ResponsiveContainer>
+                            </div>
+                        ) : !modelResults ? (
                             <div className="empty-placeholder">
                                 <Brain size={32} />
                                 <p>Click "Train Model" to view predictive performance.</p>
@@ -662,40 +678,22 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 </div>
 
                                 {taskType === 'regression' ? (
-                                    isTraining ? (
-                                        <div style={{ height: 400 }}>
-                                            <h4 style={{ textAlign: 'center', marginBottom: 8, color: '#38bdf8' }}>Training in Progress... Computing Epoch Limits</h4>
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
-                                                    <XAxis type="number" dataKey="epoch" name="Epoch" stroke="var(--text-muted)" />
-                                                    <YAxis type="number" yAxisId="left" name="Loss" stroke="#38bdf8" />
-                                                    <YAxis type="number" yAxisId="right" orientation="right" name="Val Loss" stroke="#f59e0b" />
-                                                    <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} />
-                                                    <Legend />
-                                                    <Scatter name="Training Loss" data={tfLossHistory} fill="#38bdf8" line yAxisId="left" />
-                                                    <Scatter name="Validation Loss" data={tfLossHistory} fill="#f59e0b" line yAxisId="right" />
-                                                </ScatterChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    ) : (
-                                        <div style={{ height: 400 }}>
-                                            <h4 style={{ textAlign: 'center', marginBottom: 8 }}>Predicted vs Actual</h4>
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
-                                                    <XAxis type="number" dataKey="actual" name="Actual Target" stroke="var(--text-muted)" />
-                                                    <YAxis type="number" dataKey="predicted" name="Predicted" stroke="var(--text-muted)" />
-                                                    <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} cursor={{ strokeDasharray: '3 3' }} />
-                                                    <Legend wrapperStyle={{ paddingTop: 20 }} />
-                                                    <Scatter name="Training Data" data={modelResults.plotData.filter(d => d.split === 'Training Data')} fill="#38bdf8" />
-                                                    {modelResults.plotData.some(d => d.split === 'Validation Data') && (
-                                                        <Scatter name="Validation Data" data={modelResults.plotData.filter(d => d.split === 'Validation Data')} fill="#f59e0b" />
-                                                    )}
-                                                </ScatterChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    )
+                                    <div style={{ height: 400 }}>
+                                        <h4 style={{ textAlign: 'center', marginBottom: 8 }}>Predicted vs Actual</h4>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                                                <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
+                                                <XAxis type="number" dataKey="actual" name="Actual Concentration / Target" stroke="var(--text-muted)" />
+                                                <YAxis type="number" dataKey="predicted" name="Predicted" stroke="var(--text-muted)" />
+                                                <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} cursor={{ strokeDasharray: '3 3' }} />
+                                                <Legend wrapperStyle={{ paddingTop: 20 }} />
+                                                <Scatter name="Training Data" data={modelResults.plotData.filter(d => d.split === 'Training Data')} fill="#38bdf8" />
+                                                {modelResults.plotData.some(d => d.split === 'Validation Data') && (
+                                                    <Scatter name="Validation Data" data={modelResults.plotData.filter(d => d.split === 'Validation Data')} fill="#f59e0b" />
+                                                )}
+                                            </ScatterChart>
+                                        </ResponsiveContainer>
+                                    </div>
                                 ) : (
                                     <div className="confusion-matrix">
                                         <h4 style={{ textAlign: 'center', marginBottom: 16 }}>Classification Results Table</h4>
