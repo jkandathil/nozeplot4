@@ -630,9 +630,19 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     };
 
     if (showChrono) {
+        let chronoDeltaR = 0;
+        let chronoPctDrift = 0;
         let chronoDeltaRh = 0;
         let chronoDeltaTc = 0;
         if (activeChronoData && activeChronoData.length > 0) {
+            const rVals = activeChronoData.map(d => d.all).filter(v => v !== undefined && !isNaN(v));
+            if (rVals.length > 0) {
+                const maxR = Math.max(...rVals);
+                const minR = Math.min(...rVals);
+                chronoDeltaR = maxR - minR;
+                chronoPctDrift = Math.abs(minR) > 0 ? (chronoDeltaR / Math.abs(minR)) * 100 : 0;
+            }
+
             const rhVals = activeChronoData.map(d => d.relHumidity).filter(v => v !== undefined && !isNaN(v));
             if (rhVals.length > 0) chronoDeltaRh = Math.max(...rhVals) - Math.min(...rhVals);
 
@@ -646,9 +656,9 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '1.2rem' }}>Chronological Plot</h2>
-                            {(chronoDeltaRh >= 0 || chronoDeltaTc >= 0) && (
+                            {(chronoDeltaR > 0 || chronoDeltaRh >= 0 || chronoDeltaTc >= 0) && (
                                 <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>
-                                    ΔRH: {chronoDeltaRh.toFixed(1)}% | ΔT: {chronoDeltaTc.toFixed(1)}°C
+                                    ΔR = {chronoDeltaR.toFixed(3)} Ω ({chronoPctDrift.toFixed(1)}%) | ΔRH: {chronoDeltaRh.toFixed(1)}% | ΔT: {chronoDeltaTc.toFixed(1)}°C
                                 </span>
                             )}
                         </div>
