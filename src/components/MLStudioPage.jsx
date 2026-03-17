@@ -207,8 +207,6 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
     };
 
     const runModelTraining = async () => {
-        if (allFeatures.length < 3) return;
-
         const featureKeys = ['maxPeak', 'minPeak', 'area', 'baseline', 'stdDev', 'mean'];
         const X = allFeatures.map(f => featureKeys.map(k => f.features[k]));
 
@@ -292,12 +290,6 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 extractedX.push(featVec);
                                 extractedY.push(target);
                                 extractedInfo.push({ fileName: file.name, actual: target });
-                            }
-
-                            if (extractedX.length < 2) {
-                                alert("Not enough valid files with numbers mapped in Map Targets to train TF network securely.");
-                                setIsTraining(false);
-                                return;
                             }
 
                             // Shuffle indices
@@ -548,7 +540,7 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                     onChange={e => setTfSplit(e.target.value)}
                                     style={{ width: '100%', accentColor: '#38bdf8' }}
                                 />
-                                <small style={{ color: 'var(--text-muted)' }}>TF vector merges Global Avg T/H and maps the full means of 64 sensing arrays per analytical phase (194 dense features).</small>
+                                <small style={{ color: 'var(--text-muted)' }}>TF predicts targets using 194 parameters purely bypassing standard peak mapping algorithms: [Avg_Voltage_T, Avg_Voltage_H] + [64 element averages over Sample] + [64 element averages over Window] + [64 element averages over Measurement].</small>
                             </div>
                             <div className="form-group-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                                 <div>
