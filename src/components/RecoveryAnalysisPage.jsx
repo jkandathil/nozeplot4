@@ -307,6 +307,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     concentration: extConc || t.targetConcentration,
                                     baselineValue: fenoStartValue,
                                     humidity: Number((absHumidity).toFixed(2)),
+                                    relHumidity: Number((baselineRH).toFixed(2)),
+                                    temperature: Number((baselineTemp).toFixed(2)),
                                     sourceFile: fileObj.fileName,
                                     rawBaseline: t.baseline.rows,
                                     rawExposure: t.exposure.rows,
@@ -923,6 +925,14 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                             const deltaR = maxR - minR;
                                             const pctDrift = Math.abs(minR) > 0 ? ((deltaR / Math.abs(minR)) * 100).toFixed(1) : 0;
 
+                                            const maxRh = Math.max(...sensorObj.data.map(d => d.relHumidity));
+                                            const minRh = Math.min(...sensorObj.data.map(d => d.relHumidity));
+                                            const deltaRh = maxRh - minRh;
+
+                                            const maxTc = Math.max(...sensorObj.data.map(d => d.temperature));
+                                            const minTc = Math.min(...sensorObj.data.map(d => d.temperature));
+                                            const deltaTc = maxTc - minTc;
+
                                             const plotId = `rec_plot_${bIdx}_${sIdx}`;
 
                                             return (
@@ -933,7 +943,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                                                 {sensorName} <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>Drift & Recovery Map</span>
                                                             </h4>
                                                             <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>
-                                                                ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}%)
+                                                                ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}%) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                                             </span>
                                                         </div>
                                                         <button type="button" className="icon-btn small" onClick={() => setSelectedPlot({ ...sensorObj, title: `${resultBatch.fileName} - ${sensorName}` })}>
@@ -1005,6 +1015,14 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 const deltaR = maxR - minR;
                 const pctDrift = Math.abs(minR) > 0 ? ((deltaR / Math.abs(minR)) * 100).toFixed(1) : 0;
 
+                const maxRh = Math.max(...selectedPlot.data.map(d => d.relHumidity));
+                const minRh = Math.min(...selectedPlot.data.map(d => d.relHumidity));
+                const deltaRh = maxRh - minRh;
+
+                const maxTc = Math.max(...selectedPlot.data.map(d => d.temperature));
+                const minTc = Math.min(...selectedPlot.data.map(d => d.temperature));
+                const deltaTc = maxTc - minTc;
+
                 return (
                     <div className="modal-overlay" onClick={() => setSelectedPlot(null)} style={{ zIndex: 9999 }}>
                         <div className="zoomable-plot-modal glass-panel" onClick={(e) => e.stopPropagation()} style={{ pointerEvents: 'auto', width: '90%', height: '85vh', display: 'flex', flexDirection: 'column' }}>
@@ -1012,7 +1030,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <h3 style={{ margin: 0 }}>{selectedPlot.title}</h3>
                                     <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: 600 }}>
-                                        ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}% Drift)
+                                        ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}% Drift) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                     </span>
                                 </div>
                                 <button className="icon-btn close-btn" onClick={() => setSelectedPlot(null)}>
