@@ -395,6 +395,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
     const [fenoTruncateSeconds, setFenoTruncateSeconds] = useState(0);
     const [filterUnknown, setFilterUnknown] = useState(true);
+    const [separateByUnit, setSeparateByUnit] = useState(false);
+    const [mergePpbs, setMergePpbs] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [gapStart, setGapStart] = useState('');
     const [gapEnd, setGapEnd] = useState('');
@@ -667,7 +669,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     gapEndVal: gapEnd !== '' ? parseInt(gapEnd, 10) : null,
                     filterUnknownVal: filterUnknown,
                     referenceLines: refLines,
-                    auIdVal: finalAuIdVal
+                    auIdVal: finalAuIdVal,
+                    separateByUnitVal: separateByUnit,
+                    mergePpbsVal: mergePpbs
                 });
 
             } catch (err) {
@@ -681,19 +685,31 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const channelPlotsData = useMemo(() => {
         if (!processedBatch || processedBatch.files.length === 0) return null;
 
-        const { files, sensingPrefixes, tCodes, hCodes, gapStartVal, gapEndVal, filterUnknownVal, referenceLines, auIdVal } = processedBatch;
+        const { files, sensingPrefixes, tCodes, hCodes, gapStartVal, gapEndVal, filterUnknownVal, referenceLines, auIdVal, separateByUnitVal, mergePpbsVal } = processedBatch;
 
-        const auIdSuffix = auIdVal && auIdVal !== 'Unknown AU' ? ` (${auIdVal})` : '';
+        const auIdSuffix = auIdVal && auIdVal !== 'Unknown AU' && !separateByUnitVal && !mergePpbsVal ? ` (${auIdVal})` : '';
 
         // Plot container config variables
         const plots = [];
 
         // 1. Group files by concentration (ALAAC logic: only ppb, never ppm)
-        const extractConcentration = (name) => {
+        const extractConcentration = (name, ignoreAu = false) => {
             const basename = name.split(/[/\\]/).pop();
             const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
-            if (m) return `${parseFloat(m[1])} ppb`;
-            return 'Unknown';
+            let conc = m ? `${parseFloat(m[1])} ppb` : 'Unknown';
+
+            if (mergePpbsVal && conc !== 'Unknown') {
+                return 'All Concentrated PPBs';
+            }
+
+            if (separateByUnitVal && !ignoreAu && conc !== 'Unknown') {
+                const fileParts = basename.split('_');
+                const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
+                if (asauPart) {
+                    return `${asauPart.toUpperCase()} - ${conc}`;
+                }
+            }
+            return conc;
         };
 
         const extractConcValue = (name) => {
@@ -712,7 +728,12 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
         const sortedGroupKeys = Object.keys(groups).sort((a, b) => {
             if (a === 'Unknown') return 1;
             if (b === 'Unknown') return -1;
-            return parseFloat(a) - parseFloat(b);
+            const numA = extractConcValue(a);
+            const numB = extractConcValue(b);
+            if (numA === numB) {
+                return a.localeCompare(b);
+            }
+            return numA - numB;
         });
 
         // Determine max length only from the groups actively being plotted 
@@ -816,8 +837,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     areas.push({ dataKey: `${gName}_${prefix}_range`, name: `${gName} Spread (±1σ)`, color });
 
                     if (gName !== 'Unknown') {
-                        if (!calibrationDataMap[gName]) {
-                            calibrationDataMap[gName] = { concLabel: gName, concentration: extractConcValue(gName) };
+                        const pureConcLabel = separateByUnitVal ? extractConcentration(groups[gName][0]?.fileName || "", true) : gName;
+                        if (!calibrationDataMap[pureConcLabel]) {
+                            calibrationDataMap[pureConcLabel] = { concLabel: pureConcLabel, concentration: extractConcValue(gName) };
                         }
                         let peakMean = null;
                         let stdAtPeak = 0;
@@ -832,8 +854,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                             }
                         }
                         if (peakMean !== null) {
-                            calibrationDataMap[gName][`${prefix}_maxResponse`] = peakMean;
-                            calibrationDataMap[gName][`${prefix}_range`] = [peakMean - stdAtPeak, peakMean + stdAtPeak];
+                            calibrationDataMap[pureConcLabel][`${gName}_${prefix}_maxResponse`] = peakMean;
+                            calibrationDataMap[pureConcLabel][`${gName}_${prefix}_range`] = [peakMean - stdAtPeak, peakMean + stdAtPeak];
                         }
                     }
                 });
@@ -854,17 +876,29 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
         const calibrationDataArray = Object.values(calibrationDataMap).sort((a, b) => a.concentration - b.concentration);
         if (calibrationDataArray.length > 0) {
             sensingPrefixes.forEach((prefix, pIdx) => {
-                const color = COLORS[pIdx % COLORS.length];
-                const hasPrefixCalibration = calibrationDataArray.some(d => d[`${prefix}_maxResponse`] !== undefined);
+                const hasPrefixCalibration = sortedGroupKeys.some(gName => calibrationDataArray.some(d => d[`${gName}_${prefix}_maxResponse`] !== undefined));
+
                 if (hasPrefixCalibration) {
+                    const monoLines = [];
+                    const monoAreas = [];
+
+                    sortedGroupKeys.forEach((gName, gIdx) => {
+                        const color = COLORS[gIdx % COLORS.length];
+                        if (calibrationDataArray.some(d => d[`${gName}_${prefix}_maxResponse`] !== undefined)) {
+                            const shortLabelName = separateByUnitVal ? gName.replace(/ - \d+ ppb/i, '') : gName;
+                            monoLines.push({ dataKey: `${gName}_${prefix}_maxResponse`, name: `${shortLabelName} Max`, color });
+                            monoAreas.push({ dataKey: `${gName}_${prefix}_range`, name: `${shortLabelName} Spread (±1σ)`, color });
+                        }
+                    });
+
                     plots.push({
                         title: `Monotonic Response Curve: ${prefix} (Max Signal vs Concentration)${auIdSuffix}`,
                         shortTitle: prefix,
                         data: calibrationDataArray,
                         isComposed: true,
                         xAxisKey: 'concLabel',
-                        lines: [{ dataKey: `${prefix}_maxResponse`, name: `Max Response`, color }],
-                        areas: [{ dataKey: `${prefix}_range`, name: `Spread (±1σ)`, color }],
+                        lines: monoLines,
+                        areas: monoAreas,
                         yAxisLabel: 'Max Response (%)'
                     });
                 }
@@ -1121,7 +1155,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         </div>
                     </div>
 
-                    <div className="form-group" style={{ display: 'grid', gridTemplateColumns: 'min-content min-content', gap: '10px 16px', background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', marginBottom: '16px', whiteSpace: 'nowrap' }}>
+                    <div className="form-group" style={{ display: 'grid', gridTemplateColumns: 'min-content min-content min-content min-content', gap: '10px 16px', background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', marginBottom: '16px', whiteSpace: 'nowrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <input
                                 type="checkbox"
@@ -1141,6 +1175,27 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                 style={{ width: 14, height: 14, accentColor: '#10b981', cursor: 'pointer' }}
                             />
                             <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem' }}>No Unknowns</label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                                type="checkbox"
+                                checked={separateByUnit}
+                                onChange={(e) => setSeparateByUnit(e.target.checked)}
+                                id="separate-unit-chk"
+                                style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
+                                disabled={mergePpbs}
+                            />
+                            <label htmlFor="separate-unit-chk" style={{ margin: 0, cursor: mergePpbs ? 'not-allowed' : 'pointer', fontSize: '0.8rem', color: mergePpbs ? '#64748b' : '#38bdf8' }}>Split by AU ID</label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                                type="checkbox"
+                                checked={mergePpbs}
+                                onChange={(e) => setMergePpbs(e.target.checked)}
+                                id="merge-ppbs-chk"
+                                style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
+                            />
+                            <label htmlFor="merge-ppbs-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem', color: '#38bdf8' }}>Merge All PPBs</label>
                         </div>
                         <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', marginTop: '4px' }}>
                             <label style={{ fontSize: '0.8rem', margin: 0 }}>Cut FeNO tail (secs):</label>
