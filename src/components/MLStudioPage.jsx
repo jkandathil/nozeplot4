@@ -104,12 +104,20 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
 
         allFeatures.forEach(f => {
             if (map[f.fileId] === undefined) {
-                const match = f.fileName.match(/_([0-9.]+)p/i);
-                if (match) {
-                    map[f.fileId] = match[1];
+                const match1 = f.fileName.match(/([0-9.]+)\s*(?:ppb|ppm|ppt)/i);
+                const match2 = f.fileName.match(/_([0-9.]+)_?(?:ppb|ppm)/i);
+                const match3 = f.fileName.match(/(?:^|_)([0-9]+)p(?:_|\.|$)/i);
+
+                if (match1) {
+                    map[f.fileId] = match1[1];
+                } else if (match2) {
+                    map[f.fileId] = match2[1];
+                } else if (match3) {
+                    map[f.fileId] = match3[1];
                 } else {
-                    const match2 = f.fileName.match(/_([a-zA-Z0-9]+)\.csv/i);
-                    map[f.fileId] = match2 ? match2[1] : '';
+                    // Fallback to strictly numbers before .csv to avoid mapping text like 'A1'
+                    const match4 = f.fileName.match(/_([0-9]+)\.csv/i);
+                    map[f.fileId] = match4 ? match4[1] : '';
                 }
                 changed = true;
             }
