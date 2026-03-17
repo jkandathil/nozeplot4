@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Brain, Settings2, ScatterChart as ScatterChartIcon, PlayCircle, FileText, Download, Loader2 } from 'lucide-react';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, Cell, ZAxis } from 'recharts';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, Cell, ZAxis, Legend } from 'recharts';
 import { PCA } from 'ml-pca';
 import { RandomForestRegression as RFRegression, RandomForestClassifier as RFClassifier } from 'ml-random-forest';
 import MultivariateLinearRegression from 'ml-regression-multivariate-linear';
@@ -342,7 +342,8 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 plotData: extractedInfo.map((info, i) => ({
                                     fileName: info.fileName,
                                     actual: info.actual,
-                                    predicted: finalPreds[i]
+                                    predicted: finalPreds[i],
+                                    split: indices.slice(0, numTrain).includes(i) ? 'Training Data' : 'Validation Data'
                                 }))
                             });
 
@@ -387,7 +388,8 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                     plotData: allFeatures.map((f, i) => ({
                         fileName: f.fileName,
                         actual: yTrue[i],
-                        predicted: predictions[i]
+                        predicted: predictions[i],
+                        split: 'Training Data'
                     }))
                 });
 
@@ -644,7 +646,11 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                                 <XAxis type="number" dataKey="actual" name="Actual Target" stroke="var(--text-muted)" />
                                                 <YAxis type="number" dataKey="predicted" name="Predicted" stroke="var(--text-muted)" />
                                                 <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} cursor={{ strokeDasharray: '3 3' }} />
-                                                <Scatter name="Predictions" data={modelResults.plotData} fill="#38bdf8" />
+                                                <Legend wrapperStyle={{ paddingTop: 20 }} />
+                                                <Scatter name="Training Data" data={modelResults.plotData.filter(d => d.split === 'Training Data')} fill="#38bdf8" />
+                                                {modelResults.plotData.some(d => d.split === 'Validation Data') && (
+                                                    <Scatter name="Validation Data" data={modelResults.plotData.filter(d => d.split === 'Validation Data')} fill="#f59e0b" />
+                                                )}
                                             </ScatterChart>
                                         </ResponsiveContainer>
                                     </div>
