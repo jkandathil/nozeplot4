@@ -9,7 +9,16 @@ import tsnejs from 'tsne';
 import * as tf from '@tensorflow/tfjs';
 import './MLStudioPage.css';
 
-const MLStudioPage = ({ files }) => {
+const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
+    const files = useMemo(() => {
+        const arr = [];
+        if (data && fileName) arr.push({ id: fileName, name: fileName, fileName: fileName, data });
+        if (compareDataList && compareDataList.length > 0) {
+            compareDataList.forEach(c => arr.push({ id: c.fileName, name: c.fileName, fileName: c.fileName, data: c.data }));
+        }
+        return arr;
+    }, [data, fileName, compareDataList]);
+
     const [targetColName, setTargetColName] = useState('Voltage');
     const [taskType, setTaskType] = useState('regression'); // regression or classification
 

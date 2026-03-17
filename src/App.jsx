@@ -473,7 +473,9 @@ function App() {
             ) : activePage === 'mlStudio' ? (
               <MLStudioPage
                 key="mlStudio"
-                files={files}
+                data={parsedData?.data}
+                fileName={parsedData?.fileName}
+                compareDataList={compareDataList}
               />
             ) : !selectedFileId ? (
               <EmptyState
