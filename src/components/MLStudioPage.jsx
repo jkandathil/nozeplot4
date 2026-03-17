@@ -694,21 +694,45 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 </div>
 
                                 {taskType === 'regression' ? (
-                                    <div style={{ height: 400 }}>
-                                        <h4 style={{ textAlign: 'center', marginBottom: 8 }}>Predicted vs Actual</h4>
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                                                <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
-                                                <XAxis type="number" dataKey="actual" name="Actual Concentration / Target" stroke="var(--text-muted)" />
-                                                <YAxis type="number" dataKey="predicted" name="Predicted" stroke="var(--text-muted)" />
-                                                <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} cursor={{ strokeDasharray: '3 3' }} />
-                                                <Legend wrapperStyle={{ paddingTop: 20 }} />
-                                                <Scatter name="Training Data" data={modelResults.plotData.filter(d => d.split === 'Training Data')} fill="#38bdf8" />
-                                                {modelResults.plotData.some(d => d.split === 'Validation Data') && (
-                                                    <Scatter name="Validation Data" data={modelResults.plotData.filter(d => d.split === 'Validation Data')} fill="#f59e0b" />
-                                                )}
-                                            </ScatterChart>
-                                        </ResponsiveContainer>
+                                    <div>
+                                        <div style={{ height: 400 }}>
+                                            <h4 style={{ textAlign: 'center', marginBottom: 8 }}>Predicted vs Actual</h4>
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
+                                                    <XAxis type="number" dataKey="actual" name="Actual Concentration / Target" stroke="var(--text-muted)" />
+                                                    <YAxis type="number" dataKey="predicted" name="Predicted" stroke="var(--text-muted)" />
+                                                    <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} cursor={{ strokeDasharray: '3 3' }} />
+                                                    <Legend wrapperStyle={{ paddingTop: 20 }} />
+                                                    <Scatter name="Training Data" data={modelResults.plotData.filter(d => d.split === 'Training Data')} fill="#38bdf8" />
+                                                    {modelResults.plotData.some(d => d.split === 'Validation Data') && (
+                                                        <Scatter name="Validation Data" data={modelResults.plotData.filter(d => d.split === 'Validation Data')} fill="#f59e0b" />
+                                                    )}
+                                                </ScatterChart>
+                                            </ResponsiveContainer>
+                                        </div>
+
+                                        <div style={{ background: 'rgba(15,23,42,0.5)', borderRadius: 8, padding: 16, marginTop: 24, maxHeight: 300, overflowY: 'auto' }}>
+                                            <h4 style={{ textAlign: 'center', marginBottom: 16 }}>Regression Results Table</h4>
+                                            <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+                                                <thead>
+                                                    <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                        <th style={{ padding: 8 }}>Actual</th>
+                                                        <th style={{ padding: 8 }}>Predicted</th>
+                                                        <th style={{ padding: 8 }}>File Name</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {modelResults.plotData.map((row, i) => (
+                                                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                                            <td style={{ padding: 8 }}>{row.actual}</td>
+                                                            <td style={{ padding: 8 }}>{typeof row.predicted === 'number' ? row.predicted.toFixed(3) : row.predicted}</td>
+                                                            <td style={{ padding: 8, color: 'var(--text-muted)' }}>{row.fileName}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="confusion-matrix">
