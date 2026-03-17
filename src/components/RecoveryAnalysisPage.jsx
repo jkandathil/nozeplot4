@@ -27,7 +27,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
     // Chrono Plot State
     const [showChrono, setShowChrono] = useState(false);
-    const [showAbsHumidity, setShowAbsHumidity] = useState(true);
+    const [chronoEnvMetric, setChronoEnvMetric] = useState('absHumidity'); // 'none', 'absHumidity', 'relHumidity', 'temperature'
     const [chronoSensor, setChronoSensor] = useState('');
     const [includeRecoveryPlot, setIncludeRecoveryPlot] = useState(true);
     const [chronoBrushStartIdx, setChronoBrushStartIdx] = useState(0);
@@ -456,9 +456,13 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         const dynamicPhase = isRecovery ? 'Recovery' : (r[d.eventCol] || 'Sequence');
 
                         let rowAbsHumidity = 0;
+                        let rowRelHumidity = 0;
+                        let rowTemperature = 0;
                         if (d.humCol && d.tempCol) {
                             const rh = Number(r[d.humCol]) || 0;
                             const tc = Number(r[d.tempCol]) || 25;
+                            rowRelHumidity = rh;
+                            rowTemperature = tc;
                             if (rh > 0) {
                                 rowAbsHumidity = (6.112 * Math.exp((17.67 * tc) / (tc + 243.5)) * rh * 2.1674) / (tc + 273.15);
                             }
@@ -470,7 +474,9 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                             all: Number(r[d.exactCol]) || 0,
                             phase: dynamicPhase,
                             activeKey: rowKey,
-                            absHumidity: Number(rowAbsHumidity.toFixed(2))
+                            absHumidity: Number(rowAbsHumidity.toFixed(2)),
+                            relHumidity: Number(rowRelHumidity.toFixed(2)),
+                            temperature: Number(rowTemperature.toFixed(2))
                         });
                     });
                 };
@@ -640,10 +646,20 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                             <input type="checkbox" checked={includeRecoveryPlot} onChange={e => setIncludeRecoveryPlot(e.target.checked)} style={{ accentColor: '#f59e0b', width: 14, height: 14 }} />
                             Include Recovery Portion
                         </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#e2e8f0', fontSize: '0.85rem', cursor: 'pointer', marginLeft: 10 }}>
-                            <input type="checkbox" checked={showAbsHumidity} onChange={e => setShowAbsHumidity(e.target.checked)} style={{ accentColor: '#0ea5e9', width: 14, height: 14 }} />
-                            Plot Humidity
-                        </label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 10, background: 'rgba(0,0,0,0.2)', padding: '4px 10px', borderRadius: 6 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#e2e8f0', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'none'} onChange={() => setChronoEnvMetric('none')} style={{ accentColor: '#94a3b8' }} /> None
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0ea5e9', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'absHumidity'} onChange={() => setChronoEnvMetric('absHumidity')} style={{ accentColor: '#0ea5e9' }} /> Abs. Hum
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#10b981', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'relHumidity'} onChange={() => setChronoEnvMetric('relHumidity')} style={{ accentColor: '#10b981' }} /> Rel. Hum
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#ef4444', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'temperature'} onChange={() => setChronoEnvMetric('temperature')} style={{ accentColor: '#ef4444' }} /> Temp
+                            </label>
+                        </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <button
@@ -704,8 +720,14 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                                     <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} hide={true} />
                                     <YAxis yAxisId="left" domain={['auto', 'auto']} stroke="#334155" tick={{ fill: '#38bdf8' }} label={{ value: 'Resistance (Ohms)', angle: -90, position: 'insideLeft', fill: '#38bdf8' }} />
-                                    {showAbsHumidity && (
+                                    {chronoEnvMetric === 'absHumidity' && (
                                         <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#0ea5e9" tick={{ fill: '#0ea5e9', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Abs. Humidity (g/m³)', angle: 90, position: 'insideRight', fill: '#0ea5e9' }} />
+                                    )}
+                                    {chronoEnvMetric === 'relHumidity' && (
+                                        <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#10b981" tick={{ fill: '#10b981', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Rel. Humidity (%)', angle: 90, position: 'insideRight', fill: '#10b981' }} />
+                                    )}
+                                    {chronoEnvMetric === 'temperature' && (
+                                        <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#ef4444" tick={{ fill: '#ef4444', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Temperature (°C)', angle: 90, position: 'insideRight', fill: '#ef4444' }} />
                                     )}
                                     <RechartsTooltip
                                         cursor={{ stroke: '#475569', strokeDasharray: '3 3' }}
@@ -715,6 +737,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                         formatter={(value, name, props) => {
                                             if (name === 'all') return []; // Hide from tooltip
                                             if (name === 'Absolute Humidity') return [Number(value).toFixed(2) + ' g/m³', 'Environment'];
+                                            if (name === 'Relative Humidity') return [Number(value).toFixed(2) + ' %', 'Environment'];
+                                            if (name === 'Temperature') return [Number(value).toFixed(2) + ' °C', 'Environment'];
                                             return [Number(value).toFixed(4) + ' Ω', props.payload.phase];
                                         }}
                                         labelFormatter={(label, payload) => {
@@ -725,8 +749,14 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                         }}
                                     />
                                     <Line yAxisId="left" type="linear" dataKey="all" stroke="#ffffff" strokeWidth={2} strokeDasharray="5 5" opacity={0.65} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} />
-                                    {showAbsHumidity && (
+                                    {chronoEnvMetric === 'absHumidity' && (
                                         <Line yAxisId="right" type="monotone" name="Absolute Humidity" dataKey="absHumidity" stroke="#0ea5e9" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
+                                    )}
+                                    {chronoEnvMetric === 'relHumidity' && (
+                                        <Line yAxisId="right" type="monotone" name="Relative Humidity" dataKey="relHumidity" stroke="#10b981" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
+                                    )}
+                                    {chronoEnvMetric === 'temperature' && (
+                                        <Line yAxisId="right" type="monotone" name="Temperature" dataKey="temperature" stroke="#ef4444" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
                                     )}
                                     {chronoLineKeys.map((key, index) => (
                                         <Line
