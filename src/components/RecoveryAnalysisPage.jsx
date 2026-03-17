@@ -1020,7 +1020,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                                                 {/* Lines */}
                                                                 <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
-                                                                <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
+                                                                <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1} dot={{ r: 2 }} opacity={0.5} isAnimationActive={true} />
                                                             </LineChart>
                                                         </ResponsiveContainer>
                                                     </div>
@@ -1116,13 +1116,13 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                         <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
                                         {maxPlotEnvMetric === 'absHumidity' && (
-                                            <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
+                                            <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1.5} dot={{ r: 3 }} activeDot={{ r: 6 }} opacity={0.6} isAnimationActive={false} />
                                         )}
                                         {maxPlotEnvMetric === 'relHumidity' && (
-                                            <Line yAxisId="right" type="monotone" dataKey="relHumidity" name="Rel. Humidity" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
+                                            <Line yAxisId="right" type="monotone" dataKey="relHumidity" name="Rel. Humidity" stroke="#10b981" strokeWidth={1.5} dot={{ r: 3 }} activeDot={{ r: 6 }} opacity={0.6} isAnimationActive={false} />
                                         )}
                                         {maxPlotEnvMetric === 'temperature' && (
-                                            <Line yAxisId="right" type="monotone" dataKey="temperature" name="Temperature" stroke="#ef4444" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
+                                            <Line yAxisId="right" type="monotone" dataKey="temperature" name="Temperature" stroke="#ef4444" strokeWidth={1.5} dot={{ r: 3 }} activeDot={{ r: 6 }} opacity={0.6} isAnimationActive={false} />
                                         )}
                                     </LineChart>
                                 </ResponsiveContainer>
