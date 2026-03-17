@@ -329,11 +329,27 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 loss: 'meanSquaredError'
                             });
 
-                            const xsT = tf.tensor2d(xTrain);
+                            // Standardize scaling (Z-Scores) across 194 dimensions to prevent exploding gradients
+                            const means = [];
+                            const stds = [];
+                            for (let col = 0; col < 194; col++) {
+                                let sum = 0;
+                                for (let row = 0; row < xTrain.length; row++) sum += xTrain[row][col];
+                                const mean = sum / xTrain.length;
+                                let sumSq = 0;
+                                for (let row = 0; row < xTrain.length; row++) sumSq += Math.pow(xTrain[row][col] - mean, 2);
+                                const std = Math.sqrt(sumSq / xTrain.length) || 1e-6; // Prevent div by 0
+                                means.push(mean);
+                                stds.push(std);
+                            }
+
+                            const scaleArray = (arr) => arr.map(row => row.map((val, col) => (val - means[col]) / stds[col]));
+
+                            const xsT = tf.tensor2d(scaleArray(xTrain));
                             const ysT = tf.tensor2d(yTrain, [yTrain.length, 1]);
                             let xsV = null, ysV = null;
                             if (xVal.length > 0) {
-                                xsV = tf.tensor2d(xVal);
+                                xsV = tf.tensor2d(scaleArray(xVal));
                                 ysV = tf.tensor2d(yVal, [yVal.length, 1]);
                             }
 
@@ -348,7 +364,7 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                                 }
                             });
 
-                            const finalPreds = model.predict(tf.tensor2d(extractedX)).dataSync();
+                            const finalPreds = model.predict(tf.tensor2d(scaleArray(extractedX))).dataSync();
                             setTfModelRef(model);
 
                             // Calc Validation or Train R^2 Score
