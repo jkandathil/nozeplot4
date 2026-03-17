@@ -319,13 +319,14 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                             const yVal = indices.slice(numTrain).map(i => extractedY[i]);
 
                             const model = tf.sequential();
-                            model.add(tf.layers.dense({ units: 128, activation: 'relu', inputShape: [194] }));
-                            model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
-                            model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-                            model.add(tf.layers.dense({ units: 1 }));
+                            model.add(tf.layers.dense({ units: 128, activation: 'elu', inputShape: [194] }));
+                            model.add(tf.layers.dropout({ rate: 0.1 }));
+                            model.add(tf.layers.dense({ units: 64, activation: 'elu' }));
+                            model.add(tf.layers.dense({ units: 32, activation: 'elu' }));
+                            model.add(tf.layers.dense({ units: 1, activation: 'linear' }));
 
                             model.compile({
-                                optimizer: tf.train.adam(parseFloat(tfLR) || 0.01),
+                                optimizer: tf.train.adam(parseFloat(tfLR) || 0.005),
                                 loss: 'meanSquaredError'
                             });
 
