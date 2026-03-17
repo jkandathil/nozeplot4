@@ -680,8 +680,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#e2e8f0', fontSize: '0.80rem', cursor: 'pointer' }}>
                                 <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'none'} onChange={() => setChronoEnvMetric('none')} style={{ accentColor: '#94a3b8' }} /> None
                             </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0ea5e9', fontSize: '0.80rem', cursor: 'pointer' }}>
-                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'absHumidity'} onChange={() => setChronoEnvMetric('absHumidity')} style={{ accentColor: '#0ea5e9' }} /> Abs. Hum
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#eab308', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'absHumidity'} onChange={() => setChronoEnvMetric('absHumidity')} style={{ accentColor: '#eab308' }} /> Abs. Hum
                             </label>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#10b981', fontSize: '0.80rem', cursor: 'pointer' }}>
                                 <input type="radio" name="chronoEnvMetric" checked={chronoEnvMetric === 'relHumidity'} onChange={() => setChronoEnvMetric('relHumidity')} style={{ accentColor: '#10b981' }} /> Rel. Hum
@@ -751,7 +751,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} hide={true} />
                                     <YAxis yAxisId="left" domain={['auto', 'auto']} stroke="#334155" tick={{ fill: '#38bdf8' }} label={{ value: 'Resistance (Ohms)', angle: -90, position: 'insideLeft', fill: '#38bdf8' }} />
                                     {chronoEnvMetric === 'absHumidity' && (
-                                        <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#0ea5e9" tick={{ fill: '#0ea5e9', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Abs. Humidity (g/m³)', angle: 90, position: 'insideRight', fill: '#0ea5e9' }} />
+                                        <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#eab308" tick={{ fill: '#eab308', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Abs. Humidity (g/m³)', angle: 90, position: 'insideRight', fill: '#eab308' }} />
                                     )}
                                     {chronoEnvMetric === 'relHumidity' && (
                                         <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} stroke="#10b981" tick={{ fill: '#10b981', fontSize: 11 }} tickFormatter={(val) => val.toFixed(1)} label={{ value: 'Rel. Humidity (%)', angle: 90, position: 'insideRight', fill: '#10b981' }} />
@@ -780,7 +780,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     />
                                     <Line yAxisId="left" type="linear" dataKey="all" stroke="#ffffff" strokeWidth={2} strokeDasharray="5 5" opacity={0.65} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} />
                                     {chronoEnvMetric === 'absHumidity' && (
-                                        <Line yAxisId="right" type="monotone" name="Absolute Humidity" dataKey="absHumidity" stroke="#0ea5e9" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
+                                        <Line yAxisId="right" type="monotone" name="Absolute Humidity" dataKey="absHumidity" stroke="#eab308" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
                                     )}
                                     {chronoEnvMetric === 'relHumidity' && (
                                         <Line yAxisId="right" type="monotone" name="Relative Humidity" dataKey="relHumidity" stroke="#10b981" strokeWidth={1} dot={false} isAnimationActive={false} connectNulls={true} activeDot={false} opacity={0.35} />
@@ -996,10 +996,10 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                                                 <YAxis
                                                                     yAxisId="right"
                                                                     orientation="right"
-                                                                    tick={{ fontSize: 10, fill: '#10b981' }}
+                                                                    tick={{ fontSize: 10, fill: '#eab308' }}
                                                                     stroke="#334155"
                                                                     domain={['auto', 'auto']}
-                                                                    label={{ value: 'Absolute Humidity', angle: 90, position: 'insideRight', fill: '#10b981', fontSize: 10 }}
+                                                                    label={{ value: 'Absolute Humidity', angle: 90, position: 'insideRight', fill: '#eab308', fontSize: 10 }}
                                                                 />
 
                                                                 <RechartsTooltip
@@ -1020,7 +1020,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                                                 {/* Lines */}
                                                                 <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
-                                                                <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
+                                                                <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
                                                             </LineChart>
                                                         </ResponsiveContainer>
                                                     </div>
@@ -1065,8 +1065,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#e2e8f0', fontSize: '0.80rem', cursor: 'pointer' }}>
                                         <input type="radio" name="maxPlotEnvMetric" checked={maxPlotEnvMetric === 'none'} onChange={() => setMaxPlotEnvMetric('none')} style={{ accentColor: '#94a3b8' }} /> None
                                     </label>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0ea5e9', fontSize: '0.80rem', cursor: 'pointer' }}>
-                                        <input type="radio" name="maxPlotEnvMetric" checked={maxPlotEnvMetric === 'absHumidity'} onChange={() => setMaxPlotEnvMetric('absHumidity')} style={{ accentColor: '#0ea5e9' }} /> Abs. Hum
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#eab308', fontSize: '0.80rem', cursor: 'pointer' }}>
+                                        <input type="radio" name="maxPlotEnvMetric" checked={maxPlotEnvMetric === 'absHumidity'} onChange={() => setMaxPlotEnvMetric('absHumidity')} style={{ accentColor: '#eab308' }} /> Abs. Hum
                                     </label>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#10b981', fontSize: '0.80rem', cursor: 'pointer' }}>
                                         <input type="radio" name="maxPlotEnvMetric" checked={maxPlotEnvMetric === 'relHumidity'} onChange={() => setMaxPlotEnvMetric('relHumidity')} style={{ accentColor: '#10b981' }} /> Rel. Hum
@@ -1086,7 +1086,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                         <XAxis dataKey="trial" tick={{ fill: '#94a3b8' }} stroke="#334155" />
                                         <YAxis yAxisId="left" tick={{ fill: '#38bdf8' }} stroke="#334155" domain={['auto', 'auto']} label={{ value: 'Baseline Avg (Ohms)', angle: -90, position: 'insideLeft', fill: '#38bdf8' }} />
                                         {maxPlotEnvMetric === 'absHumidity' && (
-                                            <YAxis yAxisId="right" orientation="right" tick={{ fill: '#0ea5e9' }} stroke="#334155" domain={['auto', 'auto']} label={{ value: 'Absolute Humidity (g/m³)', angle: 90, position: 'insideRight', fill: '#0ea5e9' }} />
+                                            <YAxis yAxisId="right" orientation="right" tick={{ fill: '#eab308' }} stroke="#334155" domain={['auto', 'auto']} label={{ value: 'Absolute Humidity (g/m³)', angle: 90, position: 'insideRight', fill: '#eab308' }} />
                                         )}
                                         {maxPlotEnvMetric === 'relHumidity' && (
                                             <YAxis yAxisId="right" orientation="right" tick={{ fill: '#10b981' }} stroke="#334155" domain={['auto', 'auto']} label={{ value: 'Relative Humidity (%)', angle: 90, position: 'insideRight', fill: '#10b981' }} />
@@ -1116,7 +1116,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                         <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
                                         {maxPlotEnvMetric === 'absHumidity' && (
-                                            <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#0ea5e9" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
+                                            <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
                                         )}
                                         {maxPlotEnvMetric === 'relHumidity' && (
                                             <Line yAxisId="right" type="monotone" dataKey="relHumidity" name="Rel. Humidity" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
