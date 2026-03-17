@@ -630,11 +630,28 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     };
 
     if (showChrono) {
+        let chronoDeltaRh = 0;
+        let chronoDeltaTc = 0;
+        if (activeChronoData && activeChronoData.length > 0) {
+            const rhVals = activeChronoData.map(d => d.relHumidity).filter(v => v !== undefined && !isNaN(v));
+            if (rhVals.length > 0) chronoDeltaRh = Math.max(...rhVals) - Math.min(...rhVals);
+
+            const tcVals = activeChronoData.map(d => d.temperature).filter(v => v !== undefined && !isNaN(v));
+            if (tcVals.length > 0) chronoDeltaTc = Math.max(...tcVals) - Math.min(...tcVals);
+        }
+
         return (
             <div className="chrono-fullscreen glass-panel" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, background: '#0f172a', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <div className="modal-header" style={{ padding: '20px', borderBottom: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-                        <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '1.2rem' }}>Chronological Plot</h2>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '1.2rem' }}>Chronological Plot</h2>
+                            {(chronoDeltaRh >= 0 || chronoDeltaTc >= 0) && (
+                                <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>
+                                    ΔRH: {chronoDeltaRh.toFixed(1)}% | ΔT: {chronoDeltaTc.toFixed(1)}°C
+                                </span>
+                            )}
+                        </div>
                         <select value={chronoSensor} onChange={(e) => setChronoSensor(e.target.value)} className="text-input" style={{ width: '150px', padding: '6px' }}>
                             <option value="" disabled>Select Sensor</option>
                             {Object.keys(recoveryResults?.[0]?.sensorPlots || {}).map(s => {
