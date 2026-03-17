@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Brain, Settings2, ScatterChart as ScatterChartIcon, PlayCircle, FileText } from 'lucide-react';
+import { Brain, Settings2, ScatterChart as ScatterChartIcon, PlayCircle, FileText, Download, Loader2 } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList, Cell, ZAxis } from 'recharts';
 import { PCA } from 'ml-pca';
 import { RandomForestRegression as RFRegression, RandomForestClassifier as RFClassifier } from 'ml-random-forest';
 import MultivariateLinearRegression from 'ml-regression-multivariate-linear';
 import { Matrix } from 'ml-matrix';
 import tsnejs from 'tsne';
+import * as tf from '@tensorflow/tfjs';
 import './MLStudioPage.css';
 
 const MLStudioPage = ({ files }) => {
@@ -174,7 +175,14 @@ const MLStudioPage = ({ files }) => {
 
     // Train Predictive Model
     const [modelResults, setModelResults] = useState(null);
-    const [algorithm, setAlgorithm] = useState('RandomForest'); // 'RandomForest' or 'Linear'
+    const [algorithm, setAlgorithm] = useState('RandomForest'); // 'RandomForest' or 'Linear' or 'TensorFlow'
+
+    // TensorFlow Config
+    const [tfEpochs, setTfEpochs] = useState(100);
+    const [tfLR, setTfLR] = useState(0.01);
+    const [tfSplit, setTfSplit] = useState(80);
+    const [tfModelRef, setTfModelRef] = useState(null);
+    const [isTraining, setIsTraining] = useState(false);
 
     const colorPalette = ['#38bdf8', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e'];
     let colorMemo = {};
@@ -188,7 +196,7 @@ const MLStudioPage = ({ files }) => {
         return colorMemo[val];
     };
 
-    const runModelTraining = () => {
+    const runModelTraining = async () => {
         if (allFeatures.length < 3) return;
 
         const featureKeys = ['maxPeak', 'minPeak', 'area', 'baseline', 'stdDev', 'mean'];
@@ -197,6 +205,147 @@ const MLStudioPage = ({ files }) => {
         let Y;
         try {
             if (taskType === 'regression') {
+                if (algorithm === 'TensorFlow') {
+                    setIsTraining(true);
+                    setTimeout(async () => {
+                        try {
+                            const elements = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'E8', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8'];
+
+                            const extractedX = [];
+                            const extractedY = [];
+                            const extractedInfo = [];
+
+                            for (const file of files) {
+                                if (!file.data || file.data.length === 0) continue;
+                                const target = parseFloat(targetMap[file.id]);
+                                if (isNaN(target)) continue;
+
+                                const keys = Object.keys(file.data[0]);
+                                const tCol = keys.find(k => /bt1|aqt0|temperature|^t$/i.test(k));
+                                const hCol = keys.find(k => /aqh0|trhh0|humidity|^h$/i.test(k));
+                                const evCol = keys.find(k => /event|phase/i.test(k));
+                                const elCols = elements.map(el => keys.find(k => RegExp(`^${el}$|^${el}_|_${el}$`, 'i').test(k)));
+
+                                let sumT = 0, countT = 0;
+                                let sumH = 0, countH = 0;
+
+                                const eventsData = {
+                                    'breathsamplecollection': { sums: new Array(64).fill(0), counts: 0 },
+                                    'fenowindow': { sums: new Array(64).fill(0), counts: 0 },
+                                    'fenomeasurement': { sums: new Array(64).fill(0), counts: 0 }
+                                };
+
+                                for (const r of file.data) {
+                                    if (tCol && typeof r[tCol] === 'number') { sumT += r[tCol]; countT++; }
+                                    if (hCol && typeof r[hCol] === 'number') { sumH += r[hCol]; countH++; }
+
+                                    let evName = '';
+                                    if (evCol && r[evCol]) evName = String(r[evCol]).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                                    const tgt = evName.includes('breathsamplecollection') ? eventsData['breathsamplecollection']
+                                        : evName.includes('fenowindow') ? eventsData['fenowindow']
+                                            : evName.includes('fenomeasurement') ? eventsData['fenomeasurement'] : null;
+
+                                    if (tgt) {
+                                        tgt.counts++;
+                                        for (let i = 0; i < 64; i++) {
+                                            const k = elCols[i];
+                                            if (k && typeof r[k] === 'number') tgt.sums[i] += r[k];
+                                        }
+                                    }
+                                }
+
+                                const avgT = countT > 0 ? sumT / countT : 0;
+                                const avgH = countH > 0 ? sumH / countH : 0;
+
+                                const makeMean = (evObj) => evObj.counts > 0 ? evObj.sums.map(s => s / evObj.counts) : new Array(64).fill(0);
+
+                                const featVec = [
+                                    avgT, avgH,
+                                    ...makeMean(eventsData['breathsamplecollection']),
+                                    ...makeMean(eventsData['fenowindow']),
+                                    ...makeMean(eventsData['fenomeasurement'])
+                                ];
+
+                                extractedX.push(featVec);
+                                extractedY.push(target);
+                                extractedInfo.push({ fileName: file.name, actual: target });
+                            }
+
+                            if (extractedX.length < 2) {
+                                alert("Not enough valid files to train TF network securely.");
+                                setIsTraining(false);
+                                return;
+                            }
+
+                            // Shuffle indices
+                            const indices = extractedX.map((_, i) => i);
+                            tf.util.shuffle(indices);
+
+                            // 80/20 split based on slider
+                            const numTrain = Math.floor(extractedX.length * (tfSplit / 100)) || 1;
+
+                            const xTrain = indices.slice(0, numTrain).map(i => extractedX[i]);
+                            const yTrain = indices.slice(0, numTrain).map(i => extractedY[i]);
+                            const xVal = indices.slice(numTrain).map(i => extractedX[i]);
+                            const yVal = indices.slice(numTrain).map(i => extractedY[i]);
+
+                            const model = tf.sequential();
+                            model.add(tf.layers.dense({ units: 128, activation: 'relu', inputShape: [194] }));
+                            model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
+                            model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
+                            model.add(tf.layers.dense({ units: 1 }));
+
+                            model.compile({
+                                optimizer: tf.train.adam(parseFloat(tfLR) || 0.01),
+                                loss: 'meanSquaredError'
+                            });
+
+                            const xsT = tf.tensor2d(xTrain);
+                            const ysT = tf.tensor2d(yTrain, [yTrain.length, 1]);
+                            let xsV = null, ysV = null;
+                            if (xVal.length > 0) {
+                                xsV = tf.tensor2d(xVal);
+                                ysV = tf.tensor2d(yVal, [yVal.length, 1]);
+                            }
+
+                            await model.fit(xsT, ysT, {
+                                epochs: parseInt(tfEpochs) || 50,
+                                validationData: (xsV && ysV) ? [xsV, ysV] : undefined,
+                                shuffle: true
+                            });
+
+                            const finalPreds = model.predict(tf.tensor2d(extractedX)).dataSync();
+                            setTfModelRef(model);
+
+                            // Calc Validation or Train R^2 Score
+                            const evalY = yVal.length > 0 ? yVal : extractedY;
+                            const evalPreds = yVal.length > 0 ? model.predict(xsV).dataSync() : finalPreds;
+
+                            const yMean = evalY.reduce((a, b) => a + b, 0) / evalY.length;
+                            const ssTot = evalY.reduce((a, b) => a + Math.pow(b - yMean, 2), 0);
+                            const ssRes = evalY.reduce((a, b, i) => a + Math.pow(b - evalPreds[i], 2), 0);
+                            const r2 = 1 - (ssRes / (ssTot || 1));
+
+                            setModelResults({
+                                metricName: yVal.length > 0 ? `TensorFlow R² (Val)` : `TensorFlow R² (Train)`,
+                                metricValue: r2.toFixed(3),
+                                plotData: extractedInfo.map((info, i) => ({
+                                    fileName: info.fileName,
+                                    actual: info.actual,
+                                    predicted: finalPreds[i]
+                                }))
+                            });
+
+                        } catch (err) {
+                            console.error("TF error", err);
+                            alert("TensorFlow training failed. Check developer console.");
+                        }
+                        setIsTraining(false);
+                    }, 50);
+                    return;
+                }
+
                 Y = allFeatures.map(f => [parseFloat(targetMap[f.fileId]) || 0]);
 
                 let predictions;
@@ -352,11 +501,46 @@ const MLStudioPage = ({ files }) => {
                         >
                             <option value="RandomForest">Random Forest</option>
                             {taskType === 'regression' && <option value="Linear">Multivariate Linear</option>}
+                            {taskType === 'regression' && <option value="TensorFlow">TensorFlow (Deep Learning)</option>}
                         </select>
                     </div>
 
-                    <button className="btn-primary" onClick={runModelTraining} style={{ marginTop: 8 }} disabled={allFeatures.length < 3}>
-                        <Brain size={16} /> Train Model
+                    {algorithm === 'TensorFlow' && taskType === 'regression' && (
+                        <div style={{ background: 'rgba(0,0,0,0.2)', padding: 12, borderRadius: 8, marginTop: 12 }}>
+                            <div className="form-group" style={{ marginBottom: 12 }}>
+                                <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                    <span>Train / Validation Split</span>
+                                    <span style={{ color: '#38bdf8' }}>{tfSplit}% / {100 - tfSplit}%</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min="50" max="95"
+                                    value={tfSplit}
+                                    onChange={e => setTfSplit(e.target.value)}
+                                    style={{ width: '100%', accentColor: '#38bdf8' }}
+                                />
+                                <small style={{ color: 'var(--text-muted)' }}>TF vector merges Global Avg T/H and maps the full means of 64 sensing arrays per analytical phase (194 dense features).</small>
+                            </div>
+                            <div className="form-group-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                <div>
+                                    <label>Epochs</label>
+                                    <input type="number" className="text-input" value={tfEpochs} onChange={e => setTfEpochs(e.target.value)} />
+                                </div>
+                                <div>
+                                    <label>Learning Rate</label>
+                                    <input type="number" step="0.001" className="text-input" value={tfLR} onChange={e => setTfLR(e.target.value)} />
+                                </div>
+                            </div>
+                            {tfModelRef && (
+                                <button className="btn-secondary" style={{ width: '100%', marginTop: 12 }} onClick={() => tfModelRef.save('downloads://noze-regression-model')}>
+                                    <Download size={14} /> Download Model
+                                </button>
+                            )}
+                        </div>
+                    )}
+
+                    <button className="btn-primary" onClick={runModelTraining} style={{ marginTop: 12 }} disabled={allFeatures.length < 3 || isTraining}>
+                        {isTraining ? <Loader2 className="spinner" size={16} /> : <Brain size={16} />} Train Model
                     </button>
                 </div>
             </aside>
