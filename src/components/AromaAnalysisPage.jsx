@@ -396,7 +396,6 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const [fenoTruncateSeconds, setFenoTruncateSeconds] = useState(0);
     const [filterUnknown, setFilterUnknown] = useState(true);
     const [separateByUnit, setSeparateByUnit] = useState(false);
-    const [mergePpbs, setMergePpbs] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [gapStart, setGapStart] = useState('');
     const [gapEnd, setGapEnd] = useState('');
@@ -670,8 +669,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     filterUnknownVal: filterUnknown,
                     referenceLines: refLines,
                     auIdVal: finalAuIdVal,
-                    separateByUnitVal: separateByUnit,
-                    mergePpbsVal: mergePpbs
+                    separateByUnitVal: separateByUnit
                 });
 
             } catch (err) {
@@ -685,9 +683,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const channelPlotsData = useMemo(() => {
         if (!processedBatch || processedBatch.files.length === 0) return null;
 
-        const { files, sensingPrefixes, tCodes, hCodes, gapStartVal, gapEndVal, filterUnknownVal, referenceLines, auIdVal, separateByUnitVal, mergePpbsVal } = processedBatch;
+        const { files, sensingPrefixes, tCodes, hCodes, gapStartVal, gapEndVal, filterUnknownVal, referenceLines, auIdVal, separateByUnitVal } = processedBatch;
 
-        const auIdSuffix = auIdVal && auIdVal !== 'Unknown AU' && !separateByUnitVal && !mergePpbsVal ? ` (${auIdVal})` : '';
+        const auIdSuffix = auIdVal && auIdVal !== 'Unknown AU' && !separateByUnitVal ? ` (${auIdVal})` : '';
 
         // Plot container config variables
         const plots = [];
@@ -697,10 +695,6 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
             const basename = name.split(/[/\\]/).pop();
             const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
             let conc = m ? `${parseFloat(m[1])} ppb` : 'Unknown';
-
-            if (mergePpbsVal && conc !== 'Unknown') {
-                return 'All Concentrated PPBs';
-            }
 
             if (separateByUnitVal && !ignoreAu && conc !== 'Unknown') {
                 const fileParts = basename.split('_');
@@ -1155,7 +1149,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         </div>
                     </div>
 
-                    <div className="form-group" style={{ display: 'grid', gridTemplateColumns: 'min-content min-content min-content min-content', gap: '10px 16px', background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', marginBottom: '16px', whiteSpace: 'nowrap' }}>
+                    <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', marginBottom: '16px', whiteSpace: 'nowrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <input
                                 type="checkbox"
@@ -1178,24 +1172,25 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <input
-                                type="checkbox"
-                                checked={separateByUnit}
-                                onChange={(e) => setSeparateByUnit(e.target.checked)}
-                                id="separate-unit-chk"
+                                type="radio"
+                                checked={!separateByUnit}
+                                onChange={() => setSeparateByUnit(false)}
+                                name="auGroupMode"
+                                id="au-group-merge"
                                 style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
-                                disabled={mergePpbs}
                             />
-                            <label htmlFor="separate-unit-chk" style={{ margin: 0, cursor: mergePpbs ? 'not-allowed' : 'pointer', fontSize: '0.8rem', color: mergePpbs ? '#64748b' : '#38bdf8' }}>Split by AU ID</label>
+                            <label htmlFor="au-group-merge" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem', color: !separateByUnit ? '#38bdf8' : '#94a3b8' }}>Merge AUs / Calculate Average</label>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <input
-                                type="checkbox"
-                                checked={mergePpbs}
-                                onChange={(e) => setMergePpbs(e.target.checked)}
-                                id="merge-ppbs-chk"
+                                type="radio"
+                                checked={separateByUnit}
+                                onChange={() => setSeparateByUnit(true)}
+                                name="auGroupMode"
+                                id="au-group-split"
                                 style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
                             />
-                            <label htmlFor="merge-ppbs-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem', color: '#38bdf8' }}>Merge All PPBs</label>
+                            <label htmlFor="au-group-split" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem', color: separateByUnit ? '#38bdf8' : '#94a3b8' }}>Split AUs / Render Individual</label>
                         </div>
                         <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between', marginTop: '4px' }}>
                             <label style={{ fontSize: '0.8rem', margin: 0 }}>Cut FeNO tail (secs):</label>
