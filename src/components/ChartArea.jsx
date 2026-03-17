@@ -83,6 +83,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, onCompareSelect, compareFileIds }) => {
     const [viewMode, setViewMode] = useState('grid');
     const [focusSeries, setFocusSeries] = useState(null);
+    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
 
     // Index-based zoom: controls Brush startIndex/endIndex.
     const [brushStartIdx, setBrushStartIdx] = useState(0);
@@ -99,21 +100,29 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     const { seriesKeys: mainSeriesKeys, xKey, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
 
+        let processedData = data;
         const keys = Object.keys(data[0]);
+        const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+        if (removeRecoveryEvents && eventCol) {
+            processedData = data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+        }
+
+        if (!processedData || processedData.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
+
         const potentialX = keys.find(k => {
             const low = k.toLowerCase();
             return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
         });
 
         if (potentialX) {
-            const series = keys.filter(k => k !== potentialX && typeof data[0][k] === 'number');
-            return { seriesKeys: series, xKey: potentialX, chartData: data };
+            const series = keys.filter(k => k !== potentialX && typeof processedData[0][k] === 'number');
+            return { seriesKeys: series, xKey: potentialX, chartData: processedData };
         }
         // No date/time: use index 1, 2, 3...
-        const series = keys.filter(k => typeof data[0][k] === 'number');
-        const chartDataWithIndex = data.map((row, i) => ({ ...row, index: i + 1 }));
+        const series = keys.filter(k => typeof processedData[0][k] === 'number');
+        const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { seriesKeys: series, xKey: 'index', chartData: chartDataWithIndex };
-    }, [data]);
+    }, [data, removeRecoveryEvents]);
 
     // Compute UNION of all series keys (Main + Comparisons)
     // This ensures we show variables that might only exist in comparison files
@@ -170,13 +179,21 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
             const lookup = {};
             if (!c.data || c.data.length === 0) return { lookup, compXKey: null, data: [] };
 
+            let processedCompData = c.data;
             const keys = Object.keys(c.data[0]);
+            const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+            if (removeRecoveryEvents && eventCol) {
+                processedCompData = c.data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+            }
+
+            if (!processedCompData || processedCompData.length === 0) return { lookup, compXKey: null, data: [] };
+
             const compTimeCol = keys.find(k => {
                 const low = k.toLowerCase();
                 return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
             });
             const compXKey = compTimeCol || 'index';
-            const compData = compTimeCol ? c.data : c.data.map((row, i) => ({ ...row, index: i + 1 }));
+            const compData = compTimeCol ? processedCompData : processedCompData.map((row, i) => ({ ...row, index: i + 1 }));
 
             compData.forEach((row, i) => {
                 const xVal = compTimeCol ? row[compTimeCol] : i + 1;
@@ -235,7 +252,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         return merged;
     }, [chartData, compareDataList, xKey]);
 
-    /* Dashboard shows raw data only. Use Normalize tab for filtering and baseline normalization. */
+    // Dashboard shows basic merged data (recovery filtering applied beforehand, dynamically recalculates)
     const processedChartData = rawProcessedData;
 
     // Optimize Grid View: Downsample data to ~200 points for smooth scrolling
@@ -502,6 +519,18 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     >
                         <Square size={20} />
                     </button>
+
+                    <div className="separator" />
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.75rem', color: '#94a3b8' }} title="Remove Recovery Phase data from visualization">
+                        <input
+                            type="checkbox"
+                            checked={removeRecoveryEvents}
+                            onChange={(e) => setRemoveRecoveryEvents(e.target.checked)}
+                            style={{ accentColor: '#38bdf8', cursor: 'pointer', margin: 0, width: 14, height: 14 }}
+                        />
+                        Remove Recovery
+                    </label>
 
                     <div className="separator" />
 

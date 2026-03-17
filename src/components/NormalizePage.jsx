@@ -50,9 +50,47 @@ function shortName(fileName = '') {
     return fileName.replace(/\.[^/.]+$/, '').slice(0, 12);
 }
 
+function extractConcentration(fileName = '') {
+    if (!fileName) return null;
+    const basename = fileName.split(/[/\\]/).pop();
+    // Prioritize 'ppb' since that differs per file in these sets
+    let match = basename.match(/(\d+(?:\.\d+)?)\s*ppb/i);
+    if (!match) match = basename.match(/(\d+(?:\.\d+)?)\s*ppm/i);
+    if (match) {
+        return match[0].trim();
+    }
+    return null;
+}
+
+function getLineLabel(fileName, key) {
+    const conc = extractConcentration(fileName);
+    if (conc) return `${conc} - ${key}`;
+    return `${shortName(fileName)} - ${key}`;
+}
+
 /* ── Custom tooltip ────────────────────────────────────────────────── */
 const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
     if (!active || !payload || !payload.length) return null;
+
+    // Find event name from original row, if available
+    let eventNameValue = null;
+    if (payload[0] && payload[0].payload) {
+        const row = payload[0].payload;
+        // Search columns commonly used for event labels
+        const eventKey = Object.keys(row).find(k => {
+            const str = k.toLowerCase();
+            return str === 'event' || str.includes('event_name') || str.includes('phase') || str.includes('mode') || str.includes('annotation');
+        });
+
+        if (eventKey && row[eventKey] !== undefined && row[eventKey] !== null) {
+            let val = String(row[eventKey]).trim();
+            // Prevent massive raw JSON dumps from bleeding into the UI badge
+            if (!val.startsWith('{') && val.length < 45 && val !== '') {
+                eventNameValue = val;
+            }
+        }
+    }
+
     return (
         <div style={{
             background: 'rgba(15,23,42,0.05)',
@@ -69,9 +107,12 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
             maxWidth: 320,
             zIndex: 50
         }}>
-            <p style={{ color: '#94a3b8', marginBottom: 6, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.07)', paddingBottom: 4 }}>
-                {String(label)}
-            </p>
+            <div style={{ color: '#94a3b8', marginBottom: 6, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.07)', paddingBottom: 4, display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span>{String(label)}</span>
+                {eventNameValue && (
+                    <span style={{ color: '#10b981' }}>{eventNameValue}</span>
+                )}
+            </div>
             {payload.map((entry, i) => {
                 // Remove the cmpX_ prefix from the tooltip name for clean display
                 let displayName = entry.name;
@@ -98,35 +139,58 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
 
 /* ── Main component ────────────────────────────────────────────────── */
 const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
+    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
 
     /* ── 1. Prepare Main Data ── */
     const { xKey, seriesKeys, chartData } = useMemo(() => {
         if (!data || data.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
-        const x = detectXKey(data[0]);
-        if (x) {
-            const series = Object.keys(data[0]).filter(k => k !== x && typeof data[0][k] === 'number');
-            return { xKey: x, seriesKeys: series, chartData: data };
+
+        // Filter out recovery phase if checked
+        let processedData = data;
+        const keys = Object.keys(data[0]);
+        const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+        if (removeRecoveryEvents && eventCol) {
+            processedData = data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
         }
-        const series = Object.keys(data[0]).filter(k => typeof data[0][k] === 'number');
-        const chartDataWithIndex = data.map((row, i) => ({ ...row, index: i + 1 }));
+
+        if (!processedData || processedData.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
+
+        const x = detectXKey(processedData[0]);
+        if (x) {
+            const series = Object.keys(processedData[0]).filter(k => k !== x && typeof processedData[0][k] === 'number');
+            return { xKey: x, seriesKeys: series, chartData: processedData };
+        }
+        const series = Object.keys(processedData[0]).filter(k => typeof processedData[0][k] === 'number');
+        const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { xKey: 'index', seriesKeys: series, chartData: chartDataWithIndex };
-    }, [data]);
+    }, [data, removeRecoveryEvents]);
 
     /* ── 2. Prepare Compare Data List ── */
     const cmpFiles = useMemo(() => {
         if (!compareDataList || compareDataList.length === 0) return [];
         return compareDataList.map((file, idx) => {
             if (!file?.data || file.data.length === 0) return null;
-            const x = detectXKey(file.data[0]);
-            if (x) {
-                const series = Object.keys(file.data[0]).filter(k => k !== x && typeof file.data[0][k] === 'number');
-                return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: x, seriesKeys: series, data: file.data };
+
+            // Filter out recovery phase if checked
+            let processedData = file.data;
+            const keys = Object.keys(file.data[0]);
+            const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+            if (removeRecoveryEvents && eventCol) {
+                processedData = file.data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
             }
-            const series = Object.keys(file.data[0]).filter(k => typeof file.data[0][k] === 'number');
-            const dataWithIndex = file.data.map((row, i) => ({ ...row, index: i + 1 }));
+
+            if (!processedData || processedData.length === 0) return null;
+
+            const x = detectXKey(processedData[0]);
+            if (x) {
+                const series = Object.keys(processedData[0]).filter(k => k !== x && typeof processedData[0][k] === 'number');
+                return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: x, seriesKeys: series, data: processedData };
+            }
+            const series = Object.keys(processedData[0]).filter(k => typeof processedData[0][k] === 'number');
+            const dataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
             return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: 'index', seriesKeys: series, data: dataWithIndex };
         }).filter(Boolean);
-    }, [compareDataList]);
+    }, [compareDataList, removeRecoveryEvents]);
 
     const hasCompare = cmpFiles.length > 0;
 
@@ -175,8 +239,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
             // Main file data
             if (i < chartData.length) {
-                row[xKey] = chartData[i][xKey];
-                seriesKeys.forEach(k => { row[k] = chartData[i][k]; });
+                Object.assign(row, chartData[i]);
             } else {
                 row[xKey] = xKey === 'index' ? i + 1 : i;
                 seriesKeys.forEach(k => { row[k] = null; });
@@ -229,10 +292,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                     common = seriesKeys.filter(k => allSets.every(s => s.has(k)));
                 }
 
-                // If common columns exist, select up to 4 of them for ALL files
+                // If common columns exist, select only 1 of them for ALL files by default
                 if (common.length > 0) {
                     const initial = [];
-                    const cols = common.slice(0, 4);
+                    const cols = common.slice(0, 1);
                     cols.forEach(c => {
                         initial.push(c); // Main
                         cmpFiles.forEach((f, idx) => {
@@ -245,7 +308,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                     return initial;
                 } else {
                     // Fallback: Just main file keys
-                    return seriesKeys.slice(0, 5);
+                    return seriesKeys.slice(0, 1);
                 }
             } else {
                 // Preserve previous selections and fold in any new comparison file's equivalents
@@ -485,7 +548,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         setBaselineLeft(null); setBaselineRight(null);
         setIsDragging(false); setDragRight('');
         setBrushStartIdx(0); setBrushEndIdx(null);
-    }, [data, fileName, compareDataList]);
+    }, [data, fileName]); // removed compareDataList to preserve baseline across comparison toggles
 
     const baselineRange = useMemo(() => {
         if (!baselineLeft || !baselineRight || !filteredData.length) return null;
@@ -512,7 +575,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const displayData = useMemo(() => {
         if (!baselineAvgs) return filteredData;
         return filteredData.map(row => {
-            const out = { [xKey]: row[xKey] };
+            const out = { ...row };
             allDisplayKeys.forEach(key => {
                 const avg = baselineAvgs[key];
                 const val = row[key];
@@ -658,6 +721,17 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                         )}
                     </div>
 
+                    <div style={{ display: 'flex', alignItems: 'center', marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.75rem', color: '#94a3b8' }} title="Remove Recovery Phase data from visualization">
+                            <input
+                                type="checkbox"
+                                checked={removeRecoveryEvents}
+                                onChange={(e) => setRemoveRecoveryEvents(e.target.checked)}
+                                style={{ accentColor: '#fbbf24', cursor: 'pointer', margin: 0, width: 14, height: 14 }}
+                            />
+                            Remove Recovery
+                        </label>
+                    </div>
 
                 </div>
 
@@ -781,7 +855,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                             {/* Main Lines */}
                             {seriesKeys.filter(k => visibleSeries.includes(k)).map((key, i) => (
                                 <Line key={key} type="monotone" dataKey={key} stroke={PALETTE[0]} strokeWidth={2} dot={false}
-                                    activeDot={{ r: 4 }} name={`${shortName(fileName)}: ${key}`} isAnimationActive={false} connectNulls />
+                                    activeDot={{ r: 4 }} name={getLineLabel(fileName, key)} isAnimationActive={false} connectNulls />
                             ))}
 
                             {/* Compare Lines */}
@@ -795,7 +869,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                                         <Line key={prefixMap[key]} type="monotone" dataKey={prefixMap[key]}
                                             stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4 }}
                                             strokeDasharray={style.strokeDasharray}
-                                            name={`${f.shortName}: ${key}`} isAnimationActive={false} connectNulls />
+                                            name={getLineLabel(f.fileName, key)} isAnimationActive={false} connectNulls />
                                     ));
                             })}
                         </LineChart>

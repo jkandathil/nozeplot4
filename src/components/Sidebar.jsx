@@ -2,12 +2,12 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers
 } from 'lucide-react';
 import './Sidebar.css';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteAllFiles, onSelectAll, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
@@ -59,6 +59,20 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         });
         setHoveredFile(file);
     };
+
+    const activeAUs = React.useMemo(() => {
+        const groups = {};
+        for (const f of files) {
+            // Ensure we strictly extract the ASAU ID from the CSV filename itself, not its parent folder paths
+            const baseName = f.name.split('/').pop().split('\\').pop();
+            const fileParts = baseName.split('_');
+            const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
+            const auId = asauPart ? asauPart.toUpperCase() : 'UNKNOWN_AU';
+            if (!groups[auId]) groups[auId] = [];
+            groups[auId].push(f);
+        }
+        return groups;
+    }, [files]);
 
     return (
         <aside className="sidebar" style={{ width: sidebarWidth, position: 'relative' }}>
@@ -184,6 +198,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <LineChart size={14} /> Aroma
                 </button>
                 <button
+                    onClick={() => onPageChange?.('recoveryAnalysis')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'recoveryAnalysis' ? 'rgba(245,158,11,0.15)' : 'transparent',
+                        color: activePage === 'recoveryAnalysis' ? '#f59e0b' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Chronological Baseline Recovery & Drift Tracker"
+                >
+                    <Activity size={14} /> Drift Map
+                </button>
+                <button
                     onClick={() => onPageChange?.('csvPlotter')}
                     style={{
                         flex: '1 1 40%',
@@ -204,6 +240,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="SE Analysis from Custom CSV Data"
                 >
                     <FileSpreadsheet size={14} /> SE Analysis
+                </button>
+                <button
+                    onClick={() => onPageChange?.('manufacturing')}
+                    style={{
+                        flex: '1 1 100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'manufacturing' ? 'rgba(244,63,94,0.15)' : 'transparent',
+                        color: activePage === 'manufacturing' ? '#f43f5e' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Manufacturing Variation and Yield Analysis"
+                >
+                    <Layers size={14} /> Mfg. Variation
                 </button>
             </div>
 
@@ -299,16 +357,16 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             </div>
 
             <div className="upload-section">
-                <button className="btn-primary upload-btn" onClick={handleUploadClick}>
-                    <FileText className="icon" size={18} />
-                    <span>Upload Files</span>
+                <button className="btn-primary upload-btn" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }} onClick={handleFolderUploadClick}>
+                    <Folder className="icon" size={18} />
+                    <span>Upload Folder</span>
                 </button>
                 <button
                     className="btn-secondary upload-btn-folder"
-                    onClick={handleFolderUploadClick}
-                    title="Upload Folder"
+                    onClick={handleUploadClick}
+                    title="Upload Files"
                 >
-                    <Folder className="icon" size={18} color="#38bdf8" />
+                    <FileText className="icon" size={18} color="#94a3b8" />
                 </button>
                 <input
                     type="file"
@@ -395,6 +453,76 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         )}
                     </div>
                 </div>
+
+                {Object.keys(activeAUs).length > 0 && (
+                    <div style={{ marginBottom: '16px', padding: '10px', background: 'rgba(56, 189, 248, 0.08)', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.15)' }}>
+                        <span style={{ fontSize: '0.65rem', color: '#38bdf8', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Available AU Devices</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {Object.keys(activeAUs).map(auId => {
+                                const auFiles = activeAUs[auId];
+                                const auFileIds = auFiles.map(f => f.id);
+                                // Check if ALL files in this AU are currently selected
+                                const isAllSelected = auFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+
+                                return (
+                                    <div key={auId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', margin: 0 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={isAllSelected}
+                                                onChange={(e) => {
+                                                    if (!onSelectFiles) return;
+                                                    const currentSelected = [selectedFileId, ...(compareFileIds || [])].filter(Boolean);
+                                                    if (e.target.checked) {
+                                                        // Select all files in this AU (union)
+                                                        const newSelected = Array.from(new Set([...currentSelected, ...auFileIds]));
+                                                        onSelectFiles(newSelected);
+                                                    } else {
+                                                        // Deselect all files in this AU
+                                                        const newSelected = currentSelected.filter(id => !auFileIds.includes(id));
+                                                        onSelectFiles(newSelected);
+                                                    }
+                                                }}
+                                                style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
+                                            />
+                                            <span style={{ fontSize: '0.75rem', color: '#f8fafc', fontWeight: 500 }}>{auId}</span>
+                                        </label>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>({auFiles.length})</span>
+                                            {onDeleteFiles && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (window.confirm(`Are you sure you want to delete all ${auFiles.length} files from ${auId}?`)) {
+                                                            onDeleteFiles(e, auFileIds);
+                                                        }
+                                                    }}
+                                                    title={`Delete all ${auId} files`}
+                                                    style={{
+                                                        background: 'transparent',
+                                                        border: 'none',
+                                                        color: '#ef4444',
+                                                        cursor: 'pointer',
+                                                        padding: '2px',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        borderRadius: '4px',
+                                                        transition: 'background 0.2s',
+                                                    }}
+                                                    onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                                                    onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
                 {files.length === 0 ? (
                     <div className="empty-files">
                         <p>No files uploaded</p>

@@ -21,6 +21,8 @@ import ChartArea from './components/ChartArea';
 import EmptyState from './components/EmptyState';
 import NormalizePage from './components/NormalizePage';
 import AromaAnalysisPage from './components/AromaAnalysisPage';
+import RecoveryAnalysisPage from './components/RecoveryAnalysisPage';
+import ManufacturingVariationPage from './components/ManufacturingVariationPage';
 import CSVPlotterPage from './components/CSVPlotterPage';
 import GasDilutionMathPage from './components/GasDilutionMathPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
@@ -154,6 +156,7 @@ function App() {
             });
 
             resolve({
+              id: fileObj.id,
               fileName: fileObj.name, // This is now the relative path if uploaded from a folder
               data: jsonData,
               meta: { fields: jsonData.length > 0 ? Object.keys(jsonData[0]) : [] }
@@ -171,6 +174,7 @@ function App() {
           skipEmptyLines: true,
           complete: (results) => {
             resolve({
+              id: fileObj.id,
               fileName: fileObj.name,  // This is now the relative path if uploaded from a folder
               data: results.data,
               meta: results.meta
@@ -313,6 +317,23 @@ function App() {
     }
   };
 
+  const handleSelectFiles = async (fileIdsToSelect) => {
+    if (!fileIdsToSelect || fileIdsToSelect.length === 0) {
+      handleCompareSelect([]);
+      setSelectedFileId(null);
+      setParsedData(null);
+      return;
+    }
+
+    const mainId = fileIdsToSelect[0];
+    const compareIds = fileIdsToSelect.slice(1);
+
+    if (mainId !== selectedFileId) {
+      await handleFileSelect(mainId, false);
+    }
+    handleCompareSelect(compareIds);
+  };
+
   const deleteFile = async (e, fileId) => {
     e.stopPropagation();
 
@@ -329,6 +350,34 @@ function App() {
     if (selectedFileId === fileId) {
       setSelectedFileId(null);
       setParsedData(null);
+    }
+    if (compareFileIds.includes(fileId)) {
+      setCompareFileIds(prev => prev.filter(id => id !== fileId));
+      setCompareDataList(prev => prev.filter(data => data.id !== fileId));
+    }
+  };
+
+  const deleteFiles = async (e, fileIds) => {
+    e.stopPropagation();
+
+    // Remove from DB via loop (or if fileManager supports bulk)
+    try {
+      await Promise.all(fileIds.map(id => fileManager.deleteFile(id)));
+    } catch (error) {
+      console.error("Failed to delete files from storage:", error);
+    }
+
+    setFiles(prev => prev.filter(f => !fileIds.includes(f.id)));
+
+    // Clear selections if they overlap
+    if (fileIds.includes(selectedFileId)) {
+      setSelectedFileId(null);
+      setParsedData(null);
+    }
+    const overlappingCompare = compareFileIds.filter(id => fileIds.includes(id));
+    if (overlappingCompare.length > 0) {
+      setCompareFileIds(prev => prev.filter(id => !fileIds.includes(id)));
+      setCompareDataList(prev => prev.filter(data => !fileIds.includes(data.id)));
     }
   };
 
@@ -367,8 +416,10 @@ function App() {
         compareFileIds={compareFileIds}
         onUpload={handleManualUpload}
         onDeleteFile={deleteFile}
+        onDeleteFiles={deleteFiles}
         onDeleteAllFiles={deleteAllFiles}
         onSelectAll={handleSelectAll}
+        onSelectFiles={handleSelectFiles}
         userName={userName}
         activePage={activePage}
         onPageChange={setActivePage}
@@ -394,6 +445,22 @@ function App() {
             ) : activePage === 'aromaAnalysis' ? (
               <AromaAnalysisPage
                 key="aromaAnalysis"
+                data={parsedData?.data}
+                fileName={parsedData?.fileName}
+                compareDataList={compareDataList}
+                availableFiles={files}
+              />
+            ) : activePage === 'recoveryAnalysis' ? (
+              <RecoveryAnalysisPage
+                key="recoveryAnalysis"
+                data={parsedData?.data}
+                fileName={parsedData?.fileName}
+                compareDataList={compareDataList}
+                availableFiles={files}
+              />
+            ) : activePage === 'manufacturing' ? (
+              <ManufacturingVariationPage
+                key="manufacturing"
                 data={parsedData?.data}
                 fileName={parsedData?.fileName}
                 compareDataList={compareDataList}
