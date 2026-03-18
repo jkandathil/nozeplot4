@@ -633,7 +633,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 <div className="file-details">
                                     <span className="file-name">{file.name}</span>
                                     <span className="file-meta">
-                                        {(file.file.size / 1024).toFixed(1)} KB
+                                        {((file.file?.size || file.size || 0) / 1024).toFixed(1)} KB
                                     </span>
                                 </div>
                                 <button
