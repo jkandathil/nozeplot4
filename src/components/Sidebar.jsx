@@ -244,7 +244,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <button
                     onClick={() => onPageChange?.('manufacturing')}
                     style={{
-                        flex: '1 1 100%',
+                        flex: '1 1 40%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
