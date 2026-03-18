@@ -374,10 +374,11 @@ function App() {
       setSelectedFileId(null);
       setParsedData(null);
     }
-    const overlappingCompare = compareFileIds.filter(id => fileIds.includes(id));
+    const safeCompareIds = compareFileIds || [];
+    const overlappingCompare = safeCompareIds.filter(id => fileIds.includes(id));
     if (overlappingCompare.length > 0) {
-      setCompareFileIds(prev => prev.filter(id => !fileIds.includes(id)));
-      setCompareDataList(prev => prev.filter(data => !fileIds.includes(data.id)));
+      setCompareFileIds(prev => (prev || []).filter(id => !fileIds.includes(id)));
+      setCompareDataList(prev => (prev || []).filter(data => !fileIds.includes(data.id)));
     }
   };
 

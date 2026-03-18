@@ -523,6 +523,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                             {onDeleteFiles && (
                                                 <button
                                                     onClick={(e) => {
+                                                        e.preventDefault();
                                                         e.stopPropagation();
                                                         if (window.confirm(`Are you sure you want to delete all ${auFiles.length} files from ${auId}?`)) {
                                                             onDeleteFiles(e, auFileIds);
@@ -611,6 +612,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 <button
                                     className="delete-file-btn"
                                     onClick={(e) => {
+                                        e.preventDefault();
                                         e.stopPropagation();
                                         if (onDeleteFile) onDeleteFile(e, file.id);
                                     }}
