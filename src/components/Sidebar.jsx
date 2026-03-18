@@ -319,7 +319,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <button
                     onClick={() => setIsCalculatorOpen(!isCalculatorOpen)}
                     style={{
-                        gridColumn: '1 / -1',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -336,12 +335,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     }}
                     title="Popup Calculator"
                 >
-                    <CalcIcon size={14} /> Calculator
+                    <CalcIcon size={18} />
                 </button>
                 <button
                     onClick={() => onPageChange?.('mlStudio')}
                     style={{
-                        gridColumn: '1 / -1',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -359,7 +357,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     }}
                     title="Machine Learning & Prediction"
                 >
-                    <Brain size={14} /> ML Studio
+                    <Brain size={18} />
                 </button>
             </div>
 
