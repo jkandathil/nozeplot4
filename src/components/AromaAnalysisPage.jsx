@@ -394,7 +394,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
     const [baselinePts, setBaselinePts] = useState(50); // Default to 50pts for Automatic Normalization
     const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
     const [fenoTruncateSeconds, setFenoTruncateSeconds] = useState(0);
-    const [filterUnknown, setFilterUnknown] = useState(true);
+    const [filterUnknown, setFilterUnknown] = useState(false);
     const [separateByUnit, setSeparateByUnit] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [gapStart, setGapStart] = useState('');
@@ -1242,32 +1242,15 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         <small style={{ color: 'var(--text-muted)' }}>Note: Add comparison files via Dashboard to batch process them together.</small>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        {(!data && compareDataList.length === 0) && (
-                            <div style={{
-                                padding: '10px 14px',
-                                background: 'rgba(239, 68, 68, 0.15)',
-                                border: '1px solid rgba(239, 68, 68, 0.5)',
-                                borderRadius: '6px',
-                                color: '#fca5a5',
-                                fontSize: '0.85rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px'
-                            }}>
-                                <strong style={{ minWidth: 'max-content' }}>⚠️ Warning:</strong> Please check at least 1 file from the Workspace sidebar!
-                            </div>
-                        )}
-                        <button
-                            className="btn-primary process-btn"
-                            onClick={handleProcessBatch}
-                            disabled={isProcessing || (!data && compareDataList.length === 0)}
-                            style={(!data && compareDataList.length === 0) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                        >
-                            {isProcessing ? <RefreshCw className="spinner" size={16} /> : <Play size={16} />}
-                            {isProcessing ? 'Processing Batch...' : 'Run Pipeline & Plot'}
-                        </button>
-                    </div>
+                    <button
+                        className="btn-primary process-btn"
+                        onClick={handleProcessBatch}
+                        disabled={isProcessing || (!data && compareDataList.length === 0)}
+                        style={(!data && compareDataList.length === 0) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                    >
+                        {isProcessing ? <RefreshCw className="spinner" size={16} /> : <Play size={16} />}
+                        {isProcessing ? 'Processing Batch...' : 'Run Pipeline & Plot'}
+                    </button>
                 </div>
 
                 <div className="results-panel">
