@@ -2,15 +2,16 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp
 } from 'lucide-react';
 import './Sidebar.css';
-import { exportWorkspaceSession } from '../utils/fileSaver';
+import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
+    const nozeInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [sidebarWidth, setSidebarWidth] = useState(250);
 
@@ -391,6 +392,27 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     multiple
                     onChange={onUpload}
                 />
+                <input
+                    type="file"
+                    accept=".noze"
+                    style={{ display: 'none' }}
+                    ref={nozeInputRef}
+                    onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                            const read = new FileReader();
+                            read.onload = async (e) => {
+                                const restoredAppState = await importWorkspaceSession(e.target.result);
+                                alert("Workspace restored successfully! Press OK to refresh the window to safely inject datasets.");
+                                window.location.reload();
+                            };
+                            read.readAsText(file);
+                        } catch (err) {
+                            alert("Failed to restore NOZE workspace.");
+                        }
+                    }}
+                />
             </div>
 
             {files.length > 0 && (
@@ -410,6 +432,20 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <h3 className="section-title" style={{ margin: 0, fontSize: '0.65rem', fontWeight: 600 }}>Workspace ({files.length})</h3>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {/* Session Restore Button */}
+                        <button
+                            onClick={(e) => { e.stopPropagation(); nozeInputRef.current?.click(); }}
+                            title="Restore Workspace Session (.noze)"
+                            style={{
+                                background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px',
+                                transition: 'background 0.2s', opacity: 0.8
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(168, 85, 247, 0.15)'}
+                            onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                        >
+                            <MonitorUp size={16} color="#a855f7" strokeWidth={2} />
+                        </button>
                         {/* Session Export Button */}
                         {files.length > 0 && (
                             <button

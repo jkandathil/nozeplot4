@@ -1,5 +1,29 @@
 import { saveAs } from 'file-saver';
-import { fileManager } from './db'; // assuming the db logic exists
+import { fileManager } from './db';
+
+const convertFileToBase64 = (fileObj) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+        if (fileObj instanceof File || fileObj instanceof Blob) {
+            reader.readAsDataURL(fileObj);
+        } else {
+            resolve(null);
+        }
+    });
+};
+
+export const base64ToFile = (base64String, filename, mimeType) => {
+    const arr = base64String.split(',');
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mimeType });
+};
 
 /**
  * Serializes the current workspace state (files, selections, parameters)
@@ -10,6 +34,17 @@ export const exportWorkspaceSession = async (currentAppState) => {
         // Fetch raw file metadata/content from IndexedDB
         const allSavedFiles = await fileManager.getAllFiles();
 
+        const serializedFiles = await Promise.all(allSavedFiles.map(async f => {
+            const base64Data = f.file ? await convertFileToBase64(f.file) : null;
+            return {
+                id: f.id,
+                name: f.name,
+                type: f.type,
+                base64: base64Data,
+                size: f.size
+            };
+        }));
+
         // Construct the Workspace snapshot
         const sessionPayload = {
             version: "1.0",
@@ -18,16 +53,8 @@ export const exportWorkspaceSession = async (currentAppState) => {
                 selectedFileId: currentAppState.selectedFileId,
                 compareFileIds: currentAppState.compareFileIds,
                 activePage: currentAppState.activePage,
-                // you can push normalization offsets or ML parameters here implicitly if held in App.jsx
             },
-            files: allSavedFiles.map(f => ({
-                id: f.id,
-                name: f.name,
-                type: f.type,
-                // we'll need to somehow serialize the raw File object to base64 or construct if needed,
-                // but for massive CSVs, just passing the text/binary array buffer might be optimal.
-                // For simplicity, we assume we extract file mapping.
-            }))
+            files: serializedFiles
         };
 
         const blob = new Blob([JSON.stringify(sessionPayload, null, 2)], { type: 'application/json' });
@@ -36,5 +63,39 @@ export const exportWorkspaceSession = async (currentAppState) => {
     } catch (e) {
         console.error("Failed to export workspace session:", e);
         throw e;
+    }
+};
+
+/**
+ * De-serialize a loaded .noze JSON block back into IndexedDB
+ */
+export const importWorkspaceSession = async (jsonDataAsString) => {
+    try {
+        const payload = JSON.parse(jsonDataAsString);
+        if (payload.version !== "1.0" || !payload.files) {
+            throw new Error("Invalid .noze session format.");
+        }
+
+        // Wipe existing DB slate
+        await fileManager.clearAllFiles();
+
+        // Restore files natively
+        for (const meta of payload.files) {
+            if (meta.base64) {
+                const rawFile = base64ToFile(meta.base64, meta.name, meta.type || 'text/csv');
+                await fileManager.saveFile({
+                    id: meta.id,
+                    name: meta.name,
+                    size: meta.size || rawFile.size,
+                    type: meta.type,
+                    file: rawFile
+                });
+            }
+        }
+
+        return payload.appState;
+    } catch (err) {
+        console.error("Failed to import session:", err);
+        throw err;
     }
 };
