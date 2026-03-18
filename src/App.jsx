@@ -61,6 +61,49 @@ function App() {
         if (savedFiles && savedFiles.length > 0) {
           setFiles(savedFiles);
         }
+
+        // Restore Workspace Session mappings seamlessly
+        const restoredStateStr = localStorage.getItem('noze_restored_state');
+        if (restoredStateStr && savedFiles) {
+          try {
+            const restoredState = JSON.parse(restoredStateStr);
+            if (restoredState.activePage) setActivePage(restoredState.activePage);
+
+            if (restoredState.selectedFileId) {
+              const mainFileObj = savedFiles.find(f => f.id === restoredState.selectedFileId);
+              if (mainFileObj) {
+                setSelectedFileId(restoredState.selectedFileId);
+                if (mainFileObj.data) {
+                  setParsedData({
+                    id: mainFileObj.id,
+                    fileName: mainFileObj.name,
+                    data: mainFileObj.data,
+                    meta: { fields: mainFileObj.data.length > 0 ? Object.keys(mainFileObj.data[0]) : [] }
+                  });
+                }
+              }
+            }
+
+            if (restoredState.compareFileIds && Array.isArray(restoredState.compareFileIds)) {
+              setCompareFileIds(restoredState.compareFileIds);
+              const restoredComparables = [];
+              restoredState.compareFileIds.forEach(cId => {
+                const cfile = savedFiles.find(f => f.id === cId);
+                if (cfile && cfile.data) {
+                  restoredComparables.push({
+                    id: cfile.id,
+                    fileName: cfile.name,
+                    data: cfile.data
+                  });
+                }
+              });
+              setCompareDataList(restoredComparables);
+            }
+          } catch (e) {
+            console.error("Could not parse LocalStorage restore state:", e);
+          }
+          localStorage.removeItem('noze_restored_state');
+        }
       } catch (error) {
         console.error("Failed to load files from storage:", error);
       }
@@ -124,6 +167,17 @@ function App() {
   const parseFile = (fileObj) => {
     return new Promise((resolve, reject) => {
       if (!fileObj) return reject(new Error("No file provided"));
+
+      // Short-circuit if pre-parsed JSON `.noze` payload was statically provided offline
+      if (fileObj.data && Array.isArray(fileObj.data) && fileObj.data.length > 0) {
+        resolve({
+          id: fileObj.id,
+          fileName: fileObj.name,
+          data: fileObj.data,
+          meta: { fields: Object.keys(fileObj.data[0]) }
+        });
+        return;
+      }
 
       const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
 

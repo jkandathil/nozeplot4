@@ -15,8 +15,10 @@ const convertFileToBase64 = (fileObj) => {
 };
 
 export const base64ToFile = (base64String, filename, mimeType) => {
+    if (!base64String || typeof base64String !== 'string') return null;
     const arr = base64String.split(',');
-    const bstr = atob(arr[1]);
+    const base64Data = arr.length > 1 ? arr[1] : arr[0];
+    const bstr = atob(base64Data);
     let n = bstr.length;
     const u8arr = new Uint8Array(n);
     while (n--) {
@@ -35,13 +37,18 @@ export const exportWorkspaceSession = async (currentAppState) => {
         const allSavedFiles = await fileManager.getAllFiles();
 
         const serializedFiles = await Promise.all(allSavedFiles.map(async f => {
-            const base64Data = f.file ? await convertFileToBase64(f.file) : null;
+            let base64Data = null;
+            try {
+                if (f.file) base64Data = await convertFileToBase64(f.file);
+            } catch (e) { console.warn("Could not encode file:", f.name); }
+
             return {
                 id: f.id,
                 name: f.name,
                 type: f.type,
                 base64: base64Data,
-                size: f.size
+                size: f.size,
+                data: f.data // preserve the extracted parsed CSV payload JSON!
             };
         }));
 
@@ -81,16 +88,21 @@ export const importWorkspaceSession = async (jsonDataAsString) => {
 
         // Restore files natively
         for (const meta of payload.files) {
-            if (meta.base64) {
-                const rawFile = base64ToFile(meta.base64, meta.name, meta.type || 'text/csv');
-                await fileManager.saveFile({
-                    id: meta.id,
-                    name: meta.name,
-                    size: meta.size || rawFile.size,
-                    type: meta.type,
-                    file: rawFile
-                });
-            }
+            let rawFile = null;
+            try {
+                if (meta.base64) {
+                    rawFile = base64ToFile(meta.base64, meta.name, meta.type || 'text/csv');
+                }
+            } catch (e) { console.warn("Could not decode base64:", e); }
+
+            await fileManager.saveFile({
+                id: meta.id,
+                name: meta.name,
+                size: meta.size || (rawFile ? rawFile.size : 0),
+                type: meta.type,
+                data: meta.data,
+                file: rawFile
+            });
         }
 
         return payload.appState;

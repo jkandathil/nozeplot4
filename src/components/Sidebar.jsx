@@ -400,16 +400,38 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
+
+                        // We must reset the input value so the same file can trigger onChange again if needed
+                        const resetInput = () => { e.target.value = ''; };
+
                         try {
                             const read = new FileReader();
-                            read.onload = async (e) => {
-                                const restoredAppState = await importWorkspaceSession(e.target.result);
-                                alert("Workspace restored successfully! Press OK to refresh the window to safely inject datasets.");
-                                window.location.reload();
+                            read.onload = async (event) => {
+                                try {
+                                    const restoredAppState = await importWorkspaceSession(event.target.result);
+
+                                    // Stash app state in local storage to automatically rebuild the workspace layout on window.location reload!
+                                    localStorage.setItem('noze_restored_state', JSON.stringify(restoredAppState || {}));
+
+                                    alert("Workspace restored successfully! Press OK to seamlessly refresh the interface.");
+                                    window.location.reload();
+                                } catch (innerErr) {
+                                    console.error("NOZE Restore Inner Error:", innerErr);
+                                    alert("Failed to parse NOZE workspace file: " + (innerErr.message || "Invalid Format"));
+                                } finally {
+                                    resetInput();
+                                }
+                            };
+                            read.onerror = (err) => {
+                                console.error("File Read Error:", err);
+                                alert("Failed to read the uploaded .noze file natively from disk.");
+                                resetInput();
                             };
                             read.readAsText(file);
                         } catch (err) {
-                            alert("Failed to restore NOZE workspace.");
+                            console.error("NOZE Restore Outer Error:", err);
+                            alert("Failed to queue NOZE workspace file for upload.");
+                            resetInput();
                         }
                     }}
                 />
