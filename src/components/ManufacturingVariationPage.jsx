@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Settings, Play, RefreshCw, Maximize2, Download, BarChart2, Hash, Layers } from 'lucide-react';
+import { Settings, Play, RefreshCw, Maximize2, Download, BarChart2, Hash, Layers, AlertTriangle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
@@ -351,6 +351,21 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                             <div style={{ marginTop: 8, color: '#94a3b8', fontSize: '0.75rem' }}>
                                 AUs: {Object.keys(variationResults.auMap).join(', ')}
                             </div>
+                        </div>
+                    )}
+
+                    {variationResults && variationResults.cvDataPoints.some(d => d.cv > 20) && (
+                        <div style={{ marginTop: 16, padding: 12, border: '1px solid rgba(244,63,94,0.4)', background: 'rgba(244,63,94,0.1)', borderRadius: 8, fontSize: '0.85rem' }}>
+                            <h4 style={{ margin: '0 0 8px 0', color: '#f43f5e', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <AlertTriangle size={14} /> Automated QA Alert
+                            </h4>
+                            <p style={{ margin: 0, color: '#e2e8f0' }}>
+                                <strong>Out of Spec (OOS) Outliers Detected!</strong>
+                            </p>
+                            <p style={{ margin: '4px 0 0 0', color: '#fb7185', fontSize: '0.8rem' }}>
+                                The following channels failed manufacturing tolerance (CV {'>'} 20%):<br />
+                                {variationResults.cvDataPoints.filter(d => d.cv > 20).map(d => `${d.channel} (${d.cv.toFixed(1)}%)`).join(', ')}
+                            </p>
                         </div>
                     )}
                 </div>
