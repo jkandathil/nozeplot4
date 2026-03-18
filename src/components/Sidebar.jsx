@@ -115,10 +115,15 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     {hoveredFile.name}
                 </div>
             )}
-            <div className="sidebar-header">
-                <div className="logo">
+            <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '0.5rem' }}>
+                <div className="logo" style={{ borderBottom: 'none', paddingBottom: 0 }}>
                     <img src={logo} alt="NozePlots4 Logo" className="logo-icon" />
                     <span>NozePlot</span>
+                </div>
+                <div className="user-profile" style={{ padding: 0 }}>
+                    <div className="avatar" style={{ width: 30, height: 30, fontSize: '0.85rem', cursor: 'pointer' }} title={`${userName} - Data Analyst`}>
+                        {userName.charAt(0).toUpperCase()}
+                    </div>
                 </div>
             </div>
 
@@ -593,15 +598,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 )}
             </div>
 
-            <div className="sidebar-footer">
-                <div className="user-profile glass-panel">
-                    <div className="avatar">{userName.charAt(0).toUpperCase()}</div>
-                    <div className="user-info">
-                        <span className="name">{userName}</span>
-                        <span className="role">Data Analyst</span>
-                    </div>
-                </div>
-            </div>
         </aside>
     );
 };
