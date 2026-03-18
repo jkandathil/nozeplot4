@@ -231,12 +231,12 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: 5,
+                        gap: 3,
                         padding: '6px 0',
                         borderRadius: 8,
                         border: 'none',
                         cursor: 'pointer',
-                        fontSize: '0.78rem',
+                        fontSize: '0.70rem',
                         fontWeight: 600,
                         background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
                         color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
@@ -244,7 +244,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     }}
                     title="SE Analysis from Custom CSV Data"
                 >
-                    <FileSpreadsheet size={14} /> SE Analysis
+                    <FileSpreadsheet size={13} /> SE Analysis
                 </button>
                 <button
                     onClick={() => onPageChange?.('manufacturing')}
@@ -253,12 +253,12 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: 5,
+                        gap: 3,
                         padding: '6px 0',
                         borderRadius: 8,
                         border: 'none',
                         cursor: 'pointer',
-                        fontSize: '0.78rem',
+                        fontSize: '0.70rem',
                         fontWeight: 600,
                         background: activePage === 'manufacturing' ? 'rgba(244,63,94,0.15)' : 'transparent',
                         color: activePage === 'manufacturing' ? '#f43f5e' : 'var(--text-muted)',
@@ -266,7 +266,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     }}
                     title="Manufacturing Variation and Yield Analysis"
                 >
-                    <Layers size={14} /> Mfg. Variation
+                    <Layers size={13} /> Mfg. Variation
                 </button>
             </div>
 
