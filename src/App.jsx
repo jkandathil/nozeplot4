@@ -172,7 +172,8 @@ function App() {
                     restoredComparables.push({
                       id: cfile.id,
                       fileName: cfile.name,
-                      data: cfile.data
+                      data: cfile.data,
+                      meta: { fields: cfile.data.length > 0 ? Object.keys(cfile.data[0]) : [] }
                     });
                   } else if (cfile.file) {
                     try {
@@ -180,9 +181,12 @@ function App() {
                       restoredComparables.push({
                         id: cfile.id,
                         fileName: cfile.name,
-                        data: parsed.data
+                        data: parsed.data,
+                        meta: parsed.meta || { fields: Object.keys(parsed.data[0] || {}) }
                       });
-                    } catch (e) { console.error("Restore parse fail on compare file", e); }
+                    } catch (e) {
+                      console.error("Restore parse fail on compare file", e);
+                    }
                   }
                 }
               }
