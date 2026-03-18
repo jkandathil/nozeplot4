@@ -2,9 +2,10 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud
 } from 'lucide-react';
 import './Sidebar.css';
+import { exportWorkspaceSession } from '../utils/fileSaver';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
@@ -409,6 +410,31 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <h3 className="section-title" style={{ margin: 0, fontSize: '0.65rem', fontWeight: 600 }}>Workspace ({files.length})</h3>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {/* Session Export Button */}
+                        {files.length > 0 && (
+                            <button
+                                onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                        await exportWorkspaceSession({ selectedFileId, compareFileIds, activePage });
+                                        alert("Workspace session downloaded successfully!");
+                                    } catch (err) {
+                                        alert("Error exporting session.");
+                                    }
+                                }}
+                                title="Export Workspace Session to .noze file"
+                                style={{
+                                    background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px',
+                                    transition: 'background 0.2s', opacity: 0.8
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.background = 'rgba(16, 185, 129, 0.15)'}
+                                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                                <DownloadCloud size={16} color="#10b981" strokeWidth={2} />
+                            </button>
+                        )}
+
                         {/* Select All Button */}
                         {files.length > 1 && onSelectAll && (
                             <button
