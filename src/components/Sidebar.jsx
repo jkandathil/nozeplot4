@@ -409,8 +409,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
                                     // Stash app state in local storage to automatically rebuild the workspace layout on window.location reload!
                                     localStorage.setItem('noze_restored_state', JSON.stringify(restoredAppState || {}));
-
-                                    alert("Workspace restored successfully! Press OK to seamlessly refresh the interface.");
                                     window.location.reload();
                                 } catch (innerErr) {
                                     console.error("NOZE Restore Inner Error:", innerErr);
@@ -472,7 +470,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     e.stopPropagation();
                                     try {
                                         await exportWorkspaceSession({ selectedFileId, compareFileIds, activePage });
-                                        alert("Workspace session downloaded successfully!");
                                     } catch (err) {
                                         alert("Error exporting session.");
                                     }
@@ -580,9 +577,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                     onClick={(e) => {
                                                         e.preventDefault();
                                                         e.stopPropagation();
-                                                        if (window.confirm(`Are you sure you want to delete all ${auFiles.length} files from ${auId}?`)) {
-                                                            onDeleteFiles(e, auFileIds);
-                                                        }
+                                                        onDeleteFiles(e, auFileIds);
                                                     }}
                                                     title={`Delete all ${auId} files`}
                                                     style={{

@@ -469,10 +469,6 @@ function App() {
       e.stopPropagation();
     }
 
-    if (!window.confirm("Are you sure you want to delete ALL files? This cannot be undone.")) {
-      return;
-    }
-
     try {
       await fileManager.clearAllFiles();
       // Clear state only after successful DB clear to ensure consistency
