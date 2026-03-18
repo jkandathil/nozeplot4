@@ -45,6 +45,10 @@ const parseFile = (fileObj) => {
       return;
     }
 
+    if (!fileObj.file) {
+      return reject(new Error("File Blob is missing or 0 bytes! Please re-upload raw CSV."));
+    }
+
     const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
 
     if (isExcel) {
@@ -144,9 +148,11 @@ function App() {
 
             if (restoredState.selectedFileId) {
               const mainFileObj = savedFiles.find(f => f.id === restoredState.selectedFileId);
+              console.log("Noze Match Main File:", mainFileObj);
               if (mainFileObj) {
                 setSelectedFileId(restoredState.selectedFileId);
                 if (mainFileObj.data) {
+                  console.log("Using cached DB JSON Data for Main File");
                   setParsedData({
                     id: mainFileObj.id,
                     fileName: mainFileObj.name,
@@ -154,8 +160,10 @@ function App() {
                     meta: { fields: mainFileObj.data.length > 0 ? Object.keys(mainFileObj.data[0]) : [] }
                   });
                 } else if (mainFileObj.file) {
+                  console.log("Attempting inline map Parse Main File", mainFileObj.name);
                   try {
                     const parsed = await parseFile(mainFileObj);
+                    console.log("Successfully map Parsed Main File:", parsed);
                     setParsedData(parsed);
                   } catch (e) { console.error("Restore parse fail on main file", e); }
                 }
@@ -169,6 +177,7 @@ function App() {
                 const cfile = savedFiles.find(f => f.id === cId);
                 if (cfile) {
                   if (cfile.data) {
+                    console.log("Using cached DB JSON for Comparison:", cfile.name);
                     restoredComparables.push({
                       id: cfile.id,
                       fileName: cfile.name,
@@ -176,8 +185,10 @@ function App() {
                       meta: { fields: cfile.data.length > 0 ? Object.keys(cfile.data[0]) : [] }
                     });
                   } else if (cfile.file) {
+                    console.log("Attempting inline map Parse Compare File", cfile.name);
                     try {
                       const parsed = await parseFile(cfile);
+                      console.log("Successfully map Parsed Compare File:", parsed);
                       restoredComparables.push({
                         id: cfile.id,
                         fileName: cfile.name,
@@ -190,6 +201,7 @@ function App() {
                   }
                 }
               }
+              console.log("Final Restored Comparables Array:", restoredComparables);
               setCompareDataList(restoredComparables);
             }
           } catch (e) {

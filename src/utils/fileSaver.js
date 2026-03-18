@@ -6,9 +6,10 @@ const convertFileToBase64 = (fileObj) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
         reader.onerror = error => reject(error);
-        if (fileObj instanceof File || fileObj instanceof Blob) {
+        if (fileObj && typeof fileObj.slice === 'function') {
             reader.readAsDataURL(fileObj);
         } else {
+            console.error("Invalid File/Blob structure passed to encoder:", fileObj);
             resolve(null);
         }
     });
