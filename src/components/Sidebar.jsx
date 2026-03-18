@@ -352,8 +352,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'mlStudio' ? 'rgba(244,63,94,0.15)' : 'rgba(255,255,255,0.02)',
                         color: activePage === 'mlStudio' ? '#f43f5e' : 'var(--text-muted)',
-                        transition: 'all 0.15s',
-                        marginBottom: '8px'
+                        transition: 'all 0.15s'
                     }}
                     title="Machine Learning & Prediction"
                 >
