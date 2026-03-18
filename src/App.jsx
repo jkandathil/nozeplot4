@@ -30,6 +30,79 @@ import Calculator from './components/Calculator';
 import MLStudioPage from './components/MLStudioPage';
 import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
+// Reusable file parser extraction helper out of React cycle bounds
+const parseFile = (fileObj) => {
+  return new Promise((resolve, reject) => {
+    if (!fileObj) return reject(new Error("No file provided"));
+
+    if (fileObj.data && Array.isArray(fileObj.data) && fileObj.data.length > 0) {
+      resolve({
+        id: fileObj.id,
+        fileName: fileObj.name,
+        data: fileObj.data,
+        meta: { fields: Object.keys(fileObj.data[0]) }
+      });
+      return;
+    }
+
+    const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
+
+    if (isExcel) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = e.target.result;
+          const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: true });
+
+          const jsonData = rawData.map(row => {
+            const clean = {};
+            Object.entries(row).forEach(([k, v]) => {
+              if (v instanceof Date) {
+                clean[k] = v.toISOString().replace('T', ' ').slice(0, 19);
+              } else if (typeof v === 'string') {
+                const n = parseFloat(v);
+                clean[k] = isNaN(n) ? v : n;
+              } else {
+                clean[k] = v;
+              }
+            });
+            return clean;
+          });
+
+          resolve({
+            id: fileObj.id,
+            fileName: fileObj.name,
+            data: jsonData,
+            meta: { fields: jsonData.length > 0 ? Object.keys(jsonData[0]) : [] }
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = (error) => reject(error);
+      reader.readAsBinaryString(fileObj.file);
+    } else {
+      Papa.parse(fileObj.file, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          resolve({
+            id: fileObj.id,
+            fileName: fileObj.name,
+            data: results.data,
+            meta: results.meta
+          });
+        },
+        error: (error) => reject(error)
+      });
+    }
+  });
+};
+
 function App() {
   const [files, setFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState(null);
@@ -80,6 +153,11 @@ function App() {
                     data: mainFileObj.data,
                     meta: { fields: mainFileObj.data.length > 0 ? Object.keys(mainFileObj.data[0]) : [] }
                   });
+                } else if (mainFileObj.file) {
+                  try {
+                    const parsed = await parseFile(mainFileObj);
+                    setParsedData(parsed);
+                  } catch (e) { console.error("Restore parse fail on main file", e); }
                 }
               }
             }
@@ -87,16 +165,27 @@ function App() {
             if (restoredState.compareFileIds && Array.isArray(restoredState.compareFileIds)) {
               setCompareFileIds(restoredState.compareFileIds);
               const restoredComparables = [];
-              restoredState.compareFileIds.forEach(cId => {
+              for (const cId of restoredState.compareFileIds) {
                 const cfile = savedFiles.find(f => f.id === cId);
-                if (cfile && cfile.data) {
-                  restoredComparables.push({
-                    id: cfile.id,
-                    fileName: cfile.name,
-                    data: cfile.data
-                  });
+                if (cfile) {
+                  if (cfile.data) {
+                    restoredComparables.push({
+                      id: cfile.id,
+                      fileName: cfile.name,
+                      data: cfile.data
+                    });
+                  } else if (cfile.file) {
+                    try {
+                      const parsed = await parseFile(cfile);
+                      restoredComparables.push({
+                        id: cfile.id,
+                        fileName: cfile.name,
+                        data: parsed.data
+                      });
+                    } catch (e) { console.error("Restore parse fail on compare file", e); }
+                  }
                 }
-              });
+              }
               setCompareDataList(restoredComparables);
             }
           } catch (e) {
@@ -162,83 +251,6 @@ function App() {
 
   const [compareFileIds, setCompareFileIds] = useState([]);
   const [compareDataList, setCompareDataList] = useState([]);
-
-  // Reusable file parser
-  const parseFile = (fileObj) => {
-    return new Promise((resolve, reject) => {
-      if (!fileObj) return reject(new Error("No file provided"));
-
-      // Short-circuit if pre-parsed JSON `.noze` payload was statically provided offline
-      if (fileObj.data && Array.isArray(fileObj.data) && fileObj.data.length > 0) {
-        resolve({
-          id: fileObj.id,
-          fileName: fileObj.name,
-          data: fileObj.data,
-          meta: { fields: Object.keys(fileObj.data[0]) }
-        });
-        return;
-      }
-
-      const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
-
-      if (isExcel) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          try {
-            const data = e.target.result;
-            const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
-            const firstSheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[firstSheetName];
-            // Use raw:true so numbers stay as JS numbers (not formatted strings).
-            // cellDates:true makes date cells come back as Date objects.
-            const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: true });
-
-            // Post-process each row: Date → ISO string, numeric strings → float
-            const jsonData = rawData.map(row => {
-              const clean = {};
-              Object.entries(row).forEach(([k, v]) => {
-                if (v instanceof Date) {
-                  clean[k] = v.toISOString().replace('T', ' ').slice(0, 19);
-                } else if (typeof v === 'string') {
-                  const n = parseFloat(v);
-                  clean[k] = isNaN(n) ? v : n;
-                } else {
-                  clean[k] = v;
-                }
-              });
-              return clean;
-            });
-
-            resolve({
-              id: fileObj.id,
-              fileName: fileObj.name, // This is now the relative path if uploaded from a folder
-              data: jsonData,
-              meta: { fields: jsonData.length > 0 ? Object.keys(jsonData[0]) : [] }
-            });
-          } catch (error) {
-            reject(error);
-          }
-        };
-        reader.onerror = (error) => reject(error);
-        reader.readAsBinaryString(fileObj.file);
-      } else {
-        Papa.parse(fileObj.file, {
-          header: true,
-          dynamicTyping: true,
-          skipEmptyLines: true,
-          complete: (results) => {
-            resolve({
-              id: fileObj.id,
-              fileName: fileObj.name,  // This is now the relative path if uploaded from a folder
-              data: results.data,
-              meta: results.meta
-            });
-          },
-          error: (error) => reject(error)
-        });
-      }
-    });
-  };
 
   const handleFileSelect = async (fileId, isMultiSelect = false) => {
     // If selecting a new main file, handle comparison reset or promotion
