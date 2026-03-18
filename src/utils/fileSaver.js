@@ -65,7 +65,7 @@ export const exportWorkspaceSession = async (currentAppState) => {
             files: serializedFiles
         };
 
-        const blob = new Blob([JSON.stringify(sessionPayload, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(sessionPayload)], { type: 'application/json' });
         saveAs(blob, `workspace_session_${new Date().toISOString().split('T')[0]}.noze`);
 
     } catch (e) {
