@@ -94,7 +94,9 @@ const CustomTooltip = ({ active, payload, label, referenceLines }) => {
 
 // Utility to apply moving average
 function applyMovingAverage(data, windowSize, keysToFilter) {
-    if (windowSize <= 1) return data;
+    if (windowSize <= 1) {
+        return data.map(row => ({ ...row }));
+    }
     const result = [];
     for (let i = 0; i < data.length; i++) {
         const row = { ...data[i] };
@@ -233,7 +235,7 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
         if (start > end) return plot.data;
         const sliced = plot.data.slice(start, end + 1);
         return sliced.length > 0 ? sliced : plot.data;
-    }, [plot?.data, brushStartIdx, brushEndIdx]);
+    }, [plot, brushStartIdx, brushEndIdx]);
 
     const handleZoomInBtn = () => {
         if (!plot?.data || plot.data.length === 0) return;
@@ -690,33 +692,26 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                             if (baselines[k] === 0 || isNaN(baselines[k])) baselines[k] = 1.0;
                         });
 
-                        processedData = processedData.map(row => {
-                            const newRow = { ...row };
-                            // Already normalized rows simply scaled by 100%
+                        processedData.forEach(row => {
                             normCols.forEach(k => {
-                                if (typeof newRow[k] === 'number') {
-                                    newRow[k] = newRow[k] * 100.0;
+                                if (typeof row[k] === 'number') {
+                                    row[k] = row[k] * 100.0;
                                 }
                             });
-                            // Raw rows get ALAAC baseline normalization
                             rawCols.forEach(k => {
                                 const b = baselines[k];
                                 if (b !== undefined && typeof row[k] === 'number') {
-                                    newRow[k] = ((row[k] / b) - 1.0) * 100.0;
-                                    newRow[`${k}_raw_baseline`] = b;
+                                    row[k] = ((row[k] / b) - 1.0) * 100.0;
+                                    row[`${k}_raw_baseline`] = b;
                                 }
                             });
-                            return newRow;
                         });
                     } else {
-                        // If slider is 0 (Off), just scale the already normalized ones
                         if (normCols.length > 0) {
-                            processedData = processedData.map(row => {
-                                const newRow = { ...row };
+                            processedData.forEach(row => {
                                 normCols.forEach(k => {
-                                    if (typeof newRow[k] === 'number') newRow[k] = newRow[k] * 100.0;
+                                    if (typeof row[k] === 'number') row[k] = row[k] * 100.0;
                                 });
-                                return newRow;
                             });
                         }
                     }
@@ -735,8 +730,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                         });
 
                         if (tempMap.length > 0) {
-                            processedData = processedData.map(row => {
-                                const newRow = { ...row };
+                            processedData.forEach(row => {
                                 tempMap.forEach(({ tCode, hCode, tempKeys }) => {
                                     tempKeys.forEach(tCol => {
                                         const hCol = tCol.replace(tCode, hCode);
@@ -745,12 +739,11 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                             const hVal = row[hCol];
                                             if (tVal !== null && hVal !== null && typeof tVal === 'number' && typeof hVal === 'number') {
                                                 const absH = (SATURATION_VAPOR_PRESSURE_0C * Math.exp((MAGNUS_COEFFICIENT_A * tVal) / (tVal + MAGNUS_COEFFICIENT_B)) * hVal * GAS_CONSTANT_RATIO) / (tVal + KELVIN_OFFSET);
-                                                newRow[`abs-${hCol}`] = absH;
+                                                row[`abs-${hCol}`] = absH;
                                             }
                                         }
                                     });
                                 });
-                                return newRow;
                             });
                         }
                     }
@@ -1121,7 +1114,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
         // Downsample large time-series to prevent rendering crashes
         const DOWNSAMPLE_LIMIT = 500;
         plots.forEach(p => {
-            if (p.data && p.data.length > DOWNSAMPLE_LIMIT && (p.title.includes('Time Series') || p.title.includes('Computed'))) {
+            if (p.data && p.data.length > DOWNSAMPLE_LIMIT) {
                 const step = Math.ceil(p.data.length / DOWNSAMPLE_LIMIT);
                 p.data = p.data.filter((_, idx) => idx % step === 0);
             }

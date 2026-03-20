@@ -10,7 +10,9 @@ export const COLORS = [
     '#10b981', '#38bdf8', '#fbbf24', '#f43f5e', '#a855f7', '#64748b', '#ef4444', '#f97316', '#84cc16', '#14b8a6', '#4f46e5', '#db2777'
 ];
 function applyMovingAverage(data, windowSize, keysToFilter) {
-    if (windowSize <= 1) return data;
+    if (windowSize <= 1) {
+        return data.map(row => ({ ...row }));
+    }
     const result = [];
     for (let i = 0; i < data.length; i++) {
         const row = { ...data[i] };
@@ -207,30 +209,26 @@ export const processAromaBatchCore = async (filesArray, config) => {
                 if (baselines[k] === 0 || isNaN(baselines[k])) baselines[k] = 1.0;
             });
 
-            processedData = processedData.map(row => {
-                const newRow = { ...row };
+            processedData.forEach(row => {
                 normCols.forEach(k => {
-                    if (typeof newRow[k] === 'number') {
-                        newRow[k] = newRow[k] * 100.0;
+                    if (typeof row[k] === 'number') {
+                        row[k] = row[k] * 100.0;
                     }
                 });
                 rawCols.forEach(k => {
                     const b = baselines[k];
                     if (b !== undefined && typeof row[k] === 'number') {
-                        newRow[k] = ((row[k] / b) - 1.0) * 100.0;
-                        newRow[`${k}_raw_baseline`] = b;
+                        row[k] = ((row[k] / b) - 1.0) * 100.0;
+                        row[`${k}_raw_baseline`] = b;
                     }
                 });
-                return newRow;
             });
         } else {
             if (normCols.length > 0) {
-                processedData = processedData.map(row => {
-                    const newRow = { ...row };
+                processedData.forEach(row => {
                     normCols.forEach(k => {
-                        if (typeof newRow[k] === 'number') newRow[k] = newRow[k] * 100.0;
+                        if (typeof row[k] === 'number') row[k] = row[k] * 100.0;
                     });
-                    return newRow;
                 });
             }
         }
@@ -248,8 +246,7 @@ export const processAromaBatchCore = async (filesArray, config) => {
             });
 
             if (tempMap.length > 0) {
-                processedData = processedData.map(row => {
-                    const newRow = { ...row };
+                processedData.forEach(row => {
                     tempMap.forEach(({ tCode, hCode, tempKeys }) => {
                         tempKeys.forEach(tCol => {
                             const hCol = tCol.replace(tCode, hCode);
@@ -258,12 +255,11 @@ export const processAromaBatchCore = async (filesArray, config) => {
                                 const hVal = row[hCol];
                                 if (tVal !== null && hVal !== null && typeof tVal === 'number' && typeof hVal === 'number') {
                                     const absH = (SATURATION_VAPOR_PRESSURE_0C * Math.exp((MAGNUS_COEFFICIENT_A * tVal) / (tVal + MAGNUS_COEFFICIENT_B)) * hVal * GAS_CONSTANT_RATIO) / (tVal + KELVIN_OFFSET);
-                                    newRow[`abs-${hCol}`] = absH;
+                                    row[`abs-${hCol}`] = absH;
                                 }
                             }
                         });
                     });
-                    return newRow;
                 });
             }
         }
@@ -604,7 +600,7 @@ export const generatePlotsFromBatch = (processedBatch, COLORS) => {
 
     const DOWNSAMPLE_LIMIT = 500;
     plots.forEach(p => {
-        if (p.data && p.data.length > DOWNSAMPLE_LIMIT && (p.title.includes('Time Series') || p.title.includes('Computed'))) {
+        if (p.data && p.data.length > DOWNSAMPLE_LIMIT) {
             const step = Math.ceil(p.data.length / DOWNSAMPLE_LIMIT);
             p.data = p.data.filter((_, idx) => idx % step === 0);
         }
