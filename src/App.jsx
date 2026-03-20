@@ -30,82 +30,8 @@ import Calculator from './components/Calculator';
 import MLStudioPage from './components/MLStudioPage';
 import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
-// Reusable file parser extraction helper out of React cycle bounds
-const parseFile = (fileObj) => {
-  return new Promise((resolve, reject) => {
-    if (!fileObj) return reject(new Error("No file provided"));
-
-    if (fileObj.data && Array.isArray(fileObj.data) && fileObj.data.length > 0) {
-      resolve({
-        id: fileObj.id,
-        fileName: fileObj.name,
-        data: fileObj.data,
-        meta: { fields: Object.keys(fileObj.data[0]) }
-      });
-      return;
-    }
-
-    if (!fileObj.file) {
-      return reject(new Error("File Blob is missing or 0 bytes! Please re-upload raw CSV."));
-    }
-
-    const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
-
-    if (isExcel) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = e.target.result;
-          const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: null, raw: true });
-
-          const jsonData = rawData.map(row => {
-            const clean = {};
-            Object.entries(row).forEach(([k, v]) => {
-              if (v instanceof Date) {
-                clean[k] = v.toISOString().replace('T', ' ').slice(0, 19);
-              } else if (typeof v === 'string') {
-                const n = parseFloat(v);
-                clean[k] = isNaN(n) ? v : n;
-              } else {
-                clean[k] = v;
-              }
-            });
-            return clean;
-          });
-
-          resolve({
-            id: fileObj.id,
-            fileName: fileObj.name,
-            data: jsonData,
-            meta: { fields: jsonData.length > 0 ? Object.keys(jsonData[0]) : [] }
-          });
-        } catch (error) {
-          reject(error);
-        }
-      };
-      reader.onerror = (error) => reject(error);
-      reader.readAsBinaryString(fileObj.file);
-    } else {
-      Papa.parse(fileObj.file, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          resolve({
-            id: fileObj.id,
-            fileName: fileObj.name,
-            data: results.data,
-            meta: results.meta
-          });
-        },
-        error: (error) => reject(error)
-      });
-    }
-  });
-};
+import FolderCompareAromaPage from './components/FolderCompareAromaPage';
+import { parseFile } from './utils/fileParser';
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -217,7 +143,7 @@ function App() {
   }, []);
 
   // Common handler for adding files to processing queue
-  const addFiles = useCallback(async (newFiles) => {
+  const addFiles = useCallback(async (newFiles, targetFolderId = null) => {
     // Filter non-CSV/Excel files
     const validFiles = Array.from(newFiles).filter(file => {
       const name = file.name.toLowerCase();
@@ -231,7 +157,8 @@ function App() {
       name: file.webkitRelativePath || file.name,
       path: file.webkitRelativePath || file.name,
       file: file,
-      type: file.type
+      type: file.type,
+      folderId: targetFolderId
     }));
 
     // Persist to DB
@@ -259,9 +186,42 @@ function App() {
     noKeyboard: true
   });
 
-  const handleManualUpload = (e) => {
+  const handleManualUpload = (e, targetFolderId = null) => {
     if (e.target.files && e.target.files.length > 0) {
-      addFiles(e.target.files);
+      addFiles(e.target.files, targetFolderId);
+    }
+  };
+
+  const handleCreateFolder = async (folderName) => {
+    const newFolder = {
+      id: `folder_${Math.random().toString(36).substr(2, 9)}`,
+      name: folderName,
+      isFolder: true,
+      createdAt: Date.now()
+    };
+    try {
+      await fileManager.saveFile(newFolder);
+      setFiles(prev => [...prev, newFolder]);
+    } catch (e) {
+      console.error("Failed to create folder:", e);
+    }
+  };
+
+  const handleDeleteFolder = async (e, folderId) => {
+    e.stopPropagation();
+    const filesInFolder = files.filter(f => f.folderId === folderId);
+    const idsToDelete = [folderId, ...filesInFolder.map(f => f.id)];
+    try {
+      await Promise.all(idsToDelete.map(id => fileManager.deleteFile(id)));
+      setFiles(prev => prev.filter(f => !idsToDelete.includes(f.id)));
+      if (idsToDelete.includes(selectedFileId)) {
+        setSelectedFileId(null);
+        setParsedData(null);
+      }
+      setCompareFileIds(prev => (prev || []).filter(id => !idsToDelete.includes(id)));
+      setCompareDataList(prev => (prev || []).filter(data => !idsToDelete.includes(data.id)));
+    } catch (error) {
+      console.error("Failed to delete folder:", error);
     }
   };
 
@@ -488,96 +448,110 @@ function App() {
       <input {...getInputProps()} />
 
       {/* Sidebar */}
-      <Sidebar
-        files={files}
-        onFileSelect={handleFileSelect}
-        selectedFileId={selectedFileId}
-        compareFileIds={compareFileIds}
-        onUpload={handleManualUpload}
-        onDeleteFile={deleteFile}
-        onDeleteFiles={deleteFiles}
-        onDeleteAllFiles={deleteAllFiles}
-        onSelectAll={handleSelectAll}
-        onSelectFiles={handleSelectFiles}
-        userName={userName}
-        activePage={activePage}
-        onPageChange={setActivePage}
-        isCalculatorOpen={isCalculatorOpen}
-        setIsCalculatorOpen={setIsCalculatorOpen}
-      />
+      {activePage !== 'folderCompareAroma' && (
+        <Sidebar
+          files={files}
+          onFileSelect={handleFileSelect}
+          selectedFileId={selectedFileId}
+          compareFileIds={compareFileIds}
+          onUpload={handleManualUpload}
+          onDeleteFile={deleteFile}
+          onDeleteFiles={deleteFiles}
+          onDeleteAllFiles={deleteAllFiles}
+          onSelectAll={handleSelectAll}
+          onSelectFiles={handleSelectFiles}
+          userName={userName}
+          activePage={activePage}
+          onPageChange={setActivePage}
+          isCalculatorOpen={isCalculatorOpen}
+          setIsCalculatorOpen={setIsCalculatorOpen}
+          onCreateFolder={handleCreateFolder}
+          onDeleteFolder={handleDeleteFolder}
+        />
+      )}
 
       {/* Main Content */}
-      <main className="main-content" style={{ position: 'relative' }}>
-        <div className="content-area">
-          <AnimatePresence mode="wait">
-            {activePage === 'gasDesign' ? (
-              <GasSystemDesignPage key="gasDesign" />
-            ) : activePage === 'gasMath' ? (
-              <GasDilutionMathPage key="gasMath" />
-            ) : activePage === 'normalize' ? (
-              <NormalizePage
-                key="normalize"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                compareDataList={compareDataList}
-              />
-            ) : activePage === 'aromaAnalysis' ? (
-              <AromaAnalysisPage
-                key="aromaAnalysis"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                compareDataList={compareDataList}
-                availableFiles={files}
-              />
-            ) : activePage === 'recoveryAnalysis' ? (
-              <RecoveryAnalysisPage
-                key="recoveryAnalysis"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                compareDataList={compareDataList}
-                availableFiles={files}
-              />
-            ) : activePage === 'manufacturing' ? (
-              <ManufacturingVariationPage
-                key="manufacturing"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                compareDataList={compareDataList}
-                availableFiles={files}
-              />
-            ) : activePage === 'csvPlotter' ? (
-              <CSVPlotterPage
-                key="csvPlotter"
-              />
-            ) : activePage === 'mlStudio' ? (
-              <MLStudioPage
-                key="mlStudio"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                compareDataList={compareDataList}
-              />
-            ) : !selectedFileId ? (
-              <EmptyState
-                key="empty"
-                isDragActive={isDragActive}
-                hasFiles={files.length > 0}
-                onBrowse={open}
-              />
-            ) : (
-              <ChartArea
-                key="chart"
-                data={parsedData?.data}
-                fileName={parsedData?.fileName}
-                loading={loading}
-                compareDataList={compareDataList}
-                availableFiles={files.filter(f => f.id !== selectedFileId)}
-                onCompareSelect={handleCompareSelect}
-                compareFileIds={compareFileIds}
-              />
-            )}
-          </AnimatePresence>
-        </div>
-      </main>
+      {activePage === 'folderCompareAroma' ? (
+        <FolderCompareAromaPage
+          files={files}
+          selectedFileId={selectedFileId}
+          compareFileIds={compareFileIds}
+          onClose={() => setActivePage('aromaAnalysis')}
+        />
+      ) : (
+        <main className="main-content" style={{ position: 'relative' }}>
+          <div className="content-area">
+            <AnimatePresence mode="wait">
+              {activePage === 'gasDesign' ? (
+                <GasSystemDesignPage key="gasDesign" />
+              ) : activePage === 'gasMath' ? (
+                <GasDilutionMathPage key="gasMath" />
+              ) : activePage === 'normalize' ? (
+                <NormalizePage
+                  key="normalize"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                />
+              ) : activePage === 'aromaAnalysis' ? (
+                <AromaAnalysisPage
+                  key="aromaAnalysis"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                  availableFiles={files}
+                  onPageChange={setActivePage}
+                />
+              ) : activePage === 'recoveryAnalysis' ? (
+                <RecoveryAnalysisPage
+                  key="recoveryAnalysis"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                  availableFiles={files}
+                />
+              ) : activePage === 'manufacturing' ? (
+                <ManufacturingVariationPage
+                  key="manufacturing"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                  availableFiles={files}
+                />
+              ) : activePage === 'csvPlotter' ? (
+                <CSVPlotterPage
+                  key="csvPlotter"
+                />
+              ) : activePage === 'mlStudio' ? (
+                <MLStudioPage
+                  key="mlStudio"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                />
+              ) : !selectedFileId ? (
+                <EmptyState
+                  key="empty"
+                  isDragActive={isDragActive}
+                  hasFiles={files.length > 0}
+                  onBrowse={open}
+                />
+              ) : (
+                <ChartArea
+                  key="chart"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  loading={loading}
+                  compareDataList={compareDataList}
+                  availableFiles={files.filter(f => f.id !== selectedFileId)}
+                  onCompareSelect={handleCompareSelect}
+                  compareFileIds={compareFileIds}
+                />
+              )}
+            </AnimatePresence>
+          </div>
+        </main>
+      )}
 
       {/* Name Input Modal */}
       {isNameModalOpen && (

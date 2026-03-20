@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart, Area, Brush, CartesianGrid, ReferenceLine
 } from 'recharts';
-import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download } from 'lucide-react';
+import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download, Layers } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import './AromaAnalysisPage.css';
 
@@ -15,6 +15,82 @@ const MAGNUS_COEFFICIENT_A = 17.67;
 const MAGNUS_COEFFICIENT_B = 243.5;
 const GAS_CONSTANT_RATIO = 2.1674;
 const KELVIN_OFFSET = 273.15;
+
+const CustomAromaLegend = (props) => {
+    const { payload, targetPlot } = props;
+    return (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '12px' }}>
+            {payload.map((entry, index) => {
+                if (typeof entry.value === 'string' && entry.value.includes('Spread')) return null;
+
+                let baselineStr = '';
+                if (targetPlot && targetPlot.data && typeof entry.dataKey === 'string') {
+                    const baseKey = entry.dataKey.replace('_mean', '');
+                    for (let r = 0; r < Math.min(targetPlot.data.length, 50); r++) {
+                        const rowObj = targetPlot.data[r];
+                        if (rowObj && rowObj[`${baseKey}_raw_baseline`] !== undefined) {
+                            baselineStr = `Baseline: ${rowObj[`${baseKey}_raw_baseline`].toFixed(1)} Ω`;
+                            break;
+                        }
+                    }
+                }
+                return (
+                    <li key={`item-${index}`} title={baselineStr} style={{ fontSize: '11px', cursor: baselineStr ? 'help' : 'default', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="8" height="8"><circle cx="4" cy="4" r="4" fill={entry.color} /></svg>
+                        <span style={{ color: entry.color, fontWeight: 500 }}>{entry.value}</span>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+};
+
+const CustomTooltip = ({ active, payload, label, referenceLines }) => {
+    if (active && payload && payload.length > 0) {
+        let currentEvent = null;
+        let eventColor = '#94a3b8';
+
+        if (referenceLines && referenceLines.length > 0) {
+            let matchedRef = null;
+            for (let i = 0; i < referenceLines.length; i++) {
+                if (referenceLines[i].x <= Number(label)) {
+                    matchedRef = referenceLines[i];
+                } else {
+                    break;
+                }
+            }
+            if (matchedRef && matchedRef.label) {
+                currentEvent = matchedRef.label;
+                eventColor = matchedRef.stroke;
+            }
+        }
+
+        return (
+            <div style={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '12px', color: '#f8fafc', fontSize: '11px', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
+                <div style={{ marginBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px', fontWeight: 600, color: '#94a3b8' }}>
+                    Index: {label}
+                    {currentEvent && (
+                        <div style={{ marginTop: '4px', color: eventColor }}>
+                            <strong>Event:</strong> {currentEvent}
+                        </div>
+                    )}
+                </div>
+                {payload.map((entry, index) => {
+                    let valDisplay = entry.value;
+                    if (typeof valDisplay === 'number') {
+                        valDisplay = (valDisplay % 1 !== 0) ? parseFloat(valDisplay.toFixed(3)) : valDisplay;
+                    }
+                    return (
+                        <div key={index} style={{ color: entry.color || '#fff', padding: '1px 0' }}>
+                            {entry.name}: {valDisplay}
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+    return null;
+};
 
 // Utility to apply moving average
 function applyMovingAverage(data, windowSize, keysToFilter) {
@@ -41,11 +117,26 @@ function applyMovingAverage(data, windowSize, keysToFilter) {
     return result;
 }
 
-const CustomAromaTooltip = ({ active, payload, label, yAxisLabel }) => {
+const CustomAromaTooltip = ({ active, payload, label, yAxisLabel, referenceLines }) => {
     if (!active || !payload || !payload.length) return null;
 
     let eventNameValue = null;
-    if (payload[0] && payload[0].payload) {
+    let eventColor = '#10b981';
+
+    if (referenceLines && referenceLines.length > 0) {
+        let matchedRef = null;
+        for (let i = 0; i < referenceLines.length; i++) {
+            if (referenceLines[i].x <= Number(label)) {
+                matchedRef = referenceLines[i];
+            } else {
+                break;
+            }
+        }
+        if (matchedRef && matchedRef.label) {
+            eventNameValue = matchedRef.label;
+            eventColor = matchedRef.stroke;
+        }
+    } else if (payload[0] && payload[0].payload) {
         const row = payload[0].payload;
         if (row.event_name !== undefined && row.event_name !== null) {
             let val = String(row.event_name).trim();
@@ -54,11 +145,6 @@ const CustomAromaTooltip = ({ active, payload, label, yAxisLabel }) => {
             }
         }
     }
-
-    const hasRanges = payload.some(entry => {
-        if (!entry.dataKey || typeof entry.dataKey !== 'string' || !entry.dataKey.endsWith('_mean')) return false;
-        return payload[0].payload[`${entry.dataKey.replace('_mean', '')}_min`] !== undefined;
-    });
 
     return (
         <div style={{
@@ -79,49 +165,51 @@ const CustomAromaTooltip = ({ active, payload, label, yAxisLabel }) => {
             <div style={{ color: '#94a3b8', marginBottom: 8, fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 4, display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
                 <span>{String(label)}</span>
                 {eventNameValue && (
-                    <span style={{ color: '#10b981' }}>{eventNameValue}</span>
+                    <span style={{ color: eventColor }}>{eventNameValue}</span>
                 )}
             </div>
             {payload.map((entry, i) => {
-                let displayName = entry.name;
-
-                // Keep the tooltip clean by filtering out raw arrays or purely background spread ranges
-                if (typeof displayName === 'string' && displayName.includes('Spread')) return null;
+                let displayName = typeof entry.name === 'string' ? entry.name : String(entry.name);
+                if (displayName.includes('Spread')) return null;
                 if (Array.isArray(entry.value)) return null;
 
                 const isPercent = yAxisLabel && yAxisLabel.includes('%');
 
-                let minMaxLabel = null;
-                if (payload[0] && payload[0].payload && entry.dataKey && typeof entry.dataKey === 'string' && entry.dataKey.endsWith('_mean')) {
+                let minMaxStr = '';
+                if (payload[0] && payload[0].payload && entry.dataKey && typeof entry.dataKey === 'string') {
                     const baseKey = entry.dataKey.replace('_mean', '');
                     const rowObj = payload[0].payload;
-                    if (rowObj[`${baseKey}_min`] !== undefined && rowObj[`${baseKey}_max`] !== undefined) {
+
+                    if (entry.dataKey.endsWith('_mean') && rowObj[`${baseKey}_min`] !== undefined && rowObj[`${baseKey}_max`] !== undefined) {
                         const minStr = rowObj[`${baseKey}_min`].toFixed(2);
                         const maxStr = rowObj[`${baseKey}_max`].toFixed(2);
                         const ps = isPercent ? '%' : '';
-                        minMaxLabel = ` (min: ${minStr}${ps}, max: ${maxStr}${ps})`;
+                        minMaxStr = ` (min: ${minStr}${ps}, max: ${maxStr}${ps})`;
                     }
                 }
 
                 return (
                     <div key={i} style={{
-                        display: 'grid',
-                        gridTemplateColumns: hasRanges ? 'minmax(0, 1fr) max-content 150px' : 'minmax(0, 1fr) max-content',
-                        gap: '12px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
                         color: entry.color,
-                        marginBottom: 3,
-                        alignItems: 'center'
+                        marginBottom: 6,
+                        borderBottom: '1px solid rgba(255,255,255,0.05)',
+                        paddingBottom: 4
                     }}>
-                        <span style={{ opacity: 0.9, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '12px' }}>
-                            {displayName}
-                        </span>
-                        <strong style={{ whiteSpace: 'nowrap', fontSize: '12px', textAlign: 'right' }}>
-                            {typeof entry.value === 'number' ? `${entry.value.toFixed(2)}${isPercent ? '%' : ''}` : entry.value}
-                        </strong>
-                        {hasRanges && (
-                            <span style={{ fontSize: '11.5px', whiteSpace: 'nowrap', opacity: 0.9, textAlign: 'left' }}>
-                                {minMaxLabel || ''}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ opacity: 0.9, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', fontSize: '12px' }}>
+                                {displayName}
                             </span>
+                            <strong style={{ whiteSpace: 'nowrap', fontSize: '13px', marginLeft: '12px' }}>
+                                {typeof entry.value === 'number' ? `${entry.value.toFixed(2)}${isPercent ? '%' : ''}` : entry.value}
+                            </strong>
+                        </div>
+                        {minMaxStr && (
+                            <div style={{ fontSize: '11px', opacity: 0.7 }}>
+                                {minMaxStr}
+                            </div>
                         )}
                     </div>
                 );
@@ -340,9 +428,12 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                             >
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                                 <XAxis dataKey={plot.xAxisKey || "index"} tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
+                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={65} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} tickFormatter={(val) => {
+                                    const suffix = (yAxisLabel && yAxisLabel.includes('%')) ? '%' : '';
+                                    return `${parseFloat(val.toFixed(3))}${suffix}`;
+                                }} />
                                 <RechartsTooltip
-                                    content={<CustomAromaTooltip yAxisLabel={yAxisLabel} />}
+                                    content={<CustomAromaTooltip yAxisLabel={yAxisLabel} referenceLines={plot.referenceLines} />}
                                     cursor={false}
                                     wrapperStyle={{ pointerEvents: 'auto' }}
                                 />
@@ -368,9 +459,12 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                             >
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                                 <XAxis dataKey="index" tick={{ fill: '#94a3b8' }} stroke="#334155" />
-                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={50} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} />
+                                <YAxis tick={{ fill: '#94a3b8' }} stroke="#334155" domain={['auto', 'auto']} width={65} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94a3b8', style: { textAnchor: 'middle' } }} tickFormatter={(val) => {
+                                    const suffix = (yAxisLabel && yAxisLabel.includes('%')) ? '%' : '';
+                                    return `${parseFloat(val.toFixed(3))}${suffix}`;
+                                }} />
                                 <RechartsTooltip
-                                    content={<CustomAromaTooltip yAxisLabel={yAxisLabel} />}
+                                    content={<CustomAromaTooltip yAxisLabel={yAxisLabel} referenceLines={plot.referenceLines} />}
                                     cursor={false}
                                     wrapperStyle={{ pointerEvents: 'auto' }}
                                 />
@@ -385,17 +479,29 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
     );
 };
 
-const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
+const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFiles = [], onPageChange }) => {
     // Form config
-    const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
-    const [tempCols, setTempCols] = useState('BT1, AQT0');
-    const [humCols, setHumCols] = useState('AQH0, TRHH0');
-    const [filterWindow, setFilterWindow] = useState(5);
-    const [baselinePts, setBaselinePts] = useState(50); // Default to 50pts for Automatic Normalization
-    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
-    const [fenoTruncateSeconds, setFenoTruncateSeconds] = useState(0);
-    const [filterUnknown, setFilterUnknown] = useState(false);
+    const defaultSensing = 'A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8';
+    const [sensingElements, setSensingElements] = useState(() => localStorage.getItem('aroma_sensingElements') || defaultSensing);
+    const [tempCols, setTempCols] = useState(() => localStorage.getItem('aroma_tempCols') || 'BT1, AQT0');
+    const [humCols, setHumCols] = useState(() => localStorage.getItem('aroma_humCols') || 'AQH0, TRHH0');
+    const [filterWindow, setFilterWindow] = useState(() => parseInt(localStorage.getItem('aroma_filterWindow') || '5', 10));
+    const [baselinePts, setBaselinePts] = useState(() => parseInt(localStorage.getItem('aroma_baselinePts') || '50', 10));
+    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(() => localStorage.getItem('aroma_removeRecoveryEvents') === 'false' ? false : true);
+    const [fenoTruncateSeconds, setFenoTruncateSeconds] = useState(() => parseInt(localStorage.getItem('aroma_fenoTruncateSeconds') || '0', 10));
+    const [filterUnknown, setFilterUnknown] = useState(() => localStorage.getItem('aroma_filterUnknown') === 'false' ? false : true);
     const [separateByUnit, setSeparateByUnit] = useState(false);
+
+    useEffect(() => {
+        localStorage.setItem('aroma_sensingElements', sensingElements);
+        localStorage.setItem('aroma_tempCols', tempCols);
+        localStorage.setItem('aroma_humCols', humCols);
+        localStorage.setItem('aroma_filterWindow', filterWindow.toString());
+        localStorage.setItem('aroma_baselinePts', baselinePts.toString());
+        localStorage.setItem('aroma_removeRecoveryEvents', removeRecoveryEvents.toString());
+        localStorage.setItem('aroma_fenoTruncateSeconds', fenoTruncateSeconds.toString());
+        localStorage.setItem('aroma_filterUnknown', filterUnknown.toString());
+    }, [sensingElements, tempCols, humCols, filterWindow, baselinePts, removeRecoveryEvents, fenoTruncateSeconds, filterUnknown]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [gapStart, setGapStart] = useState('');
     const [gapEnd, setGapEnd] = useState('');
@@ -463,13 +569,17 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     );
 
                     // 1.5 ALAAC Smart Truncation: Delete Recovery events (so graph fills the area) & FeNO truncating
+                    const originalData = [...fileData];
                     if (removeRecoveryEvents || fenoTruncateSeconds > 0) {
-                        const eventCol = sampleKeys.find(col => col.toLowerCase() === 'event_name' || (col.toLowerCase().includes('event') && !col.toLowerCase().includes('reference')));
+                        const eventCol = sampleKeys.find(col => {
+                            const l = col.toLowerCase();
+                            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                        });
                         if (eventCol) {
                             const blocks = [];
                             let currentBlock = null;
                             fileData.forEach((r, idx) => {
-                                const ev = String(r[eventCol] || '').toLowerCase();
+                                const ev = String(r[eventCol] || '').toLowerCase().replace(/\s+/g, '');
                                 if (currentBlock && currentBlock.event === ev) {
                                     currentBlock.endIdx = idx;
                                     currentBlock.endRow = r;
@@ -481,15 +591,25 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                             if (currentBlock) blocks.push(currentBlock);
 
                             const rowsToRemove = new Set();
+                            const allowedPlots = ['breathsamplecollection', 'fenowindow', 'fenomeasurement'];
+                            const hasBreathEvents = blocks.some(b => allowedPlots.some(p => b.event.includes(p)));
+
                             blocks.forEach(b => {
-                                if (removeRecoveryEvents && b.event.includes('recovery')) {
-                                    for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
-                                }
-                                if (fenoTruncateSeconds > 0 && b.event.includes('feno') && b.event.includes('window')) {
-                                    const truncRows = parseInt(fenoTruncateSeconds, 10);
-                                    if (truncRows > 0) {
-                                        const removeStart = Math.max(b.startIdx, b.endIdx - truncRows + 1);
-                                        for (let i = removeStart; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                if (hasBreathEvents) {
+                                    const isAllowedPLOT = allowedPlots.some(p => b.event.includes(p));
+                                    if (!isAllowedPLOT && b.event !== '') {
+                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                    } else if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
+                                        const allowedRows = fenoTruncateSeconds * 3;
+                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                    }
+                                } else {
+                                    if (removeRecoveryEvents && b.event.includes('recovery')) {
+                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                    }
+                                    if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
+                                        const allowedRows = fenoTruncateSeconds * 3;
+                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++) rowsToRemove.add(i);
                                     }
                                 }
                             });
@@ -499,7 +619,10 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
 
                     // Plot visual boundaries for events (calculated AFTER truncation so X-axis matches)
                     let detectedEvents = [];
-                    const evCol = sampleKeys.find(col => col.toLowerCase() === 'event_name' || (col.toLowerCase().includes('event') && !col.toLowerCase().includes('reference')));
+                    const evCol = sampleKeys.find(col => {
+                        const l = col.toLowerCase();
+                        return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                    });
                     if (evCol) {
                         let curEv = null;
                         fileData.forEach((r, idx) => {
@@ -537,11 +660,14 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         rawCols.forEach(k => {
                             let baselineVals = [];
                             // Check if file has an event column and 'RFC' event
-                            const eventCol = Object.keys(processedData[0]).find(col => col.toLowerCase().includes('event') && !col.toLowerCase().includes('reference'));
+                            const eventCol = Object.keys(originalData[0] || {}).find(col => {
+                                const l = col.toLowerCase();
+                                return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                            });
                             let rfcEventRows = [];
 
                             if (eventCol) {
-                                rfcEventRows = processedData.filter(row => row[eventCol] && typeof row[eventCol] === 'string' && (row[eventCol].includes('RFC') || row[eventCol].includes('AmbientSampling')));
+                                rfcEventRows = originalData.filter(row => row[eventCol] && typeof row[eventCol] === 'string' && (row[eventCol].includes('RFC') || row[eventCol].includes('AmbientSampling')));
                             }
 
                             if (rfcEventRows.length > 0) {
@@ -551,10 +677,10 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                 baselineVals = targetRows.map(r => r[k]).filter(v => typeof v === 'number');
                             } else {
                                 // Fallback: Take first N points of the file
-                                const pts = Math.min(baselinePts, processedData.length);
+                                const pts = Math.min(baselinePts, originalData.length);
                                 for (let i = 0; i < pts; i++) {
-                                    if (typeof processedData[i][k] === 'number') {
-                                        baselineVals.push(processedData[i][k]);
+                                    if (typeof originalData[i][k] === 'number') {
+                                        baselineVals.push(originalData[i][k]);
                                     }
                                 }
                             }
@@ -577,6 +703,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                 const b = baselines[k];
                                 if (b !== undefined && typeof row[k] === 'number') {
                                     newRow[k] = ((row[k] / b) - 1.0) * 100.0;
+                                    newRow[`${k}_raw_baseline`] = b;
                                 }
                             });
                             return newRow;
@@ -631,23 +758,31 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                     return { ...fileObj, data: processedData, events: detectedEvents };
                 });
 
-                // Generate common reference lines from first valid file
-                let refLines = [];
-                const refFile = newBatch.find(f => f.events && f.events.length > 0);
-                if (refFile) {
-                    const uniqueColors = ['#10b981', '#38bdf8', '#f43f5e', '#a855f7', '#f59e0b', '#8b5cf6'];
-                    let colorIdx = 0;
-                    const colorMap = {};
+                const sequenceAverages = [];
+                newBatch.forEach(f => {
+                    if (f.events) {
+                        f.events.forEach((ev, seqIndex) => {
+                            const evStr = String(ev.name).toLowerCase().replace(/\s+/g, '');
+                            if (!sequenceAverages[seqIndex]) sequenceAverages[seqIndex] = { label: ev.name, str: evStr, starts: [] };
+                            sequenceAverages[seqIndex].starts.push(ev.start);
+                        });
+                    }
+                });
 
-                    refLines = refFile.events.map(ev => {
-                        if (ev.name.toLowerCase().includes('recovery') && removeRecoveryEvents) return null;
-                        if (!colorMap[ev.name]) {
-                            colorMap[ev.name] = uniqueColors[colorIdx % uniqueColors.length];
-                            colorIdx++;
-                        }
-                        return { x: ev.start, stroke: colorMap[ev.name] };
-                    }).filter(Boolean);
-                }
+                const uniqueColors = ['#10b981', '#38bdf8', '#f43f5e', '#a855f7', '#f59e0b', '#8b5cf6'];
+                let colorIdx = 0;
+                const colorMap = {};
+
+                let refLines = [];
+                sequenceAverages.forEach(seq => {
+                    if (seq.str.includes('recovery') && removeRecoveryEvents) return;
+                    if (!colorMap[seq.label]) {
+                        colorMap[seq.label] = uniqueColors[colorIdx % uniqueColors.length];
+                        colorIdx++;
+                    }
+                    const avgStart = Math.min(...seq.starts); // Use conservative minimum boundary
+                    refLines.push({ x: avgStart, stroke: colorMap[seq.label], label: seq.label });
+                });
 
                 const auIdsSet = new Set();
                 newBatch.forEach(f => {
@@ -978,7 +1113,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         areas.push({ dataKey: `${gName}_${type}_range`, name: `${gName} Spread (±1σ)`, color });
                     });
                     const yLabels = { 'T': 'Temperature (°C)', 'H': 'Humidity (%)', 'Abs-H': 'Abs. Humidity (g/m³)' };
-                    plots.push({ title: `Computed Property Average: ${type}${auIdSuffix}`, shortTitle: type, data: combinedData, lines, areas, isComposed: true, yAxisLabel: yLabels[type] || 'Value' });
+                    plots.push({ title: `Computed Property Average: ${type}${auIdSuffix}`, shortTitle: type, data: combinedData, lines, areas, referenceLines, isComposed: true, yAxisLabel: yLabels[type] || 'Value' });
                 }
             }
         });
@@ -1251,6 +1386,14 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                         {isProcessing ? <RefreshCw className="spinner" size={16} /> : <Play size={16} />}
                         {isProcessing ? 'Processing Batch...' : 'Run Pipeline & Plot'}
                     </button>
+                    <button
+                        className="btn-secondary process-btn"
+                        onClick={() => onPageChange && onPageChange('folderCompareAroma')}
+                        style={{ marginTop: '8px', width: '100%', border: '1px solid rgba(56, 189, 248, 0.4)', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                        title="Compare Aroma Analysis across all Workspace Custom Folders"
+                    >
+                        <Layers size={16} /> AU Batch Plots
+                    </button>
                 </div>
 
                 <div className="results-panel">
@@ -1270,16 +1413,13 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                                 <ComposedChart data={plot.data} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                                                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                                                     <XAxis dataKey={plot.xAxisKey || "index"} tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" />
-                                                    <YAxis tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" domain={['auto', 'auto']} width={40} />
-                                                    <RechartsTooltip
-                                                        cursor={false}
-                                                        wrapperStyle={{ outline: 'none' }}
-                                                        contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: 'none', borderRadius: '12px', padding: '12px', boxShadow: 'none' }}
-                                                        itemStyle={{ fontSize: '11px', padding: '1px 0' }}
-                                                        labelStyle={{ color: '#94a3b8', fontSize: '11px', fontWeight: 600, marginBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}
-                                                    />
+                                                    <YAxis tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" domain={['auto', 'auto']} width={65} tickFormatter={(val) => {
+                                                        const suffix = (plot.yAxisLabel && plot.yAxisLabel.includes('%')) ? '%' : '';
+                                                        return `${parseFloat(val.toFixed(3))}${suffix}`;
+                                                    }} />
+                                                    <RechartsTooltip content={<CustomTooltip referenceLines={plot.referenceLines} />} cursor={false} />
                                                     {((plot.lines?.length || 0) + (plot.areas?.length || 0)) <= 20 && (
-                                                        <Legend wrapperStyle={{ fontSize: '0.75rem', color: '#94a3b8' }} iconType="circle" iconSize={8} />
+                                                        <Legend content={<CustomAromaLegend targetPlot={plot} />} wrapperStyle={{ paddingTop: '0px', marginTop: '-10px', paddingBottom: '0px' }} />
                                                     )}
                                                     {plot.referenceLines && plot.referenceLines.map((rl, rIdx) => (
                                                         <ReferenceLine
@@ -1301,20 +1441,13 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [] }) => {
                                                 <LineChart data={plot.data} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
                                                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                                                     <XAxis dataKey="index" tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" />
-                                                    <YAxis tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" domain={['auto', 'auto']} width={40} />
-                                                    <RechartsTooltip
-                                                        cursor={false}
-                                                        wrapperStyle={{ outline: 'none' }}
-                                                        contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: 'none', borderRadius: '12px', padding: '12px', boxShadow: 'none' }}
-                                                        itemStyle={{ fontSize: '11px', padding: '1px 0' }}
-                                                        labelStyle={{ color: '#94a3b8', fontSize: '11px', fontWeight: 600, marginBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}
-                                                    />
+                                                    <YAxis tick={{ fontSize: 10, fill: '#64748b' }} stroke="#334155" domain={['auto', 'auto']} width={65} tickFormatter={(val) => {
+                                                        const suffix = (plot.yAxisLabel && plot.yAxisLabel.includes('%')) ? '%' : '';
+                                                        return `${parseFloat(val.toFixed(3))}${suffix}`;
+                                                    }} />
+                                                    <RechartsTooltip content={<CustomTooltip referenceLines={plot.referenceLines} />} cursor={false} />
                                                     {(plot.lines?.length || 0) <= 20 && (
-                                                        <Legend
-                                                            wrapperStyle={{ fontSize: '0.75rem', color: '#94a3b8' }}
-                                                            iconType="circle"
-                                                            iconSize={8}
-                                                        />
+                                                        <Legend content={<CustomAromaLegend targetPlot={plot} />} wrapperStyle={{ paddingTop: '0px', marginTop: '-10px', paddingBottom: '0px' }} />
                                                     )}
                                                     {(plot.lines || []).map((line, lIdx) => (
                                                         <Line

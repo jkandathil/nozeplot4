@@ -20,6 +20,15 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     const [ignoreHardwareRecovery, setIgnoreHardwareRecovery] = useState(true);
     const [humCols, setHumCols] = useState('AQH0, TRHH0');
     const [tempCols, setTempCols] = useState('AQT0, TRHT0');
+    const [filterUnknown, setFilterUnknown] = useState(true);
+
+    const isKnownFile = (fName) => {
+        if (!filterUnknown) return true;
+        if (!fName) return false;
+        const basename = fName.split(/[/\\]/).pop();
+        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
+        return m !== null;
+    };
 
     // Results
     const [recoveryResults, setRecoveryResults] = useState(null);
@@ -40,10 +49,14 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
         setTimeout(() => {
             try {
                 // Batch input gathering
-                const allFiles = [];
-                if (data && fileName) allFiles.push({ fileName, data });
+                let allFiles = [];
+                if (data && fileName) {
+                    if (isKnownFile(fileName)) allFiles.push({ fileName, data });
+                }
                 if (compareDataList && compareDataList.length > 0) {
-                    compareDataList.forEach(c => allFiles.push(c));
+                    compareDataList.forEach(c => {
+                        if (isKnownFile(c.fileName)) allFiles.push(c);
+                    });
                 }
 
                 if (allFiles.length === 0) {
@@ -98,9 +111,10 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         if (!fileData || fileData.length === 0) return;
 
                         const sampleKeys = Object.keys(fileData[0]);
-                        const eventCol = sampleKeys.find(col =>
-                            col.toLowerCase() === 'event_name' || (col.toLowerCase().includes('event') && !col.toLowerCase().includes('reference'))
-                        );
+                        const eventCol = sampleKeys.find(col => {
+                            const l = col.toLowerCase();
+                            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                        });
 
                         if (!eventCol) return; // Need an event column to parse trials
 
@@ -905,7 +919,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         </div>
                     </div>
 
-                    <div className="form-group" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '16px', background: 'rgba(255,255,255,0.03)', padding: '10px', borderRadius: '8px' }}>
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px', background: 'rgba(255,255,255,0.03)', padding: '10px', borderRadius: '8px' }}>
                         <input
                             type="checkbox"
                             checked={ignoreHardwareRecovery}
@@ -916,6 +930,20 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         <label htmlFor="ignore-recovery-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
                             <strong>Mux Disabled During Recovery</strong> <br />
                             <span style={{ color: '#94a3b8' }}>Skips the recovery event block and uses the subsequent trial's start block to measure drift.</span>
+                        </label>
+                    </div>
+
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '16px', background: 'rgba(255,255,255,0.03)', padding: '10px', borderRadius: '8px' }}>
+                        <input
+                            type="checkbox"
+                            checked={filterUnknown}
+                            onChange={(e) => setFilterUnknown(e.target.checked)}
+                            id="filter-unknown-chk"
+                            style={{ width: 14, height: 14, accentColor: '#f59e0b', cursor: 'pointer', flexShrink: 0, marginTop: '2px' }}
+                        />
+                        <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
+                            <strong>No Unknowns</strong> <br />
+                            <span style={{ color: '#94a3b8' }}>Ignores files that do not have a mapped concentration (e.g. unknown ppb/ppm) in their filename.</span>
                         </label>
                     </div>
 

@@ -21,8 +21,16 @@ const getMedian = (arr) => {
 
 const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compareDataList = [] }) => {
     const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
-    const [baselinePts, setBaselinePts] = useState(50);
     const [targetConcFilter, setTargetConcFilter] = useState(''); // e.g. "50ppb"
+    const [filterUnknown, setFilterUnknown] = useState(true);
+
+    const isKnownFile = (fName) => {
+        if (!filterUnknown) return true;
+        if (!fName) return false;
+        const basename = fName.split(/[/\\]/).pop();
+        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
+        return m !== null;
+    };
     const [isProcessing, setIsProcessing] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(340);
     const [selectedPlot, setSelectedPlot] = useState(null);
@@ -54,12 +62,14 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
         setTimeout(() => {
             try {
                 // 1. Gather all files to analyze (Active Main File + All Comparison Files)
-                const allFiles = [];
+                let allFiles = [];
                 if (data && fileName) {
-                    allFiles.push({ fileName, data });
+                    if (isKnownFile(fileName)) allFiles.push({ fileName, data });
                 }
                 if (compareDataList && compareDataList.length > 0) {
-                    compareDataList.forEach(c => allFiles.push(c));
+                    compareDataList.forEach(c => {
+                        if (isKnownFile(c.fileName)) allFiles.push(c);
+                    });
                 }
 
                 if (allFiles.length === 0) {
@@ -121,9 +131,13 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                         const files = groupedFiles[auId][conc];
 
                         files.forEach(f => {
-                            const data = f.data;
-                            const sampleKeys = Object.keys(data[0]);
-                            const eventCol = sampleKeys.find(col => col.toLowerCase() === 'event_name' || (col.toLowerCase().includes('event') && !col.toLowerCase().includes('reference')));
+                            const { data: fData } = f;
+                            if (!fData || fData.length === 0) return;
+                            const sampleKeys = Object.keys(fData[0]);
+                            const eventCol = sampleKeys.find(col => {
+                                const l = col.toLowerCase();
+                                return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                            });
 
                             const auMetrics = { auId, conc, fileName: f.fileName || f.name };
 
@@ -140,7 +154,7 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                                 let baselineVals = [];
 
                                 // Primary ALAAC Logic: Look for AmbientSampleRFC event
-                                const ambientRows = eventCol ? data.filter(row => {
+                                const ambientRows = eventCol ? fData.filter(row => {
                                     const ev = String(row[eventCol] || '').toLowerCase();
                                     return ev.includes('ambientsamplingrfc') || ev.includes('ambient');
                                 }) : [];
@@ -155,10 +169,10 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                                     });
                                 } else {
                                     // Fallback: Use first N points of the file if no Ambient found
-                                    const pts = Math.min(baselinePts, data.length);
+                                    const pts = Math.min(baselinePts, fData.length);
                                     for (let i = 0; i < pts; i++) {
-                                        if (typeof data[i][rawKey] === 'number' && !isNaN(data[i][rawKey]) && isFinite(data[i][rawKey])) {
-                                            baselineVals.push(data[i][rawKey]);
+                                        if (typeof fData[i][rawKey] === 'number' && !isNaN(fData[i][rawKey]) && isFinite(fData[i][rawKey])) {
+                                            baselineVals.push(fData[i][rawKey]);
                                         }
                                     }
                                 }
@@ -172,7 +186,7 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                                 let peakVal = 0;
 
                                 if (normKey) {
-                                    data.forEach(row => {
+                                    fData.forEach(row => {
                                         const ev = eventCol ? String(row[eventCol] || '').toLowerCase() : '';
                                         if (ev.includes('recovery')) return; // Explicitly exclude recovery phase
 
@@ -185,7 +199,7 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                                     peakVal = peakVal * 100.0; // Scale to percentage AFTER finding max
                                 } else {
                                     // Calculate ALAAC max deviation from R0 natively
-                                    data.forEach(row => {
+                                    fData.forEach(row => {
                                         const ev = eventCol ? String(row[eventCol] || '').toLowerCase() : '';
                                         if (ev.includes('recovery')) return; // Explicitly exclude recovery phase
 
@@ -326,12 +340,26 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                         <small style={{ display: 'block', marginTop: 4, color: '#94a3b8' }}>Variation calculations are most accurate when restricted to identical concentration exposures across all AU devices.</small>
                     </div>
 
-                    <div className="form-group">
+                    <div className="form-group" style={{ marginBottom: '16px' }}>
                         <label>Baseline Sampling Window (pts)</label>
                         <div className="slider-wrapper">
                             <input type="range" min="10" max="200" value={baselinePts} onChange={e => setBaselinePts(parseInt(e.target.value))} className="range-slider" />
                             <span className="slider-value">{baselinePts} pt</span>
                         </div>
+                    </div>
+
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '16px', background: 'rgba(255,255,255,0.03)', padding: '10px', borderRadius: '8px' }}>
+                        <input
+                            type="checkbox"
+                            checked={filterUnknown}
+                            onChange={(e) => setFilterUnknown(e.target.checked)}
+                            id="filter-unknown-chk"
+                            style={{ width: 14, height: 14, accentColor: '#f43f5e', cursor: 'pointer', flexShrink: 0, marginTop: '2px' }}
+                        />
+                        <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
+                            <strong>No Unknowns</strong> <br />
+                            <span style={{ color: '#94a3b8' }}>Ignores files that do not have a mapped concentration (e.g. unknown ppb/ppm) in their filename.</span>
+                        </label>
                     </div>
 
                     <div className="active-files-info" style={{ marginTop: '20px' }}>

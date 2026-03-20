@@ -83,7 +83,24 @@ const CustomTooltip = ({ active, payload, label }) => {
 const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, onCompareSelect, compareFileIds }) => {
     const [viewMode, setViewMode] = useState('grid');
     const [focusSeries, setFocusSeries] = useState(null);
-    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
+    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(() => localStorage.getItem('aroma_removeRecoveryEvents') === 'false' ? false : true);
+    const [filterUnknown, setFilterUnknown] = useState(() => localStorage.getItem('aroma_filterUnknown') === 'false' ? false : true);
+
+    useEffect(() => {
+        localStorage.setItem('aroma_removeRecoveryEvents', removeRecoveryEvents.toString());
+        localStorage.setItem('aroma_filterUnknown', filterUnknown.toString());
+    }, [removeRecoveryEvents, filterUnknown]);
+
+    const isKnownFile = (fName) => {
+        if (!filterUnknown) return true;
+        if (!fName) return false;
+        const basename = fName.split(/[/\\]/).pop();
+        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
+        return m !== null;
+    };
+
+    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName)) ? data : [], [data, fileName, filterUnknown]);
+    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName)), [compareDataList, filterUnknown]);
 
     // Index-based zoom: controls Brush startIndex/endIndex.
     const [brushStartIdx, setBrushStartIdx] = useState(0);
@@ -98,13 +115,19 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     // Identify X-axis and Series
     // Use date/time column if present; otherwise use count 1, 2, 3... (never first data column)
     const { seriesKeys: mainSeriesKeys, xKey, chartData } = useMemo(() => {
-        if (!data || data.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
+        if (!activeData || activeData.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
 
-        let processedData = data;
-        const keys = Object.keys(data[0]);
-        const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+        let processedData = activeData;
+        const keys = Object.keys(activeData[0]);
+        const eventCol = keys.find(col => {
+            const l = col.toLowerCase();
+            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+        });
         if (removeRecoveryEvents && eventCol) {
-            processedData = data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+            processedData = activeData.filter(row => {
+                const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
+                return !eVal.includes('recovery');
+            });
         }
 
         if (!processedData || processedData.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
@@ -114,26 +137,26 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
             return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
         });
 
-        if (potentialX) {
-            const series = keys.filter(k => k !== potentialX && typeof processedData[0][k] === 'number');
+        if (potentialX && !removeRecoveryEvents) {
+            const series = keys.filter(k => k !== potentialX && k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
             return { seriesKeys: series, xKey: potentialX, chartData: processedData };
         }
-        // No date/time: use index 1, 2, 3...
-        const series = keys.filter(k => typeof processedData[0][k] === 'number');
+        // Force sequential index to stitch recovery gaps cleanly without spanning diagonal lines
+        const series = keys.filter(k => k !== potentialX && k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
         const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { seriesKeys: series, xKey: 'index', chartData: chartDataWithIndex };
-    }, [data, removeRecoveryEvents]);
+    }, [activeData, removeRecoveryEvents]);
 
     // Compute UNION of all series keys (Main + Comparisons)
     // This ensures we show variables that might only exist in comparison files
     const allSeriesKeys = useMemo(() => {
         const keys = new Set(mainSeriesKeys);
-        if (compareDataList) {
-            compareDataList.forEach(c => {
+        if (activeCompareList) {
+            activeCompareList.forEach(c => {
                 if (c.meta && c.meta.fields) {
                     c.meta.fields.forEach(f => {
                         // Check if field is numeric in the first row of comparison data (heuristic)
-                        if (f !== xKey && c.data && c.data.length > 0 && typeof c.data[0][f] === 'number') {
+                        if (f !== xKey && f.toLowerCase() !== 'index' && c.data && c.data.length > 0 && typeof c.data[0][f] === 'number') {
                             keys.add(f);
                         }
                     });
@@ -141,17 +164,17 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
             });
         }
         return Array.from(keys);
-    }, [mainSeriesKeys, compareDataList, xKey]);
+    }, [mainSeriesKeys, activeCompareList, xKey]);
 
     // Process Comparison Data
     const compareKeysMap = useMemo(() => {
-        if (!compareDataList || compareDataList.length === 0) return {};
+        if (!activeCompareList || activeCompareList.length === 0) return {};
         const map = {};
 
         // Iterate through ALL known series keys
         allSeriesKeys.forEach(key => {
             map[key] = [];
-            compareDataList.forEach((compFile, idx) => {
+            activeCompareList.forEach((compFile, idx) => {
                 const hasKey = compFile.meta?.fields?.includes(key);
                 if (hasKey) {
                     map[key].push({
@@ -163,97 +186,116 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
             });
         });
         return map;
-    }, [allSeriesKeys, compareDataList]);
+    }, [allSeriesKeys, activeCompareList]);
 
-    // Merge Data for Recharts
-    // Supports files with different x-axis column names (e.g. "time" vs "timestamp")
-    // by using row-index alignment as fallback when value matching fails.
-    // Extends the merged array to the MAXIMUM length across all files so that
-    // comparison files with MORE rows than the main file are not truncated.
-    const rawProcessedData = useMemo(() => {
-        if (!chartData || chartData.length === 0) return [];
-        if (!compareDataList || compareDataList.length === 0) return chartData;
+    // Generate joined cross-file charting array efficiently
+    // This combines MAIN data with dynamically interpolated comparison data into a single 2D Table required by Recharts
+    const processedChartData = useMemo(() => {
+        if (!activeCompareList || activeCompareList.length === 0) return chartData;
 
-        // For each comparison file: use date/time if present, else index 1,2,3...
-        const compLookups = compareDataList.map(c => {
-            const lookup = {};
-            if (!c.data || c.data.length === 0) return { lookup, compXKey: null, data: [] };
+        // Extract and align compare points
+        const compLookups = activeCompareList.map(c => {
+            let pData = c.data || [];
+            if (removeRecoveryEvents && c.data && c.data.length > 0) {
+                const eCol = Object.keys(c.data[0]).find(col => {
+                    const l = col.toLowerCase();
+                    return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+                });
 
-            let processedCompData = c.data;
-            const keys = Object.keys(c.data[0]);
-            const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
-            if (removeRecoveryEvents && eventCol) {
-                processedCompData = c.data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+                if (eCol) {
+                    pData = pData.filter(r => {
+                        const eVal = String(r[eCol] || '').toLowerCase().replace(/\s+/g, '');
+                        if (eVal.includes('recovery')) return false;
+                        return true;
+                    });
+                }
             }
 
-            if (!processedCompData || processedCompData.length === 0) return { lookup, compXKey: null, data: [] };
-
-            const compTimeCol = keys.find(k => {
-                const low = k.toLowerCase();
-                return low.includes('date') || low.includes('time') || low.includes('stamp') || low.includes('createat') || low.includes('created');
+            const lookup = new Map();
+            // Optional interpolation logic (currently using index alignment or closest timestamp)
+            pData.forEach((row, i) => {
+                // If the comparison file has the exact same X Axis type (e.g. timestamp or index)
+                const mainXValueMatch = row[xKey] !== undefined ? row[xKey] : (i + 1);
+                lookup.set(mainXValueMatch, row);
             });
-            const compXKey = compTimeCol || 'index';
-            const compData = compTimeCol ? processedCompData : processedCompData.map((row, i) => ({ ...row, index: i + 1 }));
-
-            compData.forEach((row, i) => {
-                const xVal = compTimeCol ? row[compTimeCol] : i + 1;
-                if (xVal !== undefined && xVal !== null) lookup[String(xVal)] = row;
-            });
-            return { lookup, compXKey, data: compData };
+            return lookup;
         });
 
-        // Determine the maximum number of rows across all files
-        const maxLen = Math.max(
+        // Loop over the main chartData and fold over the compareLookup elements
+        // If mainData has 1000 points, but compareData has 1200, we simply extend the timeline bounds.
+        const combined = [];
+        const maxLength = Math.max(
             chartData.length,
-            ...compareDataList.map(c => (c.data ? c.data.length : 0))
+            ...activeCompareList.map(c => (c.data ? c.data.length : 0))
         );
 
-        const merged = [];
+        for (let i = 0; i < maxLength; i++) {
+            let rowObj = { _globalIndex: i };
 
-        for (let rowIdx = 0; rowIdx < maxLen; rowIdx++) {
-            // Base row: use main file data if available, otherwise create a synthetic
-            // row using the comparison file's x-value so the x-axis stays continuous
-            let baseRow;
-            if (rowIdx < chartData.length) {
-                baseRow = { ...chartData[rowIdx] };
+            // Seed primary file data
+            if (i < chartData.length) {
+                rowObj = { ...rowObj, ...chartData[i] };
             } else {
-                // Main file has no row here – use index (1,2,3...) or first comp's x-value
-                const firstComp = compLookups.find(cl => rowIdx < cl.data.length);
-                if (!firstComp) break;
-                const xVal = xKey === 'index' ? rowIdx + 1 : (firstComp.data[rowIdx][firstComp.compXKey] ?? firstComp.data[rowIdx][xKey] ?? rowIdx + 1);
-                baseRow = { [xKey]: xVal };
+                // Determine a synthetic X value using linear projection
+                rowObj[xKey] = (chartData[chartData.length - 1]?.[xKey] || 0) + (i - chartData.length + 1);
             }
 
-            const rowXVal = baseRow[xKey] != null ? String(baseRow[xKey]) : null;
+            // Graft comparison rows corresponding to the current state
+            compLookups.forEach((lookup, idx) => {
+                const compFile = activeCompareList[idx];
+                const matchingPoint = lookup.get(rowObj[xKey]) || (compFile.data && compFile.data[i] ? compFile.data[i] : null);
 
-            compLookups.forEach(({ lookup, compXKey, data }, idx) => {
-                const compFile = compareDataList[idx];
-
-                // Try value match first (works when both files share same x values)
-                let compRow = rowXVal ? lookup[rowXVal] : undefined;
-
-                // Fallback: row-index alignment
-                if (!compRow && rowIdx < data.length) {
-                    compRow = data[rowIdx];
-                }
-
-                if (compRow) {
-                    Object.keys(compRow).forEach(key => {
-                        if (typeof compRow[key] === 'number') {
-                            baseRow[`${key}_compare_${compFile.fileName}`] = compRow[key];
+                if (matchingPoint) {
+                    allSeriesKeys.forEach(key => {
+                        if (matchingPoint[key] !== undefined) {
+                            rowObj[`${key}_compare_${compFile.fileName}`] = matchingPoint[key];
                         }
                     });
                 }
             });
 
-            merged.push(baseRow);
+            combined.push(rowObj);
         }
 
-        return merged;
-    }, [chartData, compareDataList, xKey]);
+        return combined;
+    }, [chartData, activeCompareList, xKey, removeRecoveryEvents, allSeriesKeys]);
+    // Identify the global bounds explicitly and calculate stats to minimize layout shift & Recharts unoptimized prop tracking overhead
+    const { chartStats, globalYBounds } = useMemo(() => {
+        const stats = {};
+        const localBounds = {};
+        allSeriesKeys.forEach(key => {
+            let min = Infinity;
+            let max = -Infinity;
+            const values = [];
 
-    // Dashboard shows basic merged data (recovery filtering applied beforehand, dynamically recalculates)
-    const processedChartData = rawProcessedData;
+            processedChartData.forEach(row => {
+                const valArray = [row[key]];
+                if (compareKeysMap[key]) {
+                    compareKeysMap[key].forEach(compareNode => valArray.push(row[compareNode.key]));
+                }
+                valArray.forEach(val => {
+                    if (val !== undefined && val !== null && !isNaN(val)) {
+                        values.push(val);
+                        if (val < min) min = val;
+                        if (val > max) max = val;
+                    }
+                });
+            });
+
+            if (values.length > 0) {
+                // Calculate simple variance and properties useful downstream
+                const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                stats[key] = { min, max, mean, count: values.length };
+                // Calculate precise domain limits padded by 3% standard margin for perfect fit instead of auto domain logic that thrashes reflow
+                const range = max - min;
+                const margin = range * 0.03 || (max * 0.01) || 1;
+                localBounds[key] = [min - margin, max + margin];
+            } else {
+                localBounds[key] = ['auto', 'auto'];
+            }
+        });
+        return { chartStats: stats, globalYBounds: localBounds };
+    }, [processedChartData, activeCompareList, allSeriesKeys, compareKeysMap]);
 
     // Optimize Grid View: Downsample data to ~200 points for smooth scrolling
     const gridChartData = useMemo(() => {
@@ -465,15 +507,6 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         );
     }
 
-    if (allSeriesKeys.length === 0) {
-        return (
-            <div className="chart-area-empty">
-                <AlertCircle size={48} color="#f87171" style={{ marginBottom: 16 }} />
-                <p>No numeric columns found to plot.</p>
-            </div>
-        )
-    }
-
     const singleViewKeys = focusSeries ? [focusSeries] : allSeriesKeys;
 
     return (
@@ -498,7 +531,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleZoomOutBtn(); }} title="Zoom Out (show more points)">
                         <ZoomOut size={18} /> <span style={{ fontSize: '0.75rem', marginLeft: 2 }}>Out</span>
                     </button>
-                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < processedChartData.length - 1)) && (
+                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < (processedChartData?.length || 0) - 1)) && (
                         <button className="icon-btn" onClick={zoomOut} title="Reset Zoom">
                             <RefreshCw size={16} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Reset</span>
                         </button>
@@ -532,12 +565,22 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                         Remove Recovery
                     </label>
 
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.75rem', color: '#94a3b8' }}>
+                        <input
+                            type="checkbox"
+                            checked={filterUnknown}
+                            onChange={(e) => setFilterUnknown(e.target.checked)}
+                            style={{ accentColor: '#38bdf8', cursor: 'pointer', margin: 0, width: 14, height: 14 }}
+                        />
+                        No Unknowns
+                    </label>
+
                     <div className="separator" />
 
                     {/* Multi Comparison Select */}
                     <div style={{ marginRight: 12 }}>
                         <MultiFileSelect
-                            options={availableFiles}
+                            options={availableFiles.filter(f => isKnownFile(f.name))}
                             selected={compareFileIds || []}
                             onChange={onCompareSelect}
                             placeholder="Compare with..."
@@ -546,250 +589,259 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
                     <div className="separator" />
 
-                    <button className="icon-btn" onClick={handleDownloadPng} title="Download View as PNG (Image)">
+                    <button className="icon-btn" onClick={handleDownloadPng} title="Download View as PNG (Image)" disabled={allSeriesKeys.length === 0}>
                         <ImageIcon size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>PNG</span>
                     </button>
 
-                    <button className="icon-btn" onClick={handleDownload} title="Export CSV Data">
+                    <button className="icon-btn" onClick={handleDownload} title="Export CSV Data" disabled={allSeriesKeys.length === 0}>
                         <Download size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>CSV</span>
                     </button>
                 </div>
             </div>
 
-            {/* Global Zoom Range Controller */}
-            {processedChartData && processedChartData.length > 4 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(15,23,42,0.8)', borderBottom: '1px solid var(--border-color)', zIndex: 10 }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>X-Axis Interval:</span>
-
-                    {/* Manual Input Range */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <input
-                            type="number"
-                            className="text-input"
-                            style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
-                            value={String(processedChartData[brushStartIdx]?.[xKey] || '')}
-                            onChange={(e) => {
-                                const targetX = e.target.value;
-                                const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
-                                if (idx !== -1 && idx <= (brushEndIdx || processedChartData.length - 1)) {
-                                    setBrushStartIdx(idx);
-                                }
-                            }}
-                            title={`Start ${xKey}`}
-                        />
-                        <span style={{ color: 'var(--text-muted)' }}>to</span>
-                        <input
-                            type="number"
-                            className="text-input"
-                            style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
-                            value={String(processedChartData[brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1]?.[xKey] || '')}
-                            onChange={(e) => {
-                                const targetX = e.target.value;
-                                const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
-                                if (idx !== -1 && idx >= brushStartIdx) {
-                                    setBrushEndIdx(idx);
-                                }
-                            }}
-                            title={`End ${xKey}`}
-                        />
-                    </div>
-
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 8 }}>Scroll/Pan:</span>
-                    <input
-                        type="range"
-                        min={0}
-                        max={Math.max(0, processedChartData.length - (singleViewData.length))}
-                        value={brushStartIdx}
-                        onChange={(e) => {
-                            const newStart = parseInt(e.target.value, 10);
-                            const currentSpan = (brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1) - brushStartIdx;
-                            setBrushStartIdx(newStart);
-                            setBrushEndIdx(newStart + currentSpan);
-                        }}
-                        style={{ flex: 1, height: 6, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                        title="Pan Left/Right"
-                    />
-
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>
-                        {singleViewData.length} pts
-                    </span>
+            {allSeriesKeys.length === 0 ? (
+                <div className="chart-area-empty">
+                    <AlertCircle size={48} color="#f87171" style={{ marginBottom: 16 }} />
+                    <p>No numeric columns found to plot or file is filtered out.</p>
                 </div>
-            )}
+            ) : (
+                <>
+                    {/* Global Zoom Range Controller */}
+                    {processedChartData && processedChartData.length > 4 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(15,23,42,0.8)', borderBottom: '1px solid var(--border-color)', zIndex: 10 }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>X-Axis Interval:</span>
 
-            <div className={`charts-scroll-container ${viewMode}`} ref={scrollContainerRef}>
-                {viewMode === 'single' ? (
-                    <div
-                        ref={chartWrapperRef}
-                        className="chart-container-wrapper glass-panel single-chart-view"
-                        style={{ height: '100%', width: '100%', position: 'relative' }}
-                    >
-                        <div className="zoom-hint" style={{
-                            position: 'absolute',
-                            top: '10px',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            zIndex: 10,
-                            fontSize: '0.75rem',
-                            color: 'var(--text-muted)',
-                            background: 'rgba(15, 23, 42, 0.8)',
-                            padding: '4px 12px',
-                            borderRadius: '20px',
-                            pointerEvents: 'none',
-                            border: '1px solid var(--border-color)',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-                        }}>
-                            <span style={{ color: 'var(--accent-primary)' }}>Zoom In</span> / <span style={{ color: 'var(--accent-primary)' }}>Zoom Out</span> buttons or scroll — {brushStartIdx > 0 || (brushEndIdx !== null && processedChartData && brushEndIdx < processedChartData.length - 1) ? 'zoomed' : 'full range'}
-                        </div>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart
-                                data={singleViewData}
-                                margin={{ top: 10, right: 30, left: 0, bottom: 20 }}
-                                onMouseMove={(e) => {
-                                    if (e && e.activeLabel !== undefined) setCurrentHoverLabel(e.activeLabel);
+                            {/* Manual Input Range */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input
+                                    type="number"
+                                    className="text-input"
+                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
+                                    value={String(processedChartData[brushStartIdx]?.[xKey] || '')}
+                                    onChange={(e) => {
+                                        const targetX = e.target.value;
+                                        const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
+                                        if (idx !== -1 && idx <= (brushEndIdx || processedChartData.length - 1)) {
+                                            setBrushStartIdx(idx);
+                                        }
+                                    }}
+                                    title={`Start ${xKey}`}
+                                />
+                                <span style={{ color: 'var(--text-muted)' }}>to</span>
+                                <input
+                                    type="number"
+                                    className="text-input"
+                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem' }}
+                                    value={String(processedChartData[brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1]?.[xKey] || '')}
+                                    onChange={(e) => {
+                                        const targetX = e.target.value;
+                                        const idx = processedChartData.findIndex(r => String(r[xKey]).startsWith(targetX));
+                                        if (idx !== -1 && idx >= brushStartIdx) {
+                                            setBrushEndIdx(idx);
+                                        }
+                                    }}
+                                    title={`End ${xKey}`}
+                                />
+                            </div>
+
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: 8 }}>Scroll/Pan:</span>
+                            <input
+                                type="range"
+                                min={0}
+                                max={Math.max(0, processedChartData.length - (singleViewData.length))}
+                                value={brushStartIdx}
+                                onChange={(e) => {
+                                    const newStart = parseInt(e.target.value, 10);
+                                    const currentSpan = (brushEndIdx !== null ? brushEndIdx : processedChartData.length - 1) - brushStartIdx;
+                                    setBrushStartIdx(newStart);
+                                    setBrushEndIdx(newStart + currentSpan);
                                 }}
-                                onContextMenu={(e) => e.preventDefault()}
+                                style={{ flex: 1, height: 6, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                                title="Pan Left/Right"
+                            />
+
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', minWidth: 60, textAlign: 'right' }}>
+                                {singleViewData.length} pts
+                            </span>
+                        </div >
+                    )}
+
+                    <div className={`charts-scroll-container ${viewMode}`} ref={scrollContainerRef}>
+                        {viewMode === 'single' ? (
+                            <div
+                                ref={chartWrapperRef}
+                                className="chart-container-wrapper glass-panel single-chart-view"
+                                style={{ height: '100%', width: '100%', position: 'relative' }}
                             >
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-                                <XAxis
-                                    dataKey={xKey}
-                                    stroke="#94a3b8"
-                                    tick={{ fill: '#94a3b8' }}
-                                    minTickGap={30}
-                                    tickFormatter={formatXAxis}
-                                    interval="preserveStartEnd"
-                                />
-                                <YAxis
-                                    stroke="#94a3b8"
-                                    tick={{ fill: '#94a3b8' }}
-                                    domain={['auto', 'auto']}
-                                    width={55}
-                                />
-                                {showTooltip && (
-                                    <Tooltip
-                                        content={<CustomTooltip />}
-                                        position={{ x: 60, y: 10 }}
-                                        wrapperStyle={{ zIndex: 100 }}
-                                    />
-                                )}
-                                <Legend
-                                    verticalAlign="bottom"
-                                    wrapperStyle={{ paddingTop: '10px', bottom: 20 }}
-                                    formatter={(value) => (
-                                        <span style={{ color: '#e2e8f0', fontSize: '0.8rem' }}>{value}</span>
-                                    )}
-                                />
-                                {singleViewKeys.flatMap((key, index) => {
-                                    const lines = [
-                                        <Line
-                                            key={`main-${key}`}
-                                            type="monotone"
-                                            dataKey={key}
-                                            stroke={COLORS[allSeriesKeys.indexOf(key) % COLORS.length]}
-                                            strokeWidth={2}
-                                            dot={false}
-                                            activeDot={{ r: 6 }}
-                                            name={key}
-                                            isAnimationActive={false}
+                                <div className="zoom-hint" style={{
+                                    position: 'absolute',
+                                    top: '10px',
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    zIndex: 10,
+                                    fontSize: '0.75rem',
+                                    color: 'var(--text-muted)',
+                                    background: 'rgba(15, 23, 42, 0.8)',
+                                    padding: '4px 12px',
+                                    borderRadius: '20px',
+                                    pointerEvents: 'none',
+                                    border: '1px solid var(--border-color)',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+                                }}>
+                                    <span style={{ color: 'var(--accent-primary)' }}>Zoom In</span> / <span style={{ color: 'var(--accent-primary)' }}>Zoom Out</span> buttons or scroll — {brushStartIdx > 0 || (brushEndIdx !== null && processedChartData && brushEndIdx < processedChartData.length - 1) ? 'zoomed' : 'full range'}
+                                </div>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart
+                                        data={singleViewData}
+                                        margin={{ top: 10, right: 30, left: 0, bottom: 20 }}
+                                        onMouseMove={(e) => {
+                                            if (e && e.activeLabel !== undefined) setCurrentHoverLabel(e.activeLabel);
+                                        }}
+                                        onContextMenu={(e) => e.preventDefault()}
+                                    >
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                                        <XAxis
+                                            dataKey={xKey}
+                                            stroke="#94a3b8"
+                                            tick={{ fill: '#94a3b8' }}
+                                            minTickGap={30}
+                                            tickFormatter={formatXAxis}
+                                            interval="preserveStartEnd"
                                         />
-                                    ];
-                                    if (compareKeysMap[key]) {
-                                        compareKeysMap[key].forEach(comp => {
-                                            lines.push(
+                                        <YAxis
+                                            stroke="#94a3b8"
+                                            tick={{ fill: '#94a3b8' }}
+                                            domain={['auto', 'auto']}
+                                            width={55}
+                                        />
+                                        {showTooltip && (
+                                            <Tooltip
+                                                content={<CustomTooltip />}
+                                                position={{ x: 60, y: 10 }}
+                                                wrapperStyle={{ zIndex: 100 }}
+                                            />
+                                        )}
+                                        <Legend
+                                            verticalAlign="bottom"
+                                            wrapperStyle={{ paddingTop: '10px', bottom: 20 }}
+                                            formatter={(value) => (
+                                                <span style={{ color: '#e2e8f0', fontSize: '0.8rem' }}>{value}</span>
+                                            )}
+                                        />
+                                        {singleViewKeys.flatMap((key, index) => {
+                                            const lines = [
                                                 <Line
-                                                    key={comp.key}
+                                                    key={`main-${key}`}
                                                     type="monotone"
-                                                    dataKey={comp.key}
-                                                    stroke={COMPARE_COLORS[(comp.colorIndex + allSeriesKeys.indexOf(key)) % COMPARE_COLORS.length]}
+                                                    dataKey={key}
+                                                    stroke={COLORS[allSeriesKeys.indexOf(key) % COLORS.length]}
                                                     strokeWidth={2}
-                                                    strokeOpacity={0.9}
                                                     dot={false}
-                                                    activeDot={{ r: 4, strokeWidth: 0 }}
-                                                    name={`${key} (${comp.fileName})`}
-                                                    connectNulls
+                                                    activeDot={{ r: 6 }}
+                                                    name={key}
                                                     isAnimationActive={false}
                                                 />
-                                            );
-                                        });
-                                    }
-                                    return lines;
-                                })}
-                            </LineChart>
-                        </ResponsiveContainer>
-                        {/* Zoom range slider moved to the global header */}
-                    </div>
-                ) : (
-                    <div className="charts-grid">
-                        {allSeriesKeys.map((key, index) => (
-                            <div
-                                key={key}
-                                className="chart-grid-item glass-panel"
-                                onClick={() => handleFocus(key)}
-                                style={{ cursor: 'pointer' }}
-                                title="Click to Maximize and Zoom"
-                            >
-                                <div className="chart-grid-header">
-                                    <h3 className="chart-title">{key}</h3>
-                                    <button
-                                        className="icon-btn small"
-                                        onClick={(e) => { e.stopPropagation(); handleFocus(key); }}
-                                        title="Maximize & Zoom"
-                                    >
-                                        <Maximize2 size={14} />
-                                    </button>
-                                </div>
-                                <div className="mini-chart-wrapper" style={{ flex: 1, minHeight: 0 }}>
-                                    <LazyChart height={200}>
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={gridChartData} margin={{ top: 10, right: 10, left: 5, bottom: 5 }}>
-                                                {/* Grid removed for performance */}
-                                                <XAxis
-                                                    dataKey={xKey}
-                                                    stroke="#64748b"
-                                                    tick={{ fill: '#64748b', fontSize: 10 }}
-                                                    height={30}
-                                                    minTickGap={30}
-                                                    tickFormatter={formatXAxis}
-                                                />
-                                                <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
-                                                {/* Tooltip removed */}
-                                                {[
-                                                    <Line
-                                                        key={`main-${key}`}
-                                                        type="monotone"
-                                                        dataKey={key}
-                                                        stroke={COLORS[index % COLORS.length]}
-                                                        strokeWidth={2}
-                                                        dot={false}
-                                                        activeDot={{ r: 4 }}
-                                                        name={key}
-                                                        isAnimationActive={false}
-                                                    />,
-                                                    ...(compareKeysMap[key] ? compareKeysMap[key].map((comp, cIdx) => (
+                                            ];
+                                            if (compareKeysMap[key]) {
+                                                compareKeysMap[key].forEach(comp => {
+                                                    lines.push(
                                                         <Line
                                                             key={comp.key}
                                                             type="monotone"
                                                             dataKey={comp.key}
-                                                            stroke={COMPARE_COLORS[comp.colorIndex % COMPARE_COLORS.length]}
+                                                            stroke={COMPARE_COLORS[(comp.colorIndex + allSeriesKeys.indexOf(key)) % COMPARE_COLORS.length]}
                                                             strokeWidth={2}
-                                                            strokeOpacity={0.8}
+                                                            strokeOpacity={0.9}
                                                             dot={false}
-                                                            activeDot={{ r: 3, strokeWidth: 0 }}
+                                                            activeDot={{ r: 4, strokeWidth: 0 }}
                                                             name={`${key} (${comp.fileName})`}
                                                             connectNulls
                                                             isAnimationActive={false}
                                                         />
-                                                    )) : [])
-                                                ]}
-
-                                            </LineChart>
-                                        </ResponsiveContainer>
-                                    </LazyChart>
-                                </div>
+                                                    );
+                                                });
+                                            }
+                                            return lines;
+                                        })}
+                                    </LineChart>
+                                </ResponsiveContainer>
+                                {/* Zoom range slider moved to the global header */}
                             </div>
-                        ))}
+                        ) : (
+                            <div className="charts-grid">
+                                {allSeriesKeys.map((key, index) => (
+                                    <div
+                                        key={key}
+                                        className="chart-grid-item glass-panel"
+                                        onClick={() => handleFocus(key)}
+                                        style={{ cursor: 'pointer' }}
+                                        title="Click to Maximize and Zoom"
+                                    >
+                                        <div className="chart-grid-header">
+                                            <h3 className="chart-title">{key}</h3>
+                                            <button
+                                                className="icon-btn small"
+                                                onClick={(e) => { e.stopPropagation(); handleFocus(key); }}
+                                                title="Maximize & Zoom"
+                                            >
+                                                <Maximize2 size={14} />
+                                            </button>
+                                        </div>
+                                        <div className="mini-chart-wrapper" style={{ flex: 1, minHeight: 0 }}>
+                                            <LazyChart height={200}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <LineChart data={gridChartData} margin={{ top: 10, right: 10, left: 5, bottom: 5 }}>
+                                                        {/* Grid removed for performance */}
+                                                        <XAxis
+                                                            dataKey={xKey}
+                                                            stroke="#64748b"
+                                                            tick={{ fill: '#64748b', fontSize: 10 }}
+                                                            height={30}
+                                                            minTickGap={30}
+                                                            tickFormatter={formatXAxis}
+                                                        />
+                                                        <YAxis stroke="#94a3b8" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={['auto', 'auto']} width={40} />
+                                                        {/* Tooltip removed */}
+                                                        {[
+                                                            <Line
+                                                                key={`main-${key}`}
+                                                                type="monotone"
+                                                                dataKey={key}
+                                                                stroke={COLORS[index % COLORS.length]}
+                                                                strokeWidth={2}
+                                                                dot={false}
+                                                                activeDot={{ r: 4 }}
+                                                                name={key}
+                                                                isAnimationActive={false}
+                                                            />,
+                                                            ...(compareKeysMap[key] ? compareKeysMap[key].map((comp, cIdx) => (
+                                                                <Line
+                                                                    key={comp.key}
+                                                                    type="monotone"
+                                                                    dataKey={comp.key}
+                                                                    stroke={COMPARE_COLORS[comp.colorIndex % COMPARE_COLORS.length]}
+                                                                    strokeWidth={2}
+                                                                    strokeOpacity={0.8}
+                                                                    dot={false}
+                                                                    activeDot={{ r: 3, strokeWidth: 0 }}
+                                                                    name={`${key} (${comp.fileName})`}
+                                                                    connectNulls
+                                                                    isAnimationActive={false}
+                                                                />
+                                                            )) : [])
+                                                        ]}
+
+                                                    </LineChart>
+                                                </ResponsiveContainer>
+                                            </LazyChart>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
-                )}
-            </div>
+                </>
+            )}
 
             <div className="chart-footer">
                 <div className="stat-card">

@@ -1,19 +1,24 @@
 import React, { useRef, useState } from 'react';
 import {
-    Folder, FileText, UploadCloud, ChevronRight, BarChart2, Search, Trash2,
+    Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [sidebarWidth, setSidebarWidth] = useState(250);
+    const [expandedFolders, setExpandedFolders] = useState(new Set());
+    const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
+
+    const actualFiles = files.filter(f => !f.isFolder);
+    const customFolders = files.filter(f => f.isFolder);
 
     const handleMouseDown = React.useCallback((e) => {
         e.preventDefault();
@@ -38,15 +43,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         document.body.style.cursor = 'col-resize';
     }, [sidebarWidth]);
 
-    const handleUploadClick = () => {
+    const handleUploadClick = (folderId = null) => {
+        setActiveUploadFolderId(typeof folderId === 'string' ? folderId : null);
         fileInputRef.current?.click();
     };
 
-    const handleFolderUploadClick = () => {
+    const handleFolderUploadClick = (folderId = null) => {
+        setActiveUploadFolderId(typeof folderId === 'string' ? folderId : null);
         folderInputRef.current?.click();
     };
 
-    const filteredFiles = files.filter(f =>
+    const filteredFiles = actualFiles.filter(f =>
         f.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
@@ -361,16 +368,26 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             </div>
 
             <div className="upload-section">
-                <button className="btn-primary upload-btn" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }} onClick={handleFolderUploadClick}>
+                <button className="btn-primary upload-btn" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }} onClick={() => handleFolderUploadClick()}>
                     <Folder className="icon" size={18} />
                     <span>Upload Folder</span>
                 </button>
                 <button
                     className="btn-secondary upload-btn-folder"
-                    onClick={handleUploadClick}
+                    onClick={() => handleUploadClick()}
                     title="Upload Files"
                 >
                     <FileText className="icon" size={18} color="#94a3b8" />
+                </button>
+                <button
+                    className="btn-secondary upload-btn-folder"
+                    onClick={() => {
+                        const name = window.prompt("Enter new folder name:");
+                        if (name && onCreateFolder) onCreateFolder(name);
+                    }}
+                    title="Create New Folder"
+                >
+                    <FolderPlus className="icon" size={18} color="#94a3b8" />
                 </button>
                 <input
                     type="file"
@@ -378,7 +395,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     style={{ display: 'none' }}
                     multiple
                     accept=".csv,.xlsx,.xls"
-                    onChange={onUpload}
+                    onChange={(e) => {
+                        onUpload(e, activeUploadFolderId);
+                        setActiveUploadFolderId(null);
+                        e.target.value = '';
+                    }}
                 />
                 <input
                     type="file"
@@ -387,7 +408,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     webkitdirectory=""
                     directory=""
                     multiple
-                    onChange={onUpload}
+                    onChange={(e) => {
+                        onUpload(e, activeUploadFolderId);
+                        setActiveUploadFolderId(null);
+                        e.target.value = '';
+                    }}
                 />
                 <input
                     type="file"
@@ -605,15 +630,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         </div>
                     </div>
                 )}
-                {files.length === 0 ? (
-                    <div className="empty-files">
-                        <p>No files uploaded</p>
-                    </div>
-                ) : (
-                    <ul className="file-list">
-                        {filteredFiles.map((file) => (
+                <div className="workspace-files-container">
+                    {(() => {
+                        const renderFileItem = (file, keyPrefix = '') => (
                             <li
-                                key={file.id}
+                                key={keyPrefix + file.id}
                                 className={`file-item ${selectedFileId === file.id ? 'active' : ''} ${compareFileIds?.includes(file.id) ? 'compare-active' : ''}`}
                                 onClick={(e) => onFileSelect(file.id, e.ctrlKey || e.metaKey)}
                                 onMouseEnter={(e) => handleMouseEnter(e, file)}
@@ -641,21 +662,18 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     }}
                                 >
                                     {selectedFileId === file.id ? (
-                                        /* Main File: Blue Check */
                                         <div style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
                                             <div style={{ width: 13, height: 13, border: '1.5px solid #38bdf8', background: 'rgba(56,189,248,0.2)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                                 <div style={{ width: 7, height: 4, borderLeft: '1.5px solid white', borderBottom: '1.5px solid white', transform: 'rotate(-45deg) translate(1px, -1px)' }} />
                                             </div>
                                         </div>
                                     ) : compareFileIds?.includes(file.id) ? (
-                                        /* Compare File: Amber Check */
                                         <div style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}>
                                             <div style={{ width: 13, height: 13, border: '1.5px solid #fbbf24', background: 'rgba(251,191,36,0.2)', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                                 <div style={{ width: 7, height: 4, borderLeft: '1.5px solid white', borderBottom: '1.5px solid white', transform: 'rotate(-45deg) translate(1px, -1px)' }} />
                                             </div>
                                         </div>
                                     ) : (
-                                        /* Inactive: Empty Box */
                                         <div style={{ width: 13, height: 13, border: '1.5px solid #94a3b8', borderRadius: 3, opacity: 0.5 }} />
                                     )}
                                 </button>
@@ -671,9 +689,117 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     <Trash2 size={14} />
                                 </button>
                             </li>
-                        ))}
-                    </ul>
-                )}
+                        );
+
+                        const allDataFiles = filteredFiles.filter(f => !f.isFolder);
+
+                        return (
+                            <>
+                                {customFolders.length > 0 && (
+                                    <div className="section-title" style={{ marginTop: '4px', marginBottom: '8px', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.6rem', textTransform: 'uppercase', fontWeight: 600 }}>
+                                        <Folder size={12} />
+                                        Folders
+                                    </div>
+                                )}
+                                {customFolders.map(folder => {
+                                    const folderFiles = filteredFiles.filter(f => f.folderId === folder.id);
+                                    const folderFileIds = folderFiles.map(f => f.id);
+                                    const isAllSelected = folderFiles.length > 0 && folderFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+
+                                    const isExpanded = expandedFolders.has(folder.id);
+
+                                    return (
+                                        <div key={folder.id} style={{ marginBottom: '12px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', overflow: 'hidden' }}>
+                                            <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.02)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: (folderFiles.length > 0 && isExpanded) ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                                                <div
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1 }}
+                                                    onClick={() => {
+                                                        const newExpanded = new Set(expandedFolders);
+                                                        if (isExpanded) newExpanded.delete(folder.id);
+                                                        else newExpanded.add(folder.id);
+                                                        setExpandedFolders(newExpanded);
+                                                    }}
+                                                >
+                                                    {isExpanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
+                                                    <Folder size={14} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
+                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>{folder.name}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                    {folderFiles.length > 0 && (
+                                                        <input type="checkbox" checked={isAllSelected} onChange={(e) => {
+                                                            if (!onSelectFiles) return;
+                                                            const currentSelected = [selectedFileId, ...(compareFileIds || [])].filter(Boolean);
+                                                            if (e.target.checked) {
+                                                                const newSelected = Array.from(new Set([...currentSelected, ...folderFileIds]));
+                                                                onSelectFiles(newSelected);
+                                                            } else {
+                                                                const newSelected = currentSelected.filter(id => !folderFileIds.includes(id));
+                                                                onSelectFiles(newSelected);
+                                                            }
+                                                        }} title="Select all files in folder for analysis" style={{ margin: 0, width: 14, height: 14, cursor: 'pointer', accentColor: '#38bdf8' }} />
+                                                    )}
+                                                    <button onClick={() => handleUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Files"><FileText size={14} color="#94a3b8" /></button>
+                                                    <button onClick={() => handleFolderUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Folder Content"><UploadCloud size={14} color="#94a3b8" /></button>
+                                                    <button onClick={(e) => onDeleteFolder(e, folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1, color: '#ef4444' }} title="Delete Folder"><Trash2 size={14} /></button>
+                                                </div>
+                                            </div>
+                                            {(folderFiles.length > 0 && isExpanded) && (
+                                                <ul className="file-list" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
+                                                    {folderFiles.map(file => renderFileItem(file))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                                {true && (() => {
+                                    const isRootExpanded = expandedFolders.has('root-data-files');
+                                    const rootFileIds = allDataFiles.map(f => f.id);
+                                    const isAllRootSelected = allDataFiles.length > 0 && rootFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+
+                                    return (
+                                        <div style={{ marginBottom: '12px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', overflow: 'hidden' }}>
+                                            <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.02)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: (allDataFiles.length > 0 && isRootExpanded) ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                                                <div
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1 }}
+                                                    onClick={() => {
+                                                        const newExpanded = new Set(expandedFolders);
+                                                        if (isRootExpanded) newExpanded.delete('root-data-files');
+                                                        else newExpanded.add('root-data-files');
+                                                        setExpandedFolders(newExpanded);
+                                                    }}
+                                                >
+                                                    {isRootExpanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
+                                                    <Folder size={14} color="#38bdf8" fill="rgba(56,189,248,0.2)" />
+                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>DataFiles</span>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                    {allDataFiles.length > 0 && (
+                                                        <input type="checkbox" checked={isAllRootSelected} onChange={(e) => {
+                                                            if (!onSelectFiles) return;
+                                                            const currentSelected = [selectedFileId, ...(compareFileIds || [])].filter(Boolean);
+                                                            if (e.target.checked) {
+                                                                const newSelected = Array.from(new Set([...currentSelected, ...rootFileIds]));
+                                                                onSelectFiles(newSelected);
+                                                            } else {
+                                                                const newSelected = currentSelected.filter(id => !rootFileIds.includes(id));
+                                                                onSelectFiles(newSelected);
+                                                            }
+                                                        }} title="Select all DataFiles for analysis" style={{ margin: 0, width: 14, height: 14, cursor: 'pointer', accentColor: '#38bdf8' }} />
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {(isRootExpanded) && (
+                                                <ul className="file-list" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
+                                                    {allDataFiles.length === 0 ? <li style={{ padding: '8px', fontSize: '0.75rem', color: '#94a3b8' }}>No files uploaded</li> : allDataFiles.map(file => renderFileItem(file, 'df-'))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+                            </>
+                        );
+                    })()}
+                </div>
             </div>
 
         </aside>

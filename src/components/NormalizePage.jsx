@@ -140,57 +140,81 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
 /* ── Main component ────────────────────────────────────────────────── */
 const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
+    const [filterUnknown, setFilterUnknown] = useState(true);
+
+    const isKnownFile = (fName) => {
+        if (!filterUnknown) return true;
+        if (!fName) return false;
+        const basename = fName.split(/[/\\]/).pop();
+        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
+        return m !== null;
+    };
+
+    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName)) ? data : [], [data, fileName, filterUnknown]);
+    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName)), [compareDataList, filterUnknown]);
 
     /* ── 1. Prepare Main Data ── */
     const { xKey, seriesKeys, chartData } = useMemo(() => {
-        if (!data || data.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
+        if (!activeData || activeData.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
 
         // Filter out recovery phase if checked
-        let processedData = data;
-        const keys = Object.keys(data[0]);
-        const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+        let processedData = activeData;
+        const keys = Object.keys(activeData[0]);
+        const eventCol = keys.find(col => {
+            const l = col.toLowerCase();
+            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+        });
         if (removeRecoveryEvents && eventCol) {
-            processedData = data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+            processedData = activeData.filter(row => {
+                const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
+                return !eVal.includes('recovery');
+            });
         }
 
         if (!processedData || processedData.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
 
         const x = detectXKey(processedData[0]);
         if (x) {
-            const series = Object.keys(processedData[0]).filter(k => k !== x && typeof processedData[0][k] === 'number');
+            const series = Object.keys(processedData[0]).filter(k => k !== x && k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
             return { xKey: x, seriesKeys: series, chartData: processedData };
         }
-        const series = Object.keys(processedData[0]).filter(k => typeof processedData[0][k] === 'number');
+        const series = Object.keys(processedData[0]).filter(k => k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
         const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { xKey: 'index', seriesKeys: series, chartData: chartDataWithIndex };
-    }, [data, removeRecoveryEvents]);
+    }, [activeData, removeRecoveryEvents]);
 
     /* ── 2. Prepare Compare Data List ── */
     const cmpFiles = useMemo(() => {
-        if (!compareDataList || compareDataList.length === 0) return [];
-        return compareDataList.map((file, idx) => {
+        if (!activeCompareList || activeCompareList.length === 0) return [];
+        return activeCompareList.map((file, idx) => {
             if (!file?.data || file.data.length === 0) return null;
 
             // Filter out recovery phase if checked
             let processedData = file.data;
             const keys = Object.keys(file.data[0]);
-            const eventCol = keys.find(k => k.toLowerCase().includes('event') || k.toLowerCase().includes('mode') || k.toLowerCase().includes('phase'));
+            const eventCol = keys.find(col => {
+                const l = col.toLowerCase();
+                return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
+            });
             if (removeRecoveryEvents && eventCol) {
-                processedData = file.data.filter(row => !String(row[eventCol] || '').toLowerCase().includes('recovery'));
+                processedData = file.data.filter(row => {
+                    const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
+                    return !eVal.includes('recovery');
+                });
             }
 
             if (!processedData || processedData.length === 0) return null;
 
             const x = detectXKey(processedData[0]);
             if (x) {
-                const series = Object.keys(processedData[0]).filter(k => k !== x && typeof processedData[0][k] === 'number');
+                const series = Object.keys(processedData[0]).filter(k => k !== x && k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
                 return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: x, seriesKeys: series, data: processedData };
             }
-            const series = Object.keys(processedData[0]).filter(k => typeof processedData[0][k] === 'number');
+            const series = Object.keys(processedData[0]).filter(k => k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
             const dataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
             return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: 'index', seriesKeys: series, data: dataWithIndex };
         }).filter(Boolean);
-    }, [compareDataList, removeRecoveryEvents]);
+    }, [activeCompareList, removeRecoveryEvents]);
 
     const hasCompare = cmpFiles.length > 0;
 
@@ -721,7 +745,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                         )}
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginLeft: 16, borderLeft: '1px solid var(--border-color)', paddingLeft: 12, gap: 12 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.75rem', color: '#94a3b8' }} title="Remove Recovery Phase data from visualization">
                             <input
                                 type="checkbox"
@@ -730,6 +754,15 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                                 style={{ accentColor: '#fbbf24', cursor: 'pointer', margin: 0, width: 14, height: 14 }}
                             />
                             Remove Recovery
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.75rem', color: '#94a3b8' }}>
+                            <input
+                                type="checkbox"
+                                checked={filterUnknown}
+                                onChange={(e) => setFilterUnknown(e.target.checked)}
+                                style={{ accentColor: '#fbbf24', cursor: 'pointer', margin: 0, width: 14, height: 14 }}
+                            />
+                            No Unknowns
                         </label>
                     </div>
 
