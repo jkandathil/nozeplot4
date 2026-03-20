@@ -374,13 +374,58 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
                                 ))}
 
                                 {/* Channel Rows - Progressively Rendered */}
-                                {processedGrid.channels.slice(0, renderLimit).map((channelObj) => (
-                                    <React.Fragment key={channelObj.shortTitle}>
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#fbbf24', background: 'rgba(251,191,36,0.1)', borderRadius: '6px', padding: '8px' }}>
-                                            {channelObj.shortTitle}
-                                        </div>
+                                {processedGrid.channels.slice(0, renderLimit).map((channelObj) => {
+                                    let folderBaselines = [];
+                                    let hasBaselines = false;
+                                    
+                                    successfullyProcessedFolders.forEach(folder => {
+                                        const folderGridData = processedGrid.gridData[folder.id];
+                                        const targetPlot = folderGridData ? folderGridData.plotsArray.find(p => p.shortTitle === channelObj.shortTitle) : null;
+                                        if (targetPlot && targetPlot.data) {
+                                            let foundBaselines = [];
+                                            for (let r = 0; r < Math.min(targetPlot.data.length, 100); r++) {
+                                                const row = targetPlot.data[r];
+                                                if (!row) continue;
+                                                Object.keys(row).forEach(k => {
+                                                    if (k.endsWith(`_${channelObj.shortTitle}_raw_baseline`)) {
+                                                        const gName = k.substring(0, k.indexOf(`_${channelObj.shortTitle}_raw_baseline`));
+                                                        if (!foundBaselines.some(b => b.name === gName)) {
+                                                            foundBaselines.push({ name: gName, val: row[k] });
+                                                        }
+                                                    }
+                                                });
+                                                if (foundBaselines.length > 0) break;
+                                            }
+                                            if (foundBaselines.length > 0) {
+                                                const avgBaseline = foundBaselines.reduce((sum, b) => sum + b.val, 0) / foundBaselines.length;
+                                                folderBaselines.push({ name: folder.name, val: avgBaseline });
+                                                hasBaselines = true;
+                                            }
+                                        }
+                                    });
 
-                                        {successfullyProcessedFolders.map(folder => {
+                                    return (
+                                        <React.Fragment key={channelObj.shortTitle}>
+                                            <div 
+                                                className={hasBaselines ? "baseline-tooltip-container" : ""}
+                                                style={!hasBaselines ? { display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#fbbf24', background: 'rgba(251,191,36,0.1)', borderRadius: '6px', padding: '8px' } : {}}
+                                            >
+                                                {channelObj.shortTitle}
+                                                {hasBaselines && (
+                                                    <div className="baseline-tooltip-content">
+                                                        <div className="baseline-tooltip-header">Baselines for {channelObj.shortTitle}</div>
+                                                        {folderBaselines.map((fb, idx) => (
+                                                            <div key={idx} className="baseline-tooltip-row">
+                                                                <span className="baseline-tooltip-bullet">•</span>
+                                                                <span style={{ opacity: 0.9 }}>{fb.name}:</span>
+                                                                <strong style={{ color: '#10b981' }}>{fb.val.toFixed(1)} Ω</strong>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {successfullyProcessedFolders.map(folder => {
                                             const folderGridData = processedGrid.gridData[folder.id];
                                             const targetPlot = folderGridData ? folderGridData.plotsArray.find(p => p.shortTitle === channelObj.shortTitle) : null;
 
@@ -436,10 +481,11 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
                                             );
                                         })}
                                     </React.Fragment>
-                                ))}
-                            </div>
+                                );
+                            })}
+                        </div>
 
-                            {renderLimit < processedGrid.channels.length && (
+                        {renderLimit < processedGrid.channels.length && (
                                 <div style={{ width: '100%', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', color: '#64748b' }}>
                                     <Loader className="spin" size={24} color="#38bdf8" />
                                     <span style={{ fontSize: '0.9rem' }}>Plotting remaining channels... ({renderLimit} / {processedGrid.channels.length})</span>
