@@ -17,6 +17,7 @@ import '@xyflow/react/dist/style.css';
 import { CylinderNode, MFCNode, MixerNode, HumidifierNode, OutputNode, YSplitterNode, CombinerNode, VOCBubblerNode, PermeationOvenNode } from './CustomNodes';
 import './GasSystemDesignPage.css';
 import { Network, Plus, Trash2, GitCommit, X, Play, Wand2, Download, Calculator, ListOrdered, Activity } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { nanoid } from 'nanoid';
 import { toPng } from 'html-to-image';
 import { jsPDF } from 'jspdf';
@@ -208,6 +209,14 @@ const evaluateFlow = (nodes, edges) => {
 };
 
 const GasSystemDesignInner = () => {
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
+
     const reactFlowWrapper = useRef(null);
     const [nodes, setNodes] = useState(initialNodes);
     const [edges, setEdges] = useState(initialEdges);
@@ -673,7 +682,14 @@ const GasSystemDesignInner = () => {
             </div>
 
             <div className="design-content">
-                <div className="toolbox-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+                <AnimatePresence>
+                {isSidebarVisible && (
+                <motion.div 
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: sidebarWidth, opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={{ duration: 0.5, ease: 'easeOut' }}
+                    className="toolbox-panel" style={{ position: 'relative', overflowX: 'hidden', overflowY: 'auto' }}>
                     {/* Drag Handle */}
                     <div
                         onMouseDown={handleMouseDown}
@@ -768,7 +784,9 @@ const GasSystemDesignInner = () => {
                             <Calculator size={14} /> Unit Converter
                         </button>
                     </div>
-                </div>
+                </motion.div>
+                )}
+                </AnimatePresence>
 
                 <div className="flow-area" ref={reactFlowWrapper}>
                     <ReactFlow

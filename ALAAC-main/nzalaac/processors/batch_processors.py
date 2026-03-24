@@ -687,3 +687,161 @@ async def compute_signal_metrics(
             logger.info(f"{default_output_kwargs.get('filename', 'signal_metrics')} result has been saved")
 
     return {"status": True}
+
+
+import scipy.stats as stats
+
+async def estimate_separability(
+    batched_data,
+    sensing_elements,
+    group_column="concentration_value",
+    trial_id_column="trial_id",
+    output_kwargs=None,
+    **kwargs
+):
+    """
+    Estimate time-resolved sensor separability using ANOVA F-value across concentration classes 
+    and generate a temporal line chart. ALAAC estimates and plots this natively.
+    """
+    if output_kwargs is None:
+        output_kwargs = {}
+    default_output_kwargs = {"filename": "sensor_separability"}
+    default_output_kwargs.update(output_kwargs)
+
+    time_column = determine_time_column(batched_data, kwargs)
+    if time_column is None:
+        logger.warning("Time column is missing")
+        return {"status": True, "data": batched_data}
+
+    parsed_sensing_elements = get_sensing_element_names(sensing_elements)
+    top_n = kwargs.get("plot_top_n", 5)
+
+    for module_name, trials in batched_data.items():
+        if not trials:
+            continue
+
+        assign_trial_num(trials, time_column, trial_id_column)
+        
+        # We need a generic cross-trial dataframe
+        df_all = pd.concat(trials, ignore_index=True)
+
+        if group_column not in df_all.columns:
+            logger.warning(f"Group column '{group_column}' missing for {module_name}")
+            continue
+            
+        if "delta_seconds" not in df_all.columns:
+            logger.warning(f"'delta_seconds' missing in {module_name}. Cannot perform time-resolved separability.")
+            continue
+
+        # Extract only relevant matching sensors
+        valid_cols = []
+        for se in parsed_sensing_elements:
+            valid_cols.extend([c for c in df_all.columns if se in c and "details" not in c])
+        valid_cols = sorted(list(set(valid_cols)))
+
+        if not valid_cols:
+            continue
+            
+        # Time-Resolved Binning (1-second intervals by default)
+        df_all["time_bin"] = df_all["delta_seconds"].round(0).astype(int)
+        
+        # Group by time_bin, trial, and concentration
+        features_per_bin = df_all.groupby(["time_bin", trial_id_column, group_column])[valid_cols].mean().reset_index()
+
+        # Get the strict intersection of time_bins that are generally represented
+        time_bins = sorted(features_per_bin["time_bin"].unique())
+        
+        time_resolved_f_scores = {col: [] for col in valid_cols}
+        
+        for t in time_bins:
+            df_t = features_per_bin[features_per_bin["time_bin"] == t]
+            groups_at_t = df_t[group_column].unique()
+            
+            for col in valid_cols:
+                if len(groups_at_t) < 2:
+                    time_resolved_f_scores[col].append(0)
+                    continue
+                    
+                class_arrays = []
+                for g in groups_at_t:
+                    vals = df_t[df_t[group_column] == g][col].dropna()
+                    if len(vals) > 0:
+                        class_arrays.append(vals.values)
+                
+                if len(class_arrays) < 2:
+                    time_resolved_f_scores[col].append(0)
+                else:
+                    # ANOVA FDR
+                    f_val, _ = stats.f_oneway(*class_arrays)
+                    time_resolved_f_scores[col].append(0 if math.isnan(f_val) else f_val)
+
+        # Plotly Time-Resolved Line Chart
+        fig = go.Figure()
+        
+        # Rank sensors by their maximum F-score achieved at ANY time bin
+        max_f_scores = [(col, max(time_resolved_f_scores[col])) for col in valid_cols]
+        max_f_scores.sort(key=lambda x: x[1], reverse=True)
+        top_sensors = [x[0] for x in max_f_scores[:top_n]]
+        
+        # Only plot top 25 to avoid massive overcrowding in the html file
+        plot_limit = min(25, len(max_f_scores))
+        plotted_sensors = [x[0] for x in max_f_scores[:plot_limit]]
+
+        for col in plotted_sensors:
+            is_top = col in top_sensors
+            fig.add_trace(go.Scatter(
+                x=time_bins, 
+                y=time_resolved_f_scores[col], 
+                mode='lines', 
+                name=col,
+                line=dict(width=3 if is_top else 1),
+                opacity=1.0 if is_top else 0.4
+            ))
+
+        fig.update_layout(
+            title=f"Time-Resolved Separability (ANOVA F-Value) - {module_name}",
+            xaxis_title="Time (seconds)",
+            yaxis_title="Separability F-Score",
+            template="plotly_dark",
+            hovermode="x unified"
+        )
+        
+        out_path = os.path.join(
+            os.path.normpath(kwargs.get("paths", {}).get("output_plots", "./outputs/")),
+            default_output_kwargs.get("filename", "time_resolved_separability") + f"_{module_name}.html"
+        )
+        fig.write_html(out_path)
+        logger.info(f"Time-Resolved Separability Chart saved: {out_path}")
+        
+        # Call monotonic_average_plot for the Top N elements directly matching the user's requested graph format
+        if top_sensors:
+            logger.info(f"Top {top_n} separated elements overall: {top_sensors}")
+            
+            grouped_trials = []
+            flag_titles = []
+            groups = df_all[group_column].dropna().unique()
+            
+            for g in groups:
+                 group_filter = [t for t in trials if t[group_column].iloc[0] == g]
+                 if group_filter:
+                     grouped_trials.append(group_filter)
+                     flag_titles.append(f"{module_name}_{g}")
+                     
+            if not grouped_trials:
+                 continue
+                 
+            from nzalaac.utils.data_analysis.visualization import monotonic_average_plot
+            
+            # This generates the user's uploaded plot for the top sensors.
+            monotonic_average_plot(
+                grouped_trials,
+                sensing_elements=top_sensors,
+                output_kwargs={"filename": f"Top_Separated_Elements_{module_name}", "n_cols": 2},
+                group_names=flag_titles,
+                save_csv=False,
+                plot_type="plotly", 
+                plot_kwargs={"linewidth": 3},
+                **kwargs
+            )
+
+    return {"status": True}

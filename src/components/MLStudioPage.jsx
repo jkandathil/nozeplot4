@@ -4,6 +4,7 @@ import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Responsive
 import { PCA } from 'ml-pca';
 import { RandomForestRegression as RFRegression, RandomForestClassifier as RFClassifier } from 'ml-random-forest';
 import MultivariateLinearRegression from 'ml-regression-multivariate-linear';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Matrix } from 'ml-matrix';
 import tsnejs from 'tsne';
 import * as tf from '@tensorflow/tfjs';
@@ -24,6 +25,14 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
 
     // User-entered mapping: fileId -> targetValue
     const [targetMap, setTargetMap] = useState({});
+
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
 
     // Layout
     const [sidebarWidth, setSidebarWidth] = useState(380);
@@ -489,7 +498,14 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
 
     return (
         <div className="ml-studio-page">
-            <aside className="ml-sidebar glass-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+            <AnimatePresence>
+            {isSidebarVisible && (
+            <motion.aside 
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: sidebarWidth, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+                className="ml-sidebar glass-panel" style={{ position: 'relative', overflowX: 'hidden', overflowY: 'auto' }}>
                 <div
                     onMouseDown={handleMouseDown}
                     style={{
@@ -607,7 +623,9 @@ const MLStudioPage = ({ data, fileName, compareDataList = [] }) => {
                         {isTraining ? <Loader2 className="spinner" size={16} /> : <Brain size={16} />} Train Model
                     </button>
                 </div>
-            </aside>
+            </motion.aside>
+            )}
+            </AnimatePresence>
 
             <main className="ml-content">
                 <div className="header-bar">

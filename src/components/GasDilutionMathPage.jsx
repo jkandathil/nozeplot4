@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Calculator as CalculatorIcon, FlaskConical, AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import './GasDilutionMathPage.css';
 
@@ -14,6 +15,14 @@ const GasDilutionMathPage = () => {
     const [bubblerTemp, setBubblerTemp] = useState(25); // Celsius
 
     const [leftColumnWidth, setLeftColumnWidth] = useState(500);
+
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
 
     const handleMouseDown = React.useCallback((e) => {
         e.preventDefault();
@@ -124,8 +133,9 @@ const GasDilutionMathPage = () => {
                 <p className="subtitle">Calculate flow rates to reach a desired target concentration.</p>
             </div>
 
-            <div className="math-content" style={{ gridTemplateColumns: `${leftColumnWidth}px 1fr`, position: 'relative' }}>
+            <div className="math-content" style={{ gridTemplateColumns: isSidebarVisible ? `${leftColumnWidth}px 1fr` : '1fr', position: 'relative' }}>
                 {/* Drag Handle */}
+                {isSidebarVisible && (
                 <div
                     onMouseDown={handleMouseDown}
                     style={{
@@ -138,7 +148,15 @@ const GasDilutionMathPage = () => {
                         zIndex: 10,
                     }}
                 />
-                <div className="input-section glass-panel">
+                )}
+                <AnimatePresence>
+                {isSidebarVisible && (
+                <motion.div 
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: leftColumnWidth, opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={{ duration: 0.5, ease: 'easeOut' }}
+                    className="input-section glass-panel" style={{ overflowX: 'hidden', overflowY: 'auto' }}>
                     <h3 className="section-title"><Settings size={18} /> Parameters</h3>
 
                     <div className="form-group">
@@ -236,7 +254,9 @@ const GasDilutionMathPage = () => {
                             <span className="unit">°C</span>
                         </div>
                     </div>
-                </div>
+                </motion.div>
+                )}
+                </AnimatePresence>
 
                 <div className="results-section glass-panel">
                     <h3 className="section-title"><CalculatorIcon size={18} /> Calculated Results</h3>

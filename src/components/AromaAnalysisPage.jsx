@@ -482,6 +482,14 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
 };
 
 const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFiles = [], onPageChange }) => {
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
+
     // Form config
     const defaultSensing = 'A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8';
     const [sensingElements, setSensingElements] = useState(() => localStorage.getItem('aroma_sensingElements') || defaultSensing);
@@ -701,8 +709,11 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                             rawCols.forEach(k => {
                                 const b = baselines[k];
                                 if (b !== undefined && typeof row[k] === 'number') {
+                                    row[`${k}_unnormalized_pts`] = row[k]; 
                                     row[k] = ((row[k] / b) - 1.0) * 100.0;
                                     row[`${k}_raw_baseline`] = b;
+                                } else {
+                                    row[`${k}_unnormalized_pts`] = row[k]; 
                                 }
                             });
                         });
@@ -925,6 +936,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                 if (gapStartVal !== null && gapEndVal !== null && i >= gapStartVal && i <= gapEndVal) continue;
                 sortedGroupKeys.forEach((gName) => {
                     const values = [];
+                    const rawValues = [];
+                    let pureRawPrefix = '';
+                    
                     groups[gName].forEach(f => {
                         const absFIdx = files.indexOf(f);
                         const matchedKey = filePrefixCache[absFIdx][prefix];
@@ -935,6 +949,14 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                 values.push(val);
                                 // Need to store raw mappings if we want individual lines later
                                 combinedData[i][`f${absFIdx}_${matchedKey}`] = val;
+                            }
+                            
+                            // Capture actual physical Ohms natively inside the ALAAC processing loop!
+                            pureRawPrefix = matchedKey.replace(/norm(?:alized)?_?/gi, '');
+                            let pureRawVal = f.data[i][`${pureRawPrefix}_unnormalized_pts`];
+                            if (pureRawVal === undefined) pureRawVal = f.data[i][pureRawPrefix]; // fallback if not scaled
+                            if (typeof pureRawVal === 'number') {
+                                rawValues.push(pureRawVal);
                             }
                         }
                     });
@@ -948,6 +970,12 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                         combinedData[i][`${gName}_${prefix}_range`] = [mean - std, mean + std];
                         combinedData[i][`${gName}_${prefix}_min`] = Math.min(...values);
                         combinedData[i][`${gName}_${prefix}_max`] = Math.max(...values);
+                        
+                        // Permanently inject the true raw un-normalized Physical Ohms into the exported CSV matrix
+                        if (rawValues.length > 0 && pureRawPrefix) {
+                            const rawMean = rawValues.reduce((a,b)=>a+b,0)/rawValues.length;
+                            combinedData[i][`${gName}_${pureRawPrefix}_raw`] = rawMean;
+                        }
                     }
                 });
             }
@@ -1207,7 +1235,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
             </div>
 
             <div className="aroma-content">
-                <div className="config-panel glass-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+                {isSidebarVisible && (
+                <div 
+                    className="config-panel glass-panel" style={{ width: sidebarWidth, position: 'relative' }}>
                     {/* Drag Handle */}
                     <div
                         onMouseDown={handleMouseDown}
@@ -1388,6 +1418,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                         <Layers size={16} /> AU Batch Plots
                     </button>
                 </div>
+                )}
 
                 <div className="results-panel">
                     {channelPlotsData ? (
@@ -1400,7 +1431,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                             <Maximize2 size={14} />
                                         </button>
                                     </h4>
-                                    <div style={{ height: 280, width: '100%' }}>
+                                    <div style={{ height: 280, width: '100%', position: 'relative' }}>
                                         <ResponsiveContainer width="100%" height="100%">
                                             {plot.isComposed ? (
                                                 <ComposedChart data={plot.data} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>

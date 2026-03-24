@@ -28,9 +28,12 @@ import GasDilutionMathPage from './components/GasDilutionMathPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
 import Calculator from './components/Calculator';
 import MLStudioPage from './components/MLStudioPage';
+import SeparabilityAnalysisPage from './components/SeparabilityAnalysisPage';
+import SensitivityAnalysisPage from './components/SensitivityAnalysisPage';
 import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
 import FolderCompareAromaPage from './components/FolderCompareAromaPage';
+import HelpPage from './components/HelpPage';
 import { parseFile } from './utils/fileParser';
 
 function App() {
@@ -482,7 +485,9 @@ function App() {
         <main className="main-content" style={{ position: 'relative' }}>
           <div className="content-area">
             <AnimatePresence mode="wait">
-              {activePage === 'gasDesign' ? (
+              {activePage === 'help' ? (
+                <HelpPage key="help" />
+              ) : activePage === 'gasDesign' ? (
                 <GasSystemDesignPage key="gasDesign" />
               ) : activePage === 'gasMath' ? (
                 <GasDilutionMathPage key="gasMath" />
@@ -501,6 +506,21 @@ function App() {
                   compareDataList={compareDataList}
                   availableFiles={files}
                   onPageChange={setActivePage}
+                />
+              ) : activePage === 'separability' ? (
+                <SeparabilityAnalysisPage
+                  key="separability"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
+                  compareDataList={compareDataList}
+                  availableFiles={files}
+                  onPageChange={setActivePage}
+                />
+              ) : activePage === 'sensitivity' ? (
+                <SensitivityAnalysisPage
+                  key="sensitivity"
+                  data={parsedData?.data}
+                  fileName={parsedData?.fileName}
                 />
               ) : activePage === 'recoveryAnalysis' ? (
                 <RecoveryAnalysisPage

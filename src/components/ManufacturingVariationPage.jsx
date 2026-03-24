@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Settings, Play, RefreshCw, Maximize2, Download, BarChart2, Hash, Layers, AlertTriangle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
     Tooltip as RechartsTooltip, Legend, ResponsiveContainer, Cell, ScatterChart, Scatter
@@ -23,6 +23,14 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
     const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
     const [targetConcFilter, setTargetConcFilter] = useState(''); // e.g. "50ppb"
     const [filterUnknown, setFilterUnknown] = useState(true);
+
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
 
     const isKnownFile = (fName) => {
         if (!filterUnknown) return true;
@@ -187,8 +195,10 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
 
                                 if (normKey) {
                                     fData.forEach(row => {
-                                        const ev = eventCol ? String(row[eventCol] || '').toLowerCase() : '';
-                                        if (ev.includes('recovery')) return; // Explicitly exclude recovery phase
+                                        if (eventCol) {
+                                            const ev = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
+                                            if (!ev.includes('fenomeasurement') || ev.includes('recovery')) return;
+                                        }
 
                                         if (typeof row[normKey] === 'number' && !isNaN(row[normKey]) && isFinite(row[normKey])) {
                                             if (Math.abs(row[normKey]) > Math.abs(peakVal)) {
@@ -200,8 +210,10 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                                 } else {
                                     // Calculate ALAAC max deviation from R0 natively
                                     fData.forEach(row => {
-                                        const ev = eventCol ? String(row[eventCol] || '').toLowerCase() : '';
-                                        if (ev.includes('recovery')) return; // Explicitly exclude recovery phase
+                                        if (eventCol) {
+                                            const ev = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
+                                            if (!ev.includes('fenomeasurement') || ev.includes('recovery')) return;
+                                        }
 
                                         if (typeof row[rawKey] === 'number' && !isNaN(row[rawKey]) && isFinite(row[rawKey]) && r0 !== 0) {
                                             const dev = ((row[rawKey] / 4096.0) / r0) - 1.0;
@@ -325,7 +337,14 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
             </div>
 
             <div className="aroma-content">
-                <div className="config-panel glass-panel" style={{ width: sidebarWidth, position: 'relative' }}>
+                <AnimatePresence>
+                {isSidebarVisible && (
+                <motion.div 
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: sidebarWidth, opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={{ duration: 0.5, ease: 'easeOut' }}
+                    className="config-panel glass-panel" style={{ position: 'relative', overflowX: 'hidden', overflowY: 'auto' }}>
                     <div onMouseDown={handleMouseDown} style={{ position: 'absolute', top: 0, right: -5, width: '10px', height: '100%', cursor: 'col-resize', zIndex: 10 }} />
                     <h3 className="panel-title"><Settings size={16} /> Batch Parameters</h3>
 
@@ -396,7 +415,9 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                             </p>
                         </div>
                     )}
-                </div>
+                </motion.div>
+                )}
+                </AnimatePresence>
 
                 <div className="results-panel">
                     {variationResults ? (

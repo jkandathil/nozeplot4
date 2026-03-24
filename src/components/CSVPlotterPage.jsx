@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import Papa from 'papaparse';
 import { ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
@@ -61,6 +62,14 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 const CSVPlotterPage = () => {
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
+
     const [fileName, setFileName] = useState('');
     const [csvData, setCsvData] = useState([]);
     const [columns, setColumns] = useState([]);
@@ -433,7 +442,15 @@ const CSVPlotterPage = () => {
                 ) : (
                     <div style={{ display: 'flex', gap: '20px', height: 'calc(100vh - 120px)' }}>
                         {/* Sidebar controls */}
-                        <div style={{ width: sidebarWidth, background: '#1e293b', padding: '16px', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'relative' }}>
+                        <AnimatePresence>
+                        {isSidebarVisible && (
+                        <motion.div 
+                            initial={{ width: 0, opacity: 0 }}
+                            animate={{ width: sidebarWidth, opacity: 1 }}
+                            exit={{ width: 0, opacity: 0 }}
+                            transition={{ duration: 0.5, ease: 'easeOut' }}
+                            style={{ flexShrink: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto' }}>
+                            <div style={{ width: sidebarWidth, background: '#1e293b', padding: '16px', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', height: '100%' }}>
                             {/* Drag Handle */}
                             <div
                                 onMouseDown={handleMouseDown}
@@ -507,7 +524,10 @@ const CSVPlotterPage = () => {
                                     <p style={{ color: '#64748b', fontSize: '0.85rem', textAlign: 'center', marginTop: '20px' }}>No columns found</p>
                                 )}
                             </div>
-                        </div>
+                            </div>
+                        </motion.div>
+                        )}
+                        </AnimatePresence>
 
                         {/* Chart Area */}
                         <div style={{ flex: 1, background: '#1e293b', borderRadius: '12px', border: '1px solid #334155', padding: '20px', display: 'flex', flexDirection: 'column' }}>

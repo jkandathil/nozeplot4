@@ -2,7 +2,8 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus,
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
@@ -16,11 +17,15 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const [sidebarWidth, setSidebarWidth] = useState(250);
     const [expandedFolders, setExpandedFolders] = useState(new Set());
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
+    
+    // NEW: Global Sidebar minimization toggle
+    const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('zenMode') === 'true');
 
     const actualFiles = files.filter(f => !f.isFolder);
     const customFolders = files.filter(f => f.isFolder);
 
     const handleMouseDown = React.useCallback((e) => {
+        if (isCollapsed) return; // disable resize while collapsed
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = sidebarWidth;
@@ -41,7 +46,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
         document.body.style.cursor = 'col-resize';
-    }, [sidebarWidth]);
+    }, [sidebarWidth, isCollapsed]);
 
     const handleUploadClick = (folderId = null) => {
         setActiveUploadFolderId(typeof folderId === 'string' ? folderId : null);
@@ -72,7 +77,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const activeAUs = React.useMemo(() => {
         const groups = {};
         for (const f of files) {
-            // Ensure we strictly extract the ASAU ID from the CSV filename itself, not its parent folder paths
             const baseName = f.name.split('/').pop().split('\\').pop();
             const fileParts = baseName.split('_');
             const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
@@ -84,23 +88,31 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     }, [files]);
 
     return (
-        <aside className="sidebar" style={{ width: sidebarWidth, position: 'relative' }}>
+        <aside className="sidebar" style={{ 
+            width: isCollapsed ? 60 : sidebarWidth, 
+            position: 'relative', 
+            overflow: 'hidden',
+            transition: 'width 0.4s cubic-bezier(0.33, 1, 0.68, 1)'
+        }}>
             {/* Drag Handle */}
-            <div
-                onMouseDown={handleMouseDown}
-                style={{
-                    position: 'absolute',
-                    top: 0,
-                    right: -3,
-                    width: '6px',
-                    height: '100%',
-                    cursor: 'col-resize',
-                    zIndex: 100,
-                    transition: 'background 0.2s'
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.4)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-            />
+            {!isCollapsed && (
+                <div
+                    onMouseDown={handleMouseDown}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: -3,
+                        width: '6px',
+                        height: '100%',
+                        cursor: 'col-resize',
+                        zIndex: 100,
+                        transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.4)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                />
+            )}
+            
             {hoveredFile && (
                 <div
                     className="fixed-tooltip"
@@ -124,26 +136,44 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     {hoveredFile.name}
                 </div>
             )}
-            <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '0.5rem' }}>
-                <div className="logo" style={{ borderBottom: 'none', paddingBottom: 0 }}>
-                    <img src={logo} alt="NozePlots4 Logo" className="logo-icon" />
-                    <span>NozePlot</span>
+            <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'row', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', paddingBottom: '0.5rem' }}>
+                <div 
+                    className="logo" 
+                    style={{ borderBottom: 'none', paddingBottom: 0, cursor: 'pointer', padding: isCollapsed ? '8px 0' : '0', transition: 'opacity 0.2s' }}
+                    onClick={() => {
+                        const nextState = !isCollapsed;
+                        setIsCollapsed(nextState);
+                        localStorage.setItem('zenMode', nextState);
+                        window.dispatchEvent(new CustomEvent('zen-mode-toggle', { detail: { isZen: nextState } }));
+                    }}
+                    title={isCollapsed ? "Expand Sidebar" : "Hide Sidebar"}
+                    onMouseEnter={e => e.currentTarget.style.opacity = 0.8}
+                    onMouseLeave={e => e.currentTarget.style.opacity = 1}
+                >
+                    <img src={logo} alt="NozePlots4 Logo" className="logo-icon" style={{ transition: 'transform 0.2s' }} />
+                    {!isCollapsed && <span>NozePlot</span>}
                 </div>
-                <div className="user-profile" style={{ padding: 0 }}>
-                    <div className="avatar" style={{ width: 30, height: 30, fontSize: '0.85rem', cursor: 'pointer' }} title={`${userName} - Data Analyst`}>
-                        {userName.charAt(0).toUpperCase()}
+                {!isCollapsed && (
+                    <div className="user-profile" style={{ padding: 0 }}>
+                        <div className="avatar" style={{ width: 30, height: 30, fontSize: '0.85rem', cursor: 'pointer' }} title={`${userName} - Data Analyst`}>
+                            {userName.charAt(0).toUpperCase()}
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
 
             {/* Page navigation */}
+            {!isCollapsed && (
             <div style={{
                 display: 'flex',
+                pointerEvents: 'auto',
+                opacity: 1,
                 gap: 6,
                 padding: '8px 12px',
                 borderBottom: '1px solid var(--border-color)',
                 flexShrink: 0,
-                flexWrap: 'wrap'
+                flexWrap: 'wrap',
+                transition: 'opacity 0.2s'
             }}>
                 <button
                     onClick={() => onPageChange?.('dashboard')}
@@ -166,6 +196,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Dashboard"
                 >
                     <BarChart2 size={14} /> Dashboard
+                </button>
+                <button
+                    onClick={() => onPageChange?.('help')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'help' ? 'rgba(129,140,248,0.2)' : 'transparent',
+                        color: activePage === 'help' ? '#a5b4fc' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="User guide — instructions for every section"
+                >
+                    <BookOpen size={14} /> Help
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}
@@ -210,6 +262,50 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Aroma Sensor Data Analysis"
                 >
                     <LineChart size={14} /> Aroma
+                </button>
+                <button
+                    onClick={() => onPageChange?.('separability')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'separability' ? 'rgba(251,191,36,0.15)' : 'transparent',
+                        color: activePage === 'separability' ? '#fbbf24' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Time-Resolved Separability Analysis"
+                >
+                    <Activity size={14} /> Separability
+                </button>
+                <button
+                    onClick={() => onPageChange?.('sensitivity')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: activePage === 'sensitivity' ? 'rgba(59,130,246,0.15)' : 'transparent',
+                        color: activePage === 'sensitivity' ? '#3b82f6' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Element Sensitivity & Performance Map"
+                >
+                    <Target size={14} /> Sensitivity
                 </button>
                 <button
                     onClick={() => onPageChange?.('recoveryAnalysis')}
@@ -278,8 +374,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <Layers size={13} /> Mfg. Variation
                 </button>
             </div>
+            )}
 
             {/* Utility Tools Section */}
+            {!isCollapsed && (
+                <>
             <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 16, marginTop: 12 }}>
                 <button
                     onClick={() => onPageChange?.('gasDesign')}
@@ -801,7 +900,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     })()}
                 </div>
             </div>
-
+            </>
+            )}
         </aside>
     );
 };

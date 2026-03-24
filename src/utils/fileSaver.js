@@ -1,4 +1,3 @@
-import { saveAs } from 'file-saver';
 import { fileManager } from './db';
 
 const convertFileToBase64 = (fileObj) => {
@@ -43,14 +42,9 @@ export const exportWorkspaceSession = async (currentAppState) => {
                 if (f.file) base64Data = await convertFileToBase64(f.file);
             } catch (e) { console.warn("Could not encode file:", f.name); }
 
-            return {
-                id: f.id,
-                name: f.name,
-                type: f.type,
-                base64: base64Data,
-                size: f.size,
-                data: f.data // preserve the extracted parsed CSV payload JSON!
-            };
+            const serialized = { ...f, base64: base64Data };
+            delete serialized.file; // Remove native File object mapping so JSON.stringify succeeds natively
+            return serialized;
         }));
 
         // Construct the Workspace snapshot
@@ -66,7 +60,18 @@ export const exportWorkspaceSession = async (currentAppState) => {
         };
 
         const blob = new Blob([JSON.stringify(sessionPayload)], { type: 'application/json' });
-        saveAs(blob, `workspace_session_${new Date().toISOString().split('T')[0]}.noze`);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = `workspace_session_${new Date().toISOString().split('T')[0]}.noze`;
+        document.body.appendChild(a);
+        a.click();
+        
+        setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }, 100);
 
     } catch (e) {
         console.error("Failed to export workspace session:", e);
@@ -89,21 +94,22 @@ export const importWorkspaceSession = async (jsonDataAsString) => {
 
         // Restore files natively
         for (const meta of payload.files) {
-            let rawFile = null;
+            let restoredFileObject = null;
+            
             try {
                 if (meta.base64) {
-                    rawFile = base64ToFile(meta.base64, meta.name, meta.type || 'text/csv');
+                    restoredFileObject = base64ToFile(meta.base64, meta.name, meta.type || 'text/csv');
                 }
-            } catch (e) { console.warn("Could not decode base64:", e); }
+            } catch (e) { console.warn("Could not decode base64 native:", e); }
 
-            await fileManager.saveFile({
-                id: meta.id,
-                name: meta.name,
-                size: meta.size || (rawFile ? rawFile.size : 0),
-                type: meta.type,
-                data: meta.data,
-                file: rawFile
-            });
+            const restoredEntry = { ...meta, file: restoredFileObject };
+            delete restoredEntry.base64; // Don't bloat local IndexedDB identically
+            
+            if (restoredFileObject && !restoredEntry.size) {
+                restoredEntry.size = restoredFileObject.size;
+            }
+
+            await fileManager.saveFile(restoredEntry);
         }
 
         return payload.appState;

@@ -371,3 +371,13 @@
     color: #38bdf8;
     font-weight: bold;
 }
+/* Performance optimizations for heavy CSS animations */
+.results-panel {
+    contain: layout size;
+    /* This prevents the charts inside from forcing synchronous reflows backwards up the DOM tree */
+}
+
+.plot-card {
+    contain: layout;
+    will-change: width, transform;
+}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, CartesianGrid, Scatter, ScatterChart, ZAxis, Brush } from 'recharts';
 import { Activity, Settings, Maximize2, X, Download, LineChart as LineChartIcon } from 'lucide-react';
@@ -12,6 +12,14 @@ const GAS_CONSTANT_RATIO = 2.1674;
 const KELVIN_OFFSET = 273.15;
 
 const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableFiles = [] }) => {
+    const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
+
+    useEffect(() => {
+        const handleZenMode = (e) => setIsSidebarVisible(!e.detail.isZen);
+        window.addEventListener('zen-mode-toggle', handleZenMode);
+        return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
+    }, []);
+
     // Pipeline Config State
     const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
     const [isProcessing, setIsProcessing] = useState(false);
@@ -859,7 +867,18 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
             </div>
 
             <div className="aroma-content">
-                <div className="config-panel glass-panel" style={{ width: 340, position: 'relative' }}>
+                <div 
+                    className="config-panel glass-panel" 
+                    style={{ 
+                        width: isSidebarVisible ? 340 : 0, 
+                        opacity: isSidebarVisible ? 1 : 0,
+                        overflowY: isSidebarVisible ? 'auto' : 'hidden', 
+                        overflowX: 'hidden',
+                        transition: 'all 0.4s cubic-bezier(0.33, 1, 0.68, 1)',
+                        padding: isSidebarVisible ? '16px' : '16px 0',
+                        borderWidth: isSidebarVisible ? '1px' : '0'
+                    }}>
+                    <div style={{ width: 340 - 32, opacity: isSidebarVisible ? 1 : 0, transition: 'opacity 0.2s', visibility: isSidebarVisible ? 'visible' : 'hidden' }}>
                     <h3 className="panel-title"><Settings size={16} /> Analysis Config</h3>
 
                     <div className="form-group">
@@ -950,6 +969,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                     <button className="process-btn" onClick={handleProcessRecovery} disabled={isProcessing} style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
                         {isProcessing ? 'Analyzing Recovery...' : 'Analyze baseline drift'}
                     </button>
+                    </div>
                 </div>
 
                 <div className="plots-panel">
