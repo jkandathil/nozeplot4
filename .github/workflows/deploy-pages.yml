@@ -19,6 +19,11 @@
 #
 # 4) GitHub → Settings → Pages → Source: Deploy from branch → gh-pages / root
 #
+# Secret scanning: Firebase VITE_FIREBASE_API_KEY is embedded in dist/ JS on purpose (Firebase Web SDK).
+# If GitHub emails about “Google API Key” in gh-pages assets, restrict/rotate the key in Google Cloud
+# (HTTP referrer restrictions). Optionally close the alert after review — it will reappear on new deploys
+# unless GitHub offers an allowlist for your org/repo.
+#
 name: Deploy to GitHub Pages
 
 on:
