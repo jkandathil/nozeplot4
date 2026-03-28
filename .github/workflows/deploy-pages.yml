@@ -1,14 +1,14 @@
 # On push to main: build with Firebase + deploy dist/ to branch gh-pages.
 #
 # Access control: only emails whose domain is VITE_ALLOWED_EMAIL_DOMAIN (noze.ca below)
-# pass AuthGate after Google or email/password sign-in. Strangers on @gmail.com are signed out.
+# pass AuthGate after Google or email/password sign-in.
 #
 # 1) GitHub → Settings → Secrets and variables → Actions → New repository secret:
 #    VITE_FIREBASE_API_KEY
 #    VITE_FIREBASE_AUTH_DOMAIN   (e.g. nozeplots4.firebaseapp.com)
 #    VITE_FIREBASE_PROJECT_ID
 #    VITE_FIREBASE_APP_ID
-#    Optional: VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID
+#    Optional: VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_AUTH_PUBLIC_URL
 #
 # 2) Firebase → Authentication → Settings → Authorized domains:
 #    add  YOUR_USERNAME.github.io
