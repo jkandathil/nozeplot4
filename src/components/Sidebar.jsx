@@ -3,11 +3,16 @@ import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
-    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
 import { estimateWorkspaceFileBytes } from '../utils/workspaceFilename';
+import {
+    downloadWorkspaceFileAsCsv,
+    downloadFolderContentsAsCsvZip,
+    downloadRootDataFilesAsCsvZip,
+} from '../utils/workspaceCsvDownload';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder }) => {
@@ -61,6 +66,46 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
     const [hoveredFile, setHoveredFile] = useState(null);
     const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
+    const [csvExportBusy, setCsvExportBusy] = useState(false);
+
+    const onDownloadFileCsv = async (e, file) => {
+        e.stopPropagation();
+        if (csvExportBusy || file.isFolder) return;
+        setCsvExportBusy(true);
+        try {
+            await downloadWorkspaceFileAsCsv(file);
+        } catch (err) {
+            alert(err?.message || 'Could not download CSV.');
+        } finally {
+            setCsvExportBusy(false);
+        }
+    };
+
+    const onDownloadFolderZip = async (e, folder) => {
+        e.stopPropagation();
+        if (csvExportBusy) return;
+        setCsvExportBusy(true);
+        try {
+            await downloadFolderContentsAsCsvZip(folder, files);
+        } catch (err) {
+            alert(err?.message || 'Could not download folder.');
+        } finally {
+            setCsvExportBusy(false);
+        }
+    };
+
+    const onDownloadRootZip = async (e) => {
+        e.stopPropagation();
+        if (csvExportBusy) return;
+        setCsvExportBusy(true);
+        try {
+            await downloadRootDataFilesAsCsvZip(files);
+        } catch (err) {
+            alert(err?.message || 'Could not download DataFiles.');
+        } finally {
+            setCsvExportBusy(false);
+        }
+    };
 
     const handleMouseEnter = (e, file) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -830,6 +875,25 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     )}
                                 </button>
                                 <button
+                                    type="button"
+                                    onClick={(e) => onDownloadFileCsv(e, file)}
+                                    title="Download as CSV"
+                                    disabled={csvExportBusy}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        cursor: csvExportBusy ? 'wait' : 'pointer',
+                                        padding: 2,
+                                        marginRight: 2,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        opacity: csvExportBusy ? 0.4 : 0.85,
+                                        color: '#94a3b8',
+                                    }}
+                                >
+                                    <Download size={14} />
+                                </button>
+                                <button
                                     className="delete-file-btn"
                                     onClick={(e) => {
                                         e.preventDefault();
@@ -894,6 +958,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                     )}
                                                     <button onClick={() => handleUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Files"><FileText size={14} color="#94a3b8" /></button>
                                                     <button onClick={() => handleFolderUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Folder Content"><UploadCloud size={14} color="#94a3b8" /></button>
+                                                    {folderFiles.length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => onDownloadFolderZip(e, folder)}
+                                                            disabled={csvExportBusy}
+                                                            style={{ background: 'transparent', border: 'none', cursor: csvExportBusy ? 'wait' : 'pointer', padding: 1, opacity: csvExportBusy ? 0.45 : 1 }}
+                                                            title="Download folder as CSV (ZIP)"
+                                                        >
+                                                            <Download size={14} color="#34d399" />
+                                                        </button>
+                                                    )}
                                                     <button onClick={(e) => onDeleteFolder(e, folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1, color: '#ef4444' }} title="Delete Folder"><Trash2 size={14} /></button>
                                                 </div>
                                             </div>
@@ -939,6 +1014,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                                 onSelectFiles(newSelected);
                                                             }
                                                         }} title="Select all DataFiles for analysis" style={{ margin: 0, width: 14, height: 14, cursor: 'pointer', accentColor: '#38bdf8' }} />
+                                                    )}
+                                                    {allDataFiles.length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={onDownloadRootZip}
+                                                            disabled={csvExportBusy}
+                                                            style={{ background: 'transparent', border: 'none', cursor: csvExportBusy ? 'wait' : 'pointer', padding: 1, opacity: csvExportBusy ? 0.45 : 1 }}
+                                                            title="Download all DataFiles as CSV (ZIP)"
+                                                        >
+                                                            <Download size={14} color="#34d399" />
+                                                        </button>
                                                     )}
                                                 </div>
                                             </div>
