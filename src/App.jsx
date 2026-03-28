@@ -35,6 +35,7 @@ import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
 import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import HelpPage from './components/HelpPage';
+import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import { parseFile } from './utils/fileParser';
 
 function App() {
@@ -210,6 +211,33 @@ function App() {
       console.error("Failed to create folder:", e);
     }
   };
+
+  const handleAromaUnitCaptureSave = useCallback(async ({ folderName, fileName, data }) => {
+    if (!data?.length) return;
+    const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+    const fileId = Math.random().toString(36).substr(2, 9);
+    const sampleN = Math.min(data.length, 40);
+    const approxSize = Math.max(
+      1,
+      Math.round((new Blob([JSON.stringify(data.slice(0, sampleN))]).length / sampleN) * data.length)
+    );
+    const folder = {
+      id: folderId,
+      name: folderName,
+      isFolder: true,
+      createdAt: Date.now(),
+    };
+    const fileMeta = {
+      id: fileId,
+      name: fileName,
+      folderId,
+      data,
+      size: approxSize,
+    };
+    await fileManager.saveFile(folder);
+    await fileManager.saveFile(fileMeta);
+    setFiles((prev) => [...prev, folder, fileMeta]);
+  }, []);
 
   const handleDeleteFolder = async (e, folderId) => {
     e.stopPropagation();
@@ -545,6 +573,11 @@ function App() {
                 <CSVPlotterPage
                   key="csvPlotter"
                   workspaceFiles={files}
+                />
+              ) : activePage === 'aromaUnitCapture' ? (
+                <AromaUnitCapturePage
+                  key="aromaUnitCapture"
+                  onSaveToWorkspace={handleAromaUnitCaptureSave}
                 />
               ) : activePage === 'mlStudio' ? (
                 <MLStudioPage

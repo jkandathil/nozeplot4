@@ -24,11 +24,51 @@ export function rawDeviceRoleFromFilename(fileName) {
     return m ? m[1].toUpperCase() : null;
 }
 
+/** Serial capture from AU page: siac32v2_<sn>_<stamp>.csv */
+export function isSiacSerialCaptureFileName(fileName) {
+    const b = fileBasename(fileName);
+    return /^siac32v2_.+\.csv$/i.test(b);
+}
+
+/** Heuristic: flattened SiAC JSON rows (CHR*, RRF*, sn, timestamp). */
+export function looksLikeSiacCaptureData(data) {
+    if (!Array.isArray(data) || data.length === 0) return false;
+    const row = data[0];
+    if (!row || typeof row !== 'object') return false;
+    const keys = Object.keys(row);
+    const hasChr = keys.some((k) => /^chr\d+$/i.test(k));
+    const hasRrf = keys.some((k) => /^rrf\d+$/i.test(k));
+    return hasChr || hasRrf;
+}
+
+/**
+ * Approximate byte size for sidebar when file has IndexedDB `data` but no `File` blob.
+ */
+export function estimateWorkspaceFileBytes(file) {
+    if (!file || file.isFolder) return 0;
+    if (file.file && typeof file.file.size === 'number') return file.file.size;
+    if (typeof file.size === 'number' && file.size > 0) return file.size;
+    if (Array.isArray(file.data) && file.data.length > 0) {
+        try {
+            const n = Math.min(file.data.length, 30);
+            const bytes = new Blob([JSON.stringify(file.data.slice(0, n))]).length;
+            return Math.max(1, Math.round((bytes / n) * file.data.length));
+        } catch {
+            return 0;
+        }
+    }
+    return 0;
+}
+
 /**
  * Passes "No Unknowns" / filterUnknown when the name has a concentration unit OR a known raw CSV pattern.
  */
 export function isKnownPlotFileName(fileName) {
-    return hasConcentrationInFilename(fileName) || isRawDeviceTimeSeriesName(fileName);
+    return (
+        hasConcentrationInFilename(fileName) ||
+        isRawDeviceTimeSeriesName(fileName) ||
+        isSiacSerialCaptureFileName(fileName)
+    );
 }
 
 /* ── Concentration from CSV columns (first row sample) ───────────────── */
@@ -142,5 +182,6 @@ export function isKnownPlotFile(fileName, data = null) {
     if (isKnownPlotFileName(fileName)) return true;
     if (hasConcentrationInCatalogPath(fileName)) return true;
     if (data && hasConcentrationInData(data)) return true;
+    if (data && looksLikeSiacCaptureData(data)) return true;
     return false;
 }

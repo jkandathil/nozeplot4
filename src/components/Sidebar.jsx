@@ -3,10 +3,11 @@ import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
-    PanelLeftClose, PanelLeftOpen, Target, BookOpen
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
+import { estimateWorkspaceFileBytes } from '../utils/workspaceFilename';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder }) => {
@@ -351,6 +352,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="SE Analysis from Custom CSV Data"
                 >
                     <FileSpreadsheet size={13} /> SE Analysis
+                </button>
+                <button
+                    onClick={() => onPageChange?.('aromaUnitCapture')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: activePage === 'aromaUnitCapture' ? 'rgba(45,212,191,0.15)' : 'transparent',
+                        color: activePage === 'aromaUnitCapture' ? '#2dd4bf' : 'var(--text-muted)',
+                        transition: 'all 0.15s'
+                    }}
+                    title="Capture SiAC / aroma unit over USB serial (Chrome)"
+                >
+                    <Usb size={13} /> AU capture
                 </button>
                 <button
                     onClick={() => onPageChange?.('manufacturing')}
@@ -766,7 +789,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 <div className="file-details">
                                     <span className="file-name">{file.name}</span>
                                     <span className="file-meta">
-                                        {((file.file?.size || file.size || 0) / 1024).toFixed(1)} KB
+                                        {(estimateWorkspaceFileBytes(file) / 1024).toFixed(1)} KB
                                     </span>
                                 </div>
                                 <button
