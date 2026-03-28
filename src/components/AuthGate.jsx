@@ -165,7 +165,7 @@ export default function AuthGate({ children }) {
         try {
             await auth.currentUser.reload();
             const u = auth.currentUser;
-            if (u?.emailVerified && isSignInEmailAllowed(u.email || '')) {
+            if (u?.emailVerified && isEmailDomainAllowed(u.email || '')) {
                 setFirebaseUser(u);
                 setAppAllowed(true);
             } else if (u && !u.emailVerified) {
