@@ -72,15 +72,26 @@
   padding: 0;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-family);
   background-color: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
-  /* App-like feel */
+  /* Shell is fixed height; scroll inside .content-area / page panels */
+}
+
+#root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 a {
