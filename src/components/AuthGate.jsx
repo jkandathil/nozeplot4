@@ -85,7 +85,9 @@ export default function AuthGate({ children }) {
     useEffect(() => {
         if (!auth) {
             setGateError(
-                'Firebase is not configured. Set VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_APP_ID (see .env.example), then rebuild.'
+                import.meta.env.DEV
+                    ? 'Firebase is not configured. Add VITE_FIREBASE_* to .env.local in the project root (see .env.example), then restart npm run dev.'
+                    : 'Firebase is not configured in this build. For GitHub Pages: add VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_APP_ID as repository Actions secrets, then re-run the deploy workflow. Or run npm run build && npx gh-pages -d dist on a machine that has .env.local.'
             );
             setReady(true);
             return;
