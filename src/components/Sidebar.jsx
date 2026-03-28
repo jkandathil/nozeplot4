@@ -89,6 +89,15 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         f.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
+    /** Newest capture / upload first when a folder is expanded */
+    const sortFolderFilesNewestFirst = (arr) =>
+        [...arr].sort((a, b) => {
+            const ta = Number(a.createdAt) || 0;
+            const tb = Number(b.createdAt) || 0;
+            if (tb !== ta) return tb - ta;
+            return String(b.name || '').localeCompare(String(a.name || ''));
+        });
+
     return (
         <aside className="sidebar" style={{ 
             width: isCollapsed ? 60 : sidebarWidth, 
@@ -845,7 +854,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     </div>
                                 )}
                                 {customFolders.map(folder => {
-                                    const folderFiles = filteredFiles.filter(f => f.folderId === folder.id);
+                                    const folderFiles = sortFolderFilesNewestFirst(
+                                        filteredFiles.filter(f => f.folderId === folder.id)
+                                    );
                                     const folderFileIds = folderFiles.map(f => f.id);
                                     const isAllSelected = folderFiles.length > 0 && folderFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
 

@@ -5,6 +5,7 @@ import {
     getAuProfile,
     normalizeCaptureRows,
     drainJsonObjectsFromBuffer,
+    auDeviceFolderNameFromSn,
 } from '../utils/siacDeviceProfiles';
 import './AromaUnitCapturePage.css';
 
@@ -205,17 +206,17 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         }
 
         const { data } = normalizeCaptureRows(rawRows);
-        const sn = String(data[0]?.sn || 'unknown').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 48);
+        const folderName = auDeviceFolderNameFromSn(data[0]?.sn);
         const t0 = new Date();
         const pad = (n) => String(n).padStart(2, '0');
         const folderStamp = `${t0.getFullYear()}-${pad(t0.getMonth() + 1)}-${pad(t0.getDate())}_${pad(t0.getHours())}${pad(t0.getMinutes())}${pad(t0.getSeconds())}`;
-        const folderName = `${profile.id.replace(/\s+/g, '_')}_${folderStamp}`;
-        const safeDevice = profile.id.replace(/[^a-zA-Z0-9]+/g, '').toLowerCase() || 'siac';
-        const fileName = `${safeDevice}_${sn}_${folderStamp}.csv`;
+        const fileName = `capture_${folderStamp}.csv`;
 
         try {
             await onSaveToWorkspace({ folderName, fileName, data });
-            setSavedOk(`Saved to workspace folder "${folderName}" as ${fileName} (${data.length} rows, ${Object.keys(data[0] || {}).length} columns).`);
+            setSavedOk(
+                `Saved to workspace folder "${folderName}" as ${fileName} (${data.length} rows, ${Object.keys(data[0] || {}).length} columns). Reuses the same folder for this device serial.`
+            );
         } catch (err) {
             setError(err?.message || 'Failed to save to workspace.');
         }
@@ -331,8 +332,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     {lastParseHint ? <p className="au-error" style={{ marginTop: 8 }}>{lastParseHint}</p> : null}
                     <p className="au-hint">
                         Each CSV row is one received line with a <code>timestamp</code> (ISO, browser receive time),{' '}
-                        <code>sn</code>, and all sensor fields from the JSON (e.g. CHR0–CHR31, T0, H0, …). Data is saved
-                        under a new workspace folder when capture finishes.
+                        <code>sn</code>, and all sensor fields from the JSON (e.g. CHR0–CHR31, T0, H0, …). Captures are
+                        saved under one workspace folder per device <code>sn</code> (created if needed); newest files
+                        appear first when you expand that folder.
                     </p>
                 </div>
             </div>

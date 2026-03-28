@@ -127,3 +127,10 @@ export const AU_DEVICE_PROFILES = {
 export function getAuProfile(profileKey) {
     return AU_DEVICE_PROFILES[profileKey] || AU_DEVICE_PROFILES.SIAC32_V2;
 }
+
+/** Workspace folder name for one physical AU (matches device `sn` field). */
+export function auDeviceFolderNameFromSn(sn) {
+    const t = String(sn ?? '').trim();
+    if (!t) return 'unknown-device';
+    return t.replace(/[\\/:*?"<>|]/g, '-').slice(0, 120);
+}

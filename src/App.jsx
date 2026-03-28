@@ -163,7 +163,8 @@ function App() {
       path: file.webkitRelativePath || file.name,
       file: file,
       type: file.type,
-      folderId: targetFolderId
+      folderId: targetFolderId,
+      createdAt: typeof file.lastModified === 'number' ? file.lastModified : Date.now(),
     }));
 
     // Persist to DB
@@ -214,29 +215,41 @@ function App() {
 
   const handleAromaUnitCaptureSave = useCallback(async ({ folderName, fileName, data }) => {
     if (!data?.length) return;
-    const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
-    const fileId = Math.random().toString(36).substr(2, 9);
     const sampleN = Math.min(data.length, 40);
     const approxSize = Math.max(
       1,
       Math.round((new Blob([JSON.stringify(data.slice(0, sampleN))]).length / sampleN) * data.length)
     );
-    const folder = {
-      id: folderId,
-      name: folderName,
-      isFolder: true,
-      createdAt: Date.now(),
-    };
-    const fileMeta = {
-      id: fileId,
-      name: fileName,
-      folderId,
-      data,
-      size: approxSize,
-    };
-    await fileManager.saveFile(folder);
-    await fileManager.saveFile(fileMeta);
-    setFiles((prev) => [...prev, folder, fileMeta]);
+    let folderId;
+    try {
+      const existing = await fileManager.getAllFiles();
+      const match = existing.find((f) => f.isFolder && f.name === folderName);
+      if (match) {
+        folderId = match.id;
+      } else {
+        folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+        await fileManager.saveFile({
+          id: folderId,
+          name: folderName,
+          isFolder: true,
+          createdAt: Date.now(),
+        });
+      }
+      const fileId = Math.random().toString(36).substr(2, 9);
+      await fileManager.saveFile({
+        id: fileId,
+        name: fileName,
+        folderId,
+        data,
+        size: approxSize,
+        createdAt: Date.now(),
+      });
+      const refreshed = await fileManager.getAllFiles();
+      setFiles(refreshed);
+    } catch (e) {
+      console.error('AU capture save failed:', e);
+      throw e;
+    }
   }, []);
 
   const handleDeleteFolder = async (e, folderId) => {
