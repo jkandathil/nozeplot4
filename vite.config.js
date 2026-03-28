@@ -8,5 +8,9 @@ export default defineConfig({
   server: {
     host: 'localhost',
     port: 5174,
+    // Helps Google/Firebase OAuth popups in dev (avoids "The requested action is invalid" in some browsers)
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    },
   },
 })

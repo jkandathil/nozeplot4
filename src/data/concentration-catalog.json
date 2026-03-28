@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "generatedAt": "2026-03-25T02:09:09.053Z",
+  "entries": [
+    {
+      "time10": "2603241230",
+      "hash": "941516e5",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 20,
+      "sourceFile": "normalized_2603241230_941516e5_20ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241233",
+      "hash": "06738ed8",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 10,
+      "sourceFile": "normalized_2603241233_06738ed8_10ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241236",
+      "hash": "abea2248",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 0,
+      "sourceFile": "normalized_2603241236_abea2248_0ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241239",
+      "hash": "4db8b657",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 75,
+      "sourceFile": "normalized_2603241239_4db8b657_75ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241242",
+      "hash": "5e63cc2d",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 5,
+      "sourceFile": "normalized_2603241242_5e63cc2d_5ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241245",
+      "hash": "61f7609a",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 100,
+      "sourceFile": "normalized_2603241245_61f7609a_100ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241248",
+      "hash": "212f1729",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 50,
+      "sourceFile": "normalized_2603241248_212f1729_50ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241257",
+      "hash": "ee9c0e83",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 20,
+      "sourceFile": "normalized_2603241257_ee9c0e83_20ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241300",
+      "hash": "7be79b42",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 75,
+      "sourceFile": "normalized_2603241300_7be79b42_75ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241303",
+      "hash": "d98c8181",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 10,
+      "sourceFile": "normalized_2603241303_d98c8181_10ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241306",
+      "hash": "e33506ff",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 5,
+      "sourceFile": "normalized_2603241306_e33506ff_5ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241310",
+      "hash": "2bab041f",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 100,
+      "sourceFile": "normalized_2603241310_2bab041f_100ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241313",
+      "hash": "d76f25ed",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 0,
+      "sourceFile": "normalized_2603241313_d76f25ed_0ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241316",
+      "hash": "78b54ca6",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 50,
+      "sourceFile": "normalized_2603241316_78b54ca6_50ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241325",
+      "hash": "d5d240bb",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 5,
+      "sourceFile": "normalized_2603241325_d5d240bb_5ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241328",
+      "hash": "acb15685",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 75,
+      "sourceFile": "normalized_2603241328_acb15685_75ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241331",
+      "hash": "8d27b47e",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 20,
+      "sourceFile": "normalized_2603241331_8d27b47e_20ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241334",
+      "hash": "86591215",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 100,
+      "sourceFile": "normalized_2603241334_86591215_100ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241337",
+      "hash": "415c85e3",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 50,
+      "sourceFile": "normalized_2603241337_415c85e3_50ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241340",
+      "hash": "e6b70204",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 10,
+      "sourceFile": "normalized_2603241340_e6b70204_10ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241343",
+      "hash": "2576ad58",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 0,
+      "sourceFile": "normalized_2603241343_2576ad58_0ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241352",
+      "hash": "0768540b",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 0,
+      "sourceFile": "normalized_2603241352_0768540b_0ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241355",
+      "hash": "6cae4c46",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 50,
+      "sourceFile": "normalized_2603241355_6cae4c46_50ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241358",
+      "hash": "38059619",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 100,
+      "sourceFile": "normalized_2603241358_38059619_100ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241401",
+      "hash": "d35ee808",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 5,
+      "sourceFile": "normalized_2603241401_d35ee808_5ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241404",
+      "hash": "72f881ea",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 10,
+      "sourceFile": "normalized_2603241404_72f881ea_10ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241407",
+      "hash": "192700ec",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 75,
+      "sourceFile": "normalized_2603241407_192700ec_75ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241410",
+      "hash": "85d9e8a8",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 20,
+      "sourceFile": "normalized_2603241410_85d9e8a8_20ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241419",
+      "hash": "4cabac81",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 20,
+      "sourceFile": "normalized_2603241419_4cabac81_20ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241422",
+      "hash": "968892b2",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 5,
+      "sourceFile": "normalized_2603241422_968892b2_5ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241425",
+      "hash": "9bb3913d",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 50,
+      "sourceFile": "normalized_2603241425_9bb3913d_50ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241428",
+      "hash": "f74b1433",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 100,
+      "sourceFile": "normalized_2603241428_f74b1433_100ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241432",
+      "hash": "9d45bd4c",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 10,
+      "sourceFile": "normalized_2603241432_9d45bd4c_10ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241435",
+      "hash": "a9d972bd",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 0,
+      "sourceFile": "normalized_2603241435_a9d972bd_0ppb_0000000063-0926-asu-nz.csv"
+    },
+    {
+      "time10": "2603241438",
+      "hash": "593df69f",
+      "auId": "0000000063-0926-asu-nz",
+      "valuePpb": 75,
+      "sourceFile": "normalized_2603241438_593df69f_75ppb_0000000063-0926-asu-nz.csv"
+    }
+  ]
+}

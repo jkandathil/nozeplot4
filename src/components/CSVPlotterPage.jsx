@@ -2,7 +2,8 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import Papa from 'papaparse';
 import { ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
+import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react';
+import { parseFile } from '../utils/fileParser';
 import './AromaAnalysisPage.css'; // Reuse existing styles
 
 const COLORS = [
@@ -61,7 +62,7 @@ const CustomTooltip = ({ active, payload, label }) => {
     return null;
 };
 
-const CSVPlotterPage = () => {
+const CSVPlotterPage = ({ workspaceFiles = [] }) => {
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
 
     useEffect(() => {
@@ -81,6 +82,143 @@ const CSVPlotterPage = () => {
     const [brushEndIdx, setBrushEndIdx] = useState(null);
     const chartWrapperRef = useRef(null);
     const [sidebarWidth, setSidebarWidth] = useState(300);
+    const preferLocalUploadRef = useRef(false);
+    const [checkedWorkspaceFileId, setCheckedWorkspaceFileId] = useState(null);
+    const [expandedFolderIds, setExpandedFolderIds] = useState(() => new Set());
+    const [workspaceParsing, setWorkspaceParsing] = useState(false);
+
+    const folders = useMemo(
+        () => [...workspaceFiles].filter((f) => f?.isFolder && f?.id).sort((a, b) => String(a.name).localeCompare(String(b.name))),
+        [workspaceFiles]
+    );
+
+    const dataFiles = useMemo(
+        () => [...workspaceFiles].filter((f) => f && !f.isFolder && f.id && f.name).sort((a, b) => String(a.name).localeCompare(String(b.name))),
+        [workspaceFiles]
+    );
+
+    const rootDataFiles = useMemo(
+        () => dataFiles.filter((f) => f.folderId == null || String(f.folderId).trim() === ''),
+        [dataFiles]
+    );
+
+    const filesInFolder = useCallback(
+        (folderId) => dataFiles.filter((f) => String(f.folderId) === String(folderId)),
+        [dataFiles]
+    );
+
+    const folderIdsSig = useMemo(() => folders.map((f) => f.id).sort().join(','), [folders]);
+
+    /**
+     * Auto-expand new folders only. Depends on folderIdsSig only — not `folders` (new array each parent
+     * render would retrigger forever) and returns `prev` when unchanged to avoid React #185 update depth.
+     */
+    useEffect(() => {
+        if (!folderIdsSig) return;
+        const ids = folderIdsSig.split(',').filter(Boolean);
+        if (!ids.length) return;
+        setExpandedFolderIds((prev) => {
+            let changed = false;
+            const next = new Set(prev);
+            ids.forEach((id) => {
+                if (!prev.has(id)) {
+                    next.add(id);
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+    }, [folderIdsSig]);
+
+    const expandAllFolders = useCallback(() => {
+        setExpandedFolderIds(new Set(folders.map((f) => f.id)));
+    }, [folders]);
+
+    const collapseAllFolders = useCallback(() => {
+        setExpandedFolderIds(new Set());
+    }, []);
+
+    const toggleFolderExpanded = useCallback((folderId) => {
+        setExpandedFolderIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(folderId)) next.delete(folderId);
+            else next.add(folderId);
+            return next;
+        });
+    }, []);
+
+    const ingestParsedRows = useCallback((data, name, source = 'workspace') => {
+        if (!data || data.length === 0) return;
+        const displayName = name ? String(name).split(/[/\\]/).pop() : 'data';
+        setFileName(displayName);
+        const cols = Object.keys(data[0]);
+        setColumns(cols);
+        if (cols.includes('index')) setXAxisKey('index');
+        else if (cols.includes('time')) setXAxisKey('time');
+        else setXAxisKey(cols[0]);
+        const processedData = data.map((row) => {
+            const newRow = { ...row };
+            cols.forEach((col) => {
+                if (col.endsWith('_sigma_min')) {
+                    const base = col.replace('_sigma_min', '');
+                    const maxCol = `${base}_sigma_max`;
+                    if (row[col] !== undefined && row[maxCol] !== undefined) {
+                        newRow[`${base}_range`] = [row[col], row[maxCol]];
+                    }
+                }
+            });
+            return newRow;
+        });
+        setCsvData(processedData);
+        setSelectedColumns([]);
+        setSearchTerm('');
+        setBrushStartIdx(0);
+        setBrushEndIdx(null);
+    }, []);
+
+    const handleClear = useCallback(() => {
+        preferLocalUploadRef.current = false;
+        setCheckedWorkspaceFileId(null);
+        setFileName('');
+        setCsvData([]);
+        setColumns([]);
+        setSelectedColumns([]);
+        setSearchTerm('');
+        setXAxisKey('');
+        setBrushStartIdx(0);
+        setBrushEndIdx(null);
+    }, []);
+
+    const handleWorkspaceFileCheck = useCallback(
+        async (fileObj, checked) => {
+            if (!checked) {
+                if (checkedWorkspaceFileId === fileObj.id) {
+                    preferLocalUploadRef.current = false;
+                    handleClear();
+                }
+                return;
+            }
+            setCheckedWorkspaceFileId(fileObj.id);
+            preferLocalUploadRef.current = false;
+            setWorkspaceParsing(true);
+            try {
+                const parsed = await parseFile(fileObj);
+                if (parsed?.data?.length) {
+                    ingestParsedRows(parsed.data, parsed.fileName, 'workspace');
+                } else {
+                    alert('No rows in this file.');
+                    setCheckedWorkspaceFileId(null);
+                }
+            } catch (err) {
+                console.error(err);
+                alert(err?.message || 'Could not load file.');
+                setCheckedWorkspaceFileId(null);
+            } finally {
+                setWorkspaceParsing(false);
+            }
+        },
+        [checkedWorkspaceFileId, handleClear, ingestParsedRows]
+    );
 
     const handleMouseDown = useCallback((e) => {
         e.preventDefault();
@@ -191,7 +329,7 @@ const CSVPlotterPage = () => {
         const file = e.target.files[0];
         if (!file) return;
 
-        setFileName(file.name);
+        preferLocalUploadRef.current = true;
         Papa.parse(file, {
             header: true,
             dynamicTyping: true,
@@ -199,32 +337,8 @@ const CSVPlotterPage = () => {
             complete: (results) => {
                 const data = results.data;
                 if (data.length > 0) {
-                    const cols = Object.keys(data[0]);
-                    setColumns(cols);
-
-                    // Best guess for x-axis
-                    if (cols.includes('index')) setXAxisKey('index');
-                    else if (cols.includes('time')) setXAxisKey('time');
-                    else setXAxisKey(cols[0]);
-
-                    // Pre-process range data for Recharts Area
-                    const processedData = data.map(row => {
-                        const newRow = { ...row };
-                        // Look for sigma_min and sigma_max to create range arrays
-                        cols.forEach(col => {
-                            if (col.endsWith('_sigma_min')) {
-                                const base = col.replace('_sigma_min', '');
-                                const maxCol = `${base}_sigma_max`;
-                                if (row[col] !== undefined && row[maxCol] !== undefined) {
-                                    newRow[`${base}_range`] = [row[col], row[maxCol]];
-                                }
-                            }
-                        });
-                        return newRow;
-                    });
-                    setCsvData(processedData);
-                    setBrushStartIdx(0);
-                    setBrushEndIdx(null);
+                    setCheckedWorkspaceFileId(null);
+                    ingestParsedRows(data, file.name, 'upload');
                 }
             },
             error: (err) => {
@@ -232,17 +346,7 @@ const CSVPlotterPage = () => {
                 alert("Failed to parse CSV file.");
             }
         });
-    };
-
-    const handleClear = () => {
-        setFileName('');
-        setCsvData([]);
-        setColumns([]);
-        setSelectedColumns([]);
-        setSearchTerm('');
-        setXAxisKey('');
-        setBrushStartIdx(0);
-        setBrushEndIdx(null);
+        e.target.value = '';
     };
 
     // Grouping logic for columns
@@ -392,6 +496,149 @@ const CSVPlotterPage = () => {
         return [...areaElements, ...lineElements];
     }, [selectedColumns, groupedColumns]);
 
+    const renderWorkspaceTree = (compact) => {
+        if (!dataFiles.length) {
+            return (
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b', textAlign: compact ? 'left' : 'center', maxWidth: 400 }}>
+                    No files in the workspace yet. Add files or folders from the sidebar, then check one file below.
+                </p>
+            );
+        }
+
+        const fileRow = (f) => (
+            <label
+                key={f.id}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '5px 8px',
+                    cursor: workspaceParsing ? 'wait' : 'pointer',
+                    borderRadius: 4,
+                }}
+            >
+                <input
+                    type="checkbox"
+                    checked={checkedWorkspaceFileId === f.id}
+                    disabled={workspaceParsing}
+                    onChange={(e) => handleWorkspaceFileCheck(f, e.target.checked)}
+                    style={{ accentColor: '#a855f7', flexShrink: 0 }}
+                />
+                <span
+                    style={{
+                        fontSize: compact ? '0.76rem' : '0.82rem',
+                        color: '#e2e8f0',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                    }}
+                    title={f.name}
+                >
+                    {f.name}
+                </span>
+            </label>
+        );
+
+        return (
+            <div
+                style={{
+                    width: '100%',
+                    maxWidth: compact ? '100%' : 440,
+                    maxHeight: compact ? 220 : 380,
+                    overflowY: 'auto',
+                    padding: 10,
+                    background: '#0f172a',
+                    borderRadius: 8,
+                    border: '1px solid #334155',
+                    textAlign: 'left',
+                }}
+            >
+                <div
+                    style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        marginBottom: 8,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                    }}
+                >
+                    <FolderOpen size={14} />
+                    Workspace{compact ? ' — switch file' : ''}
+                </div>
+                <p style={{ margin: '0 0 10px 0', fontSize: '0.72rem', color: '#475569', lineHeight: 1.4 }}>
+                    Same folders as the sidebar. Check <strong style={{ color: '#94a3b8' }}>one</strong> file to plot; another check replaces it. Uncheck to clear.
+                </p>
+                {folders.length > 0 && (
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            onClick={expandAllFolders}
+                            style={{ fontSize: '0.7rem', padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: 'rgba(168,85,247,0.12)', color: '#c4b5fd', cursor: 'pointer' }}
+                        >
+                            Expand all folders
+                        </button>
+                        <button
+                            type="button"
+                            onClick={collapseAllFolders}
+                            style={{ fontSize: '0.7rem', padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}
+                        >
+                            Collapse all
+                        </button>
+                    </div>
+                )}
+                {folders.map((folder) => {
+                    const kids = filesInFolder(folder.id);
+                    const expanded = expandedFolderIds.has(folder.id);
+                    return (
+                        <div key={folder.id} style={{ marginBottom: 4 }}>
+                            <button
+                                type="button"
+                                onClick={() => toggleFolderExpanded(folder.id)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    width: '100%',
+                                    textAlign: 'left',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#cbd5e1',
+                                    cursor: 'pointer',
+                                    padding: '6px 8px',
+                                    fontSize: '0.82rem',
+                                    borderRadius: 6,
+                                }}
+                            >
+                                {expanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
+                                <FolderOpen size={14} color="#a855f7" />
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder.name}</span>
+                                <span style={{ color: '#64748b', fontSize: '0.72rem' }}>{kids.length}</span>
+                            </button>
+                            {expanded && <div style={{ paddingLeft: 12, borderLeft: '1px solid rgba(51,65,85,0.6)', marginLeft: 10 }}>{kids.map(fileRow)}</div>}
+                        </div>
+                    );
+                })}
+                {rootDataFiles.length > 0 && (
+                    <div style={{ marginTop: folders.length ? 10 : 0 }}>
+                        {folders.length > 0 && (
+                            <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, marginBottom: 6, paddingLeft: 4 }}>
+                                Library root
+                            </div>
+                        )}
+                        {rootDataFiles.map(fileRow)}
+                    </div>
+                )}
+                {workspaceParsing && (
+                    <p style={{ margin: '10px 0 0', fontSize: '0.75rem', color: '#a855f7' }}>Loading file…</p>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div className="aroma-analysis-container">
             <div className="aroma-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -405,11 +652,17 @@ const CSVPlotterPage = () => {
 
             <div className="aroma-content" style={{ display: 'flex', gap: '20px', flexDirection: 'column' }}>
                 {!csvData.length ? (
-                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155' }}>
-                        <UploadCloud size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
-                        <h2 style={{ color: '#f8fafc', marginBottom: '8px' }}>Upload a CSV File</h2>
-                        <p style={{ color: '#94a3b8', marginBottom: '20px' }}>Upload your SE Analysis CSV or any other data file to plot custom columns.</p>
+                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155', gap: 20 }}>
+                        <UploadCloud size={48} color="#94a3b8" style={{ marginBottom: '4px' }} />
+                        <h2 style={{ color: '#f8fafc', marginBottom: '4px' }}>Load data for SE Analysis</h2>
+                        <p style={{ color: '#94a3b8', marginBottom: '4px', maxWidth: 520 }}>
+                            Browse your workspace (folders and root files), check one file to plot, or upload a CSV from disk.
+                        </p>
 
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, justifyContent: 'center', alignItems: 'flex-start', width: '100%', maxWidth: 900 }}>
+                            {renderWorkspaceTree(false)}
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 24 }}>
+                                <span style={{ color: '#475569', fontSize: '0.75rem' }}>or</span>
                         <label
                             className="btn-primary"
                             style={{
@@ -438,6 +691,8 @@ const CSVPlotterPage = () => {
                                 style={{ display: 'none' }}
                             />
                         </label>
+                            </div>
+                        </div>
                     </div>
                 ) : (
                     <div style={{ display: 'flex', gap: '20px', height: 'calc(100vh - 120px)' }}>
@@ -472,6 +727,8 @@ const CSVPlotterPage = () => {
                                     <Trash2 size={16} />
                                 </button>
                             </div>
+
+                            <div style={{ marginBottom: 14 }}>{renderWorkspaceTree(true)}</div>
 
                             <div style={{ marginBottom: '16px' }}>
                                 <label style={{ display: 'block', fontSize: '0.85rem', color: '#94a3b8', marginBottom: '6px' }}>X-Axis</label>

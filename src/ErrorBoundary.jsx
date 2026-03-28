@@ -19,8 +19,8 @@ class ErrorBoundary extends React.Component {
         if (this.state.hasError) {
             return (
                 <div style={{ padding: '20px', background: '#fee2e2', color: '#991b1b', borderRadius: '8px', margin: '20px', fontFamily: 'monospace', overflow: 'auto', maxHeight: '100vh', zIndex: 999999, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
-                    <h2 style={{ fontSize: '24px', fontWeight: 'bold' }}>Application Crashed!</h2>
-                    <p>Please copy the text below and paste it into the AI chat:</p>
+                    <h2 style={{ fontSize: '24px', fontWeight: 'bold' }}>Something went wrong</h2>
+                    <p>An unexpected error occurred. Try reloading the page. Technical details:</p>
                     <hr style={{ borderColor: '#fca5a5' }} />
                     <h3 style={{ marginTop: '20px' }}>Error:</h3>
                     <pre style={{ background: '#fef2f2', padding: '10px', borderRadius: '4px' }}>

@@ -25,6 +25,7 @@ import RecoveryAnalysisPage from './components/RecoveryAnalysisPage';
 import ManufacturingVariationPage from './components/ManufacturingVariationPage';
 import CSVPlotterPage from './components/CSVPlotterPage';
 import GasDilutionMathPage from './components/GasDilutionMathPage';
+import PolymerCBMixPage from './components/PolymerCBMixPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
 import Calculator from './components/Calculator';
 import MLStudioPage from './components/MLStudioPage';
@@ -491,6 +492,8 @@ function App() {
                 <GasSystemDesignPage key="gasDesign" />
               ) : activePage === 'gasMath' ? (
                 <GasDilutionMathPage key="gasMath" />
+              ) : activePage === 'polymerCbMix' ? (
+                <PolymerCBMixPage key="polymerCbMix" />
               ) : activePage === 'normalize' ? (
                 <NormalizePage
                   key="normalize"
@@ -541,6 +544,7 @@ function App() {
               ) : activePage === 'csvPlotter' ? (
                 <CSVPlotterPage
                   key="csvPlotter"
+                  workspaceFiles={files}
                 />
               ) : activePage === 'mlStudio' ? (
                 <MLStudioPage

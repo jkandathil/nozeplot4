@@ -6,6 +6,8 @@ import {
 import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download, Layers } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import './AromaAnalysisPage.css';
+import { isRecoveryOffEvent, shouldRemoveRecoveryBlock } from '../utils/recoveryEventFilter';
+import { extractConcentration } from '../utils/aromaAnalysisPipeline';
 
 /**
  * Magnus Formula constants
@@ -603,6 +605,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                             const rowsToRemove = new Set();
                             const allowedPlots = ['breathsamplecollection', 'fenowindow', 'fenomeasurement'];
                             const hasBreathEvents = blocks.some(b => allowedPlots.some(p => b.event.includes(p)));
+                            const fileHasRecoveryOff = blocks.some((b) => isRecoveryOffEvent(b.event));
 
                             blocks.forEach(b => {
                                 if (hasBreathEvents) {
@@ -614,7 +617,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                         for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++) rowsToRemove.add(i);
                                     }
                                 } else {
-                                    if (removeRecoveryEvents && b.event.includes('recovery')) {
+                                    if (removeRecoveryEvents && shouldRemoveRecoveryBlock(b.event, fileHasRecoveryOff)) {
                                         for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
                                     }
                                     if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
@@ -777,9 +780,16 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                 let colorIdx = 0;
                 const colorMap = {};
 
+                const batchHasRecoveryOffRef = sequenceAverages.some((seq) => isRecoveryOffEvent(seq.str));
                 let refLines = [];
                 sequenceAverages.forEach(seq => {
-                    if (seq.str.includes('recovery') && removeRecoveryEvents) return;
+                    if (
+                        removeRecoveryEvents &&
+                        seq.str.includes('recovery') &&
+                        !(batchHasRecoveryOffRef && isRecoveryOffEvent(seq.str))
+                    ) {
+                        return;
+                    }
                     if (!colorMap[seq.label]) {
                         colorMap[seq.label] = uniqueColors[colorIdx % uniqueColors.length];
                         colorIdx++;
@@ -830,29 +840,16 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
         const plots = [];
 
         // 1. Group files by concentration (ALAAC logic: only ppb, never ppm)
-        const extractConcentration = (name, ignoreAu = false) => {
-            const basename = name.split(/[/\\]/).pop();
-            const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
-            let conc = m ? `${parseFloat(m[1])} ppb` : 'Unknown';
-
-            if (separateByUnitVal && !ignoreAu && conc !== 'Unknown') {
-                const fileParts = basename.split('_');
-                const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
-                if (asauPart) {
-                    return `${asauPart.toUpperCase()} - ${conc}`;
-                }
-            }
-            return conc;
-        };
-
         const extractConcValue = (name) => {
-            const m = name.match(/(\d+(?:\.\d+)?)ppb/i);
-            return m ? parseFloat(m[1]) : 0;
+            const m = String(name).match(/(\d+(?:\.\d+)?)\s*(ppb|ppm)\b/i);
+            if (!m) return 0;
+            const n = parseFloat(m[1]);
+            return m[2].toLowerCase() === 'ppm' ? n * 1000 : n;
         };
 
         const groups = {}; // { '90 ppb': [f1, f2] }
         files.forEach(f => {
-            const c = extractConcentration(f.fileName);
+            const c = extractConcentration(f.fileName, false, separateByUnitVal, f.data);
             if (filterUnknownVal && c === 'Unknown') return;
             if (!groups[c]) groups[c] = [];
             groups[c].push(f);
@@ -861,6 +858,11 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
         const sortedGroupKeys = Object.keys(groups).sort((a, b) => {
             if (a === 'Unknown') return 1;
             if (b === 'Unknown') return -1;
+            const rawA = String(a).startsWith('Raw ·');
+            const rawB = String(b).startsWith('Raw ·');
+            if (rawA && !rawB) return 1;
+            if (!rawA && rawB) return -1;
+            if (rawA && rawB) return a.localeCompare(b);
             const numA = extractConcValue(a);
             const numB = extractConcValue(b);
             if (numA === numB) {
@@ -986,8 +988,8 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                     lines.push({ dataKey: `${gName}_${prefix}_mean`, name: `${gName} Average`, color });
                     areas.push({ dataKey: `${gName}_${prefix}_range`, name: `${gName} Spread (±1σ)`, color });
 
-                    if (gName !== 'Unknown') {
-                        const pureConcLabel = separateByUnitVal ? extractConcentration(groups[gName][0]?.fileName || "", true) : gName;
+                    if (gName !== 'Unknown' && !String(gName).startsWith('Raw ·')) {
+                        const pureConcLabel = separateByUnitVal ? extractConcentration(groups[gName][0]?.fileName || "", true, false, groups[gName][0]?.data) : gName;
                         if (!calibrationDataMap[pureConcLabel]) {
                             calibrationDataMap[pureConcLabel] = { concLabel: pureConcLabel, concentration: extractConcValue(gName) };
                         }
@@ -1084,7 +1086,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                     else if (type === 'Abs-H') matchKey = absHMatchKeys[fIdx];
 
                     if (matchKey) {
-                        const conc = extractConcentration(f.fileName);
+                        const conc = extractConcentration(f.fileName, false, separateByUnitVal, f.data);
                         const gIdx = sortedGroupKeys.indexOf(conc);
                         const color = gIdx >= 0 && conc !== 'Unknown' ? COLORS[gIdx % COLORS.length] : COLORS[fIdx % COLORS.length];
 

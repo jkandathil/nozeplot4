@@ -12,9 +12,10 @@ import {
     ReferenceArea,
     Brush
 } from 'recharts';
-import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy, Image as ImageIcon } from 'lucide-react';
+import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy, Image as ImageIcon, Droplets } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toPng } from 'html-to-image';
+import { isKnownPlotFile, parseConcentrationMetaFromFile } from '../utils/workspaceFilename';
 import './NormalizePage.css';
 
 /* Extended Palette for multi-file comparison */
@@ -23,17 +24,15 @@ const PALETTE = [
     '#2dd4bf', '#fb923c', '#4ade80', '#e879f9', '#818cf8', '#fca5a5', '#94a3b8', '#a3e635'
 ];
 
-/* Line styles for different files */
-const getLineStyle = (index) => {
-    switch (index) {
-        case 0: return { strokeDasharray: undefined };      // Main: Solid
-        case 1: return { strokeDasharray: '5 5' };          // Cmp1: Dashed
-        case 2: return { strokeDasharray: '2 2' };          // Cmp2: Dotted
-        case 3: return { strokeDasharray: '10 5' };         // Cmp3: Long Dash
-        case 4: return { strokeDasharray: '10 2 2 2' };     // Cmp4: Dash Dot
-        default: return { strokeDasharray: '5 5' };
-    }
-};
+/** Stable color from file path when no concentration meta (avoids collisions with conc palette) */
+const UNCATEGORIZED_PALETTE = ['#64748b', '#78716c', '#52525b', '#71717a', '#57534e'];
+
+function hashString(s) {
+    let h = 0;
+    const str = String(s || '');
+    for (let i = 0; i < str.length; i++) h = ((h << 5) - h) + str.charCodeAt(i);
+    return Math.abs(h);
+}
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 /* Returns date/time column if present, else null (caller uses index 1,2,3...) */
@@ -50,20 +49,52 @@ function shortName(fileName = '') {
     return fileName.replace(/\.[^/.]+$/, '').slice(0, 12);
 }
 
-function extractConcentration(fileName = '') {
-    if (!fileName) return null;
-    const basename = fileName.split(/[/\\]/).pop();
-    // Prioritize 'ppb' since that differs per file in these sets
-    let match = basename.match(/(\d+(?:\.\d+)?)\s*ppb/i);
-    if (!match) match = basename.match(/(\d+(?:\.\d+)?)\s*ppm/i);
-    if (match) {
-        return match[0].trim();
-    }
-    return null;
+/** Same ranking as Dashboard ChartArea — finds event/phase column for recovery filtering */
+function findEventColumn(sampleRow) {
+    if (!sampleRow || typeof sampleRow !== 'object') return null;
+    const keys = Object.keys(sampleRow);
+    const ranked = keys
+        .map((col) => {
+            const l = col.toLowerCase();
+            let score = 0;
+            if (l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state') score = 100;
+            else if (l === 'event' || l === 'events' || l.endsWith('_phase') || l.endsWith('_event')) score = 85;
+            else if (l.includes('event') && !l.includes('reference')) score = 70;
+            else if (l.includes('phase') && !l.includes('reference')) score = 55;
+            return { col, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+    return ranked[0]?.col ?? null;
 }
 
-function getLineLabel(fileName, key) {
-    const conc = extractConcentration(fileName);
+function parseConcentrationMeta(fileName, data = null) {
+    return parseConcentrationMetaFromFile(fileName, data);
+}
+
+function extractConcentration(fileName = '', data = null) {
+    const meta = parseConcentrationMeta(fileName, data);
+    return meta ? meta.label : null;
+}
+
+function sortConcentrationOptions(options) {
+    const unitRank = { ppb: 0, ppm: 1 };
+    return [...options].sort((a, b) => {
+        if (a.numericValue !== b.numericValue) return a.numericValue - b.numericValue;
+        return (unitRank[a.unit] ?? 2) - (unitRank[b.unit] ?? 2);
+    });
+}
+
+/** When concentration toggles exist, file must match a selected key; unlabeled files always pass */
+function fileMatchesSelectedConcentrations(fileName, fileData, selectedSet, filteringActive) {
+    if (!filteringActive) return true;
+    const meta = parseConcentrationMeta(fileName, fileData);
+    if (!meta) return true;
+    return selectedSet.has(meta.key);
+}
+
+function getLineLabel(fileName, key, fileData = null) {
+    const conc = extractConcentration(fileName, fileData);
     if (conc) return `${conc} - ${key}`;
     return `${shortName(fileName)} - ${key}`;
 }
@@ -141,17 +172,120 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
 const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(true);
     const [filterUnknown, setFilterUnknown] = useState(true);
+    const [selectedConcentrationKeys, setSelectedConcentrationKeys] = useState([]);
 
-    const isKnownFile = (fName) => {
+    const isKnownFile = (fName, fileData = null) => {
         if (!filterUnknown) return true;
         if (!fName) return false;
-        const basename = fName.split(/[/\\]/).pop();
-        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
-        return m !== null;
+        return isKnownPlotFile(fName, fileData);
     };
 
-    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName)) ? data : [], [data, fileName, filterUnknown]);
-    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName)), [compareDataList, filterUnknown]);
+    /* Unique concentrations across main + compare (filename or in-file columns) */
+    const concentrationOptions = useMemo(() => {
+        const map = new Map();
+        const add = (fn, fd) => {
+            const meta = parseConcentrationMeta(fn, fd);
+            if (meta && !map.has(meta.key)) map.set(meta.key, meta);
+        };
+        if (fileName) add(fileName, data);
+        (compareDataList || []).forEach((c) => add(c?.fileName, c?.data));
+        return sortConcentrationOptions(Array.from(map.values()));
+    }, [fileName, data, compareDataList]);
+
+    const concOptionKeysSig = useMemo(
+        () => concentrationOptions.map((o) => o.key).sort().join(','),
+        [concentrationOptions]
+    );
+
+    const workspaceSignature = useMemo(() => {
+        const parts = [];
+        if (fileName) parts.push(fileName);
+        (compareDataList || []).forEach((c) => {
+            if (c?.fileName) parts.push(c.fileName);
+        });
+        return parts.sort().join('\n');
+    }, [fileName, compareDataList]);
+
+    /* New workspace or new concentration in folder: keep prior selection where possible; default new keys on */
+    useEffect(() => {
+        setSelectedConcentrationKeys((prev) => {
+            const allKeys = concentrationOptions.map((o) => o.key);
+            if (allKeys.length === 0) return prev.length === 0 ? prev : [];
+            const allSet = new Set(allKeys);
+            const kept = prev.filter((k) => allSet.has(k));
+            const added = allKeys.filter((k) => !kept.includes(k));
+            const next = prev.length === 0 ? allKeys : [...kept, ...added];
+            if (prev.length === next.length && prev.every((k, i) => k === next[i])) return prev;
+            return next;
+        });
+    }, [workspaceSignature, concOptionKeysSig]);
+
+    const selectedConcSet = useMemo(
+        () => new Set(selectedConcentrationKeys),
+        [selectedConcentrationKeys.join('\0')]
+    );
+
+    const concFilterActive = concentrationOptions.length > 0;
+
+    /** Same concentration label → same stroke (main + compare), independent of file order */
+    const concKeyToColor = useMemo(() => {
+        const m = new Map();
+        concentrationOptions.forEach((o, i) => {
+            m.set(o.key, PALETTE[i % PALETTE.length]);
+        });
+        return m;
+    }, [concentrationOptions]);
+
+    const strokeForWorkspaceFile = useCallback(
+        (fn, fd) => {
+            const meta = parseConcentrationMeta(fn, fd);
+            if (meta && concKeyToColor.has(meta.key)) return concKeyToColor.get(meta.key);
+            const h = hashString(fn || '');
+            return UNCATEGORIZED_PALETTE[h % UNCATEGORIZED_PALETTE.length];
+        },
+        [concKeyToColor]
+    );
+
+    /**
+     * Main (sidebar) first, then compares — same order as the workspace.
+     * First entry that passes known-file + concentration filters becomes the chart "main";
+     * the rest are compares. Fixes empty plot when sidebar main is e.g. 10 ppb toggled off
+     * but 5 ppb / 100 ppb compare files are still selected.
+     */
+    const eligibleWorkspaceFiles = useMemo(() => {
+        const out = [];
+        const pushIfOk = (fn, fileData) => {
+            if (!fileData?.length || !fn) return;
+            if (filterUnknown && !isKnownFile(fn, fileData)) return;
+            if (!fileMatchesSelectedConcentrations(fn, fileData, selectedConcSet, concFilterActive)) return;
+            out.push({ fileName: fn, data: fileData });
+        };
+        pushIfOk(fileName, data);
+        (compareDataList || []).forEach((c) => pushIfOk(c?.fileName, c?.data));
+        return out;
+    }, [data, fileName, compareDataList, filterUnknown, selectedConcSet, concFilterActive]);
+
+    const plotMainFileName = eligibleWorkspaceFiles[0]?.fileName ?? fileName ?? '';
+    const activeData = eligibleWorkspaceFiles[0]?.data ?? [];
+    /** Must be memoized: .slice(1) each render was a new array → cmpFiles/prefixedKeysMap churn → visibleSeries effect #185 loop */
+    const activeCompareList = useMemo(
+        () => eligibleWorkspaceFiles.slice(1),
+        [eligibleWorkspaceFiles]
+    );
+
+    const toggleConcentrationKey = useCallback((key) => {
+        setSelectedConcentrationKeys((prev) =>
+            prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+        );
+    }, []);
+
+    const selectAllConcentrations = useCallback(() => {
+        setSelectedConcentrationKeys(concentrationOptions.map((o) => o.key));
+    }, [concentrationOptions]);
+
+    const clearAllConcentrations = useCallback(() => {
+        setSelectedConcentrationKeys([]);
+    }, []);
 
     /* ── 1. Prepare Main Data ── */
     const { xKey, seriesKeys, chartData } = useMemo(() => {
@@ -160,14 +294,11 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         // Filter out recovery phase if checked
         let processedData = activeData;
         const keys = Object.keys(activeData[0]);
-        const eventCol = keys.find(col => {
-            const l = col.toLowerCase();
-            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-        });
+        const eventCol = findEventColumn(activeData[0]);
         if (removeRecoveryEvents && eventCol) {
-            processedData = activeData.filter(row => {
-                const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
-                return !eVal.includes('recovery');
+            processedData = activeData.filter((row) => {
+                const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
+                return !eNorm.includes('recovery');
             });
         }
 
@@ -191,15 +322,11 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
 
             // Filter out recovery phase if checked
             let processedData = file.data;
-            const keys = Object.keys(file.data[0]);
-            const eventCol = keys.find(col => {
-                const l = col.toLowerCase();
-                return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-            });
+            const eventCol = findEventColumn(file.data[0]);
             if (removeRecoveryEvents && eventCol) {
-                processedData = file.data.filter(row => {
-                    const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
-                    return !eVal.includes('recovery');
+                processedData = file.data.filter((row) => {
+                    const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
+                    return !eNorm.includes('recovery');
                 });
             }
 
@@ -560,7 +687,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                 style: { margin: 0, paddingRight: '20px' }
             });
             const link = document.createElement('a');
-            link.download = `normalized_${fileName || 'chart'}.png`;
+            link.download = `normalized_${plotMainFileName || fileName || 'chart'}.png`;
             link.href = dataUrl;
             link.click();
         } catch (err) {
@@ -568,20 +695,38 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         }
     };
 
+    /* Reset baseline only when the sidebar primary file, axis mode, or recovery trim changes — not when adding compares or toggling concentrations */
     useEffect(() => {
-        setBaselineLeft(null); setBaselineRight(null);
-        setIsDragging(false); setDragRight('');
-        setBrushStartIdx(0); setBrushEndIdx(null);
-    }, [data, fileName]); // removed compareDataList to preserve baseline across comparison toggles
+        setBaselineLeft(null);
+        setBaselineRight(null);
+        setIsDragging(false);
+        setDragRight('');
+        setBrushStartIdx(0);
+        setBrushEndIdx(null);
+    }, [fileName, xKey, removeRecoveryEvents]);
+
+    /** Drop baseline if x labels no longer exist (e.g. file swap); avoids bogus full-chart averaging */
+    useEffect(() => {
+        if (!baselineLeft || !baselineRight || !filteredData.length) return;
+        const okL = filteredData.some((d) => String(d[xKey]) === String(baselineLeft));
+        const okR = filteredData.some((d) => String(d[xKey]) === String(baselineRight));
+        if (!okL || !okR) {
+            setBaselineLeft(null);
+            setBaselineRight(null);
+            setIsDragging(false);
+            setDragRight('');
+        }
+    }, [filteredData, xKey, baselineLeft, baselineRight]);
 
     const baselineRange = useMemo(() => {
         if (!baselineLeft || !baselineRight || !filteredData.length) return null;
-        let s = filteredData.findIndex(d => String(d[xKey]) === String(baselineLeft));
-        let e = filteredData.findIndex(d => String(d[xKey]) === String(baselineRight));
-        if (s < 0) s = 0;
-        if (e < 0) e = filteredData.length - 1;
-        if (s > e) [s, e] = [e, s];
-        return { startIdx: s, endIdx: e };
+        const s = filteredData.findIndex((d) => String(d[xKey]) === String(baselineLeft));
+        const e = filteredData.findIndex((d) => String(d[xKey]) === String(baselineRight));
+        if (s < 0 || e < 0) return null;
+        let startIdx = s;
+        let endIdx = e;
+        if (startIdx > endIdx) [startIdx, endIdx] = [endIdx, startIdx];
+        return { startIdx, endIdx };
     }, [baselineLeft, baselineRight, filteredData, xKey]);
 
     const baselineAvgs = useMemo(() => {
@@ -697,6 +842,37 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         </div>
     );
 
+    if (eligibleWorkspaceFiles.length === 0) return (
+        <div className="normalize-empty">
+            <Droplets size={48} color="#475569" />
+            <p>No files match the current filters.</p>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: 420, textAlign: 'center' }}>
+                {concFilterActive
+                    ? 'Turn on at least one concentration, or disable “No Unknowns” if filenames omit ppb/ppm. If the sidebar main file is off, the first selected compare is used as the base trace.'
+                    : 'Try disabling “No Unknowns” if your filenames do not include a concentration (ppb/ppm).'}
+            </p>
+            {concFilterActive && concentrationOptions.length > 0 && (
+                <div className="normalize-concentration-bar normalize-concentration-bar--standalone">
+                    <span className="normalize-conc-label"><Droplets size={14} /> Concentrations</span>
+                    <div className="normalize-conc-toggles">
+                        {concentrationOptions.map((opt) => (
+                            <button
+                                key={opt.key}
+                                type="button"
+                                className={`normalize-conc-toggle${selectedConcSet.has(opt.key) ? ' normalize-conc-toggle--on' : ''}`}
+                                onClick={() => toggleConcentrationKey(opt.key)}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                    <button type="button" className="normalize-conc-action" onClick={selectAllConcentrations}>All</button>
+                    <button type="button" className="normalize-conc-action" onClick={clearAllConcentrations}>None</button>
+                </div>
+            )}
+        </div>
+    );
+
     const baselR = baselineRight || (isDragging ? dragRight : null);
 
     return (
@@ -706,7 +882,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
             <div className="normalize-header">
                 <div className="header-left">
                     <Activity size={15} color="#fbbf24" style={{ flexShrink: 0 }} />
-                    <span className="normalize-title">{shortName(fileName)}</span>
+                    <span className="normalize-title" title={plotMainFileName || fileName}>{shortName(plotMainFileName || fileName)}</span>
                     {cmpFiles.slice(0, 2).map((f, i) => (
                         <span key={i} className="normalize-title" style={{ color: PALETTE[(i + 1) % PALETTE.length], fontSize: '0.85rem' }}>
                             <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>vs</span>
@@ -803,10 +979,37 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                 </div>
             </div>
 
+            {/* ── Concentration toggles (from filenames: 5 ppm, 10 ppb, …) ── */}
+            {concentrationOptions.length > 0 && (
+                <div className="normalize-concentration-bar">
+                    <span className="normalize-conc-label" title="Parsed from main + compare filenames. Toggle which concentrations are merged on the chart.">
+                        <Droplets size={14} />
+                        Concentrations
+                    </span>
+                    <div className="normalize-conc-toggles">
+                        {concentrationOptions.map((opt) => (
+                            <button
+                                key={opt.key}
+                                type="button"
+                                className={`normalize-conc-toggle${selectedConcSet.has(opt.key) ? ' normalize-conc-toggle--on' : ''}`}
+                                onClick={() => toggleConcentrationKey(opt.key)}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                    <button type="button" className="normalize-conc-action" onClick={selectAllConcentrations}>All</button>
+                    <button type="button" className="normalize-conc-action" onClick={clearAllConcentrations}>None</button>
+                    <span className="normalize-conc-hint">
+                        {eligibleWorkspaceFiles.length} file{eligibleWorkspaceFiles.length !== 1 ? 's' : ''} in plot
+                    </span>
+                </div>
+            )}
+
             {/* ── Chips (Scrollable) ── */}
             <div className="series-chip-bar">
                 {/* Main */}
-                <span className="chip-group-label">{shortName(fileName)}</span>
+                <span className="chip-group-label" title={plotMainFileName || fileName}>{shortName(plotMainFileName || fileName)}</span>
                 {seriesKeys.map((key, i) => {
                     const active = visibleSeries.includes(key);
                     return (
@@ -886,23 +1089,22 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                             {!isDragging && baselineLeft && baselineRight && <ReferenceArea x1={baselineLeft} x2={baselineRight} fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.35)" />}
 
                             {/* Main Lines */}
-                            {seriesKeys.filter(k => visibleSeries.includes(k)).map((key, i) => (
-                                <Line key={key} type="monotone" dataKey={key} stroke={PALETTE[0]} strokeWidth={2} dot={false}
-                                    activeDot={{ r: 4 }} name={getLineLabel(fileName, key)} isAnimationActive={false} connectNulls />
+                            {seriesKeys.filter(k => visibleSeries.includes(k)).map((key) => (
+                                <Line key={key} type="monotone" dataKey={key}
+                                    stroke={strokeForWorkspaceFile(plotMainFileName || fileName, activeData)} strokeWidth={2} dot={false}
+                                    activeDot={{ r: 4 }} name={getLineLabel(plotMainFileName || fileName, key, activeData)} isAnimationActive={false} connectNulls />
                             ))}
 
-                            {/* Compare Lines */}
+                            {/* Compare Lines — color by concentration, not compare-file index */}
                             {cmpFiles.map((f, idx) => {
                                 const prefixMap = prefixedKeysMap[idx];
-                                const color = PALETTE[(idx + 1) % PALETTE.length];
-                                const style = getLineStyle(idx + 1);
+                                const color = strokeForWorkspaceFile(f.fileName, f.data);
                                 return f.seriesKeys
                                     .filter(k => visibleSeries.includes(prefixMap[k]))
                                     .map(key => (
                                         <Line key={prefixMap[key]} type="monotone" dataKey={prefixMap[key]}
                                             stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4 }}
-                                            strokeDasharray={style.strokeDasharray}
-                                            name={getLineLabel(f.fileName, key)} isAnimationActive={false} connectNulls />
+                                            name={getLineLabel(f.fileName, key, f.data)} isAnimationActive={false} connectNulls />
                                     ));
                             })}
                         </LineChart>
@@ -911,8 +1113,12 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
             </div>
             {/* ── Footer ── */}
             <div className="normalize-footer">
-                <span className="stat">Rows: <strong>{data.length}</strong></span>
-                {cmpFiles.map((f, i) => <span key={i} className="stat" style={{ color: PALETTE[(i + 1) % PALETTE.length] }}>{f.shortName}: <strong>{f.data.length}</strong></span>)}
+                <span className="stat">Rows (main): <strong>{chartData.length}</strong></span>
+                {cmpFiles.map((f, i) => (
+                    <span key={f.fileName || i} className="stat" style={{ color: strokeForWorkspaceFile(f.fileName, f.data) }}>
+                        {f.shortName}: <strong>{f.data.length}</strong>
+                    </span>
+                ))}
                 <span className="stat">Baseline: <strong>{baselineRange ? (baselineRange.endIdx - baselineRange.startIdx + 1) : 0} rows</strong></span>
             </div>
         </motion.div>

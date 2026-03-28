@@ -336,7 +336,7 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
             <div className="sensitivity-analysis-page">
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
                     <Info size={24} style={{ marginRight: '8px' }} />
-                    Upload parsed aroma summary data (e.g. aroma_analysis_*.csv) to see Sensitivity Analysis.
+                    Select a wide aroma summary file in the sidebar (e.g. aroma_analysis_*.csv), or use SE Analysis to plot custom CSVs from disk or workspace.
                 </div>
             </div>
         );

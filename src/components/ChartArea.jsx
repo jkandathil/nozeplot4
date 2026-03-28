@@ -14,10 +14,38 @@ import { motion } from 'framer-motion';
 import { toPng } from 'html-to-image';
 import MultiFileSelect from './MultiFileSelect';
 import LazyChart from './LazyChart';
+import { isKnownPlotFile } from '../utils/workspaceFilename';
 import './ChartArea.css';
 
 const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
 const COMPARE_COLORS = ['#FDA4AF', '#FCD34D', '#BEF264', '#5EEAD4', '#67E8F9', '#A5B4FC', '#F0ABFC', '#F9A8D4'];
+
+/** Legend labels used full paths and could consume the whole chart when many compares are on. */
+function shortDataFileLabel(filePath, maxLen = 40) {
+    if (!filePath) return '';
+    const base = filePath.split(/[/\\]/).pop() || filePath;
+    if (base.length <= maxLen) return base;
+    return `${base.slice(0, Math.max(1, maxLen - 1))}…`;
+}
+
+/** Event / phase column used to drop recovery rows (same idea as Aroma pipeline). */
+function findEventColumn(sampleRow) {
+    if (!sampleRow || typeof sampleRow !== 'object') return null;
+    const keys = Object.keys(sampleRow);
+    const ranked = keys
+        .map((col) => {
+            const l = col.toLowerCase();
+            let score = 0;
+            if (l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state') score = 100;
+            else if (l === 'event' || l === 'events' || l.endsWith('_phase') || l.endsWith('_event')) score = 85;
+            else if (l.includes('event') && !l.includes('reference')) score = 70;
+            else if (l.includes('phase') && !l.includes('reference')) score = 55;
+            return { col, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+    return ranked[0]?.col ?? null;
+}
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -91,16 +119,14 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         localStorage.setItem('aroma_filterUnknown', filterUnknown.toString());
     }, [removeRecoveryEvents, filterUnknown]);
 
-    const isKnownFile = (fName) => {
+    const isKnownFile = (fName, fileData = null) => {
         if (!filterUnknown) return true;
         if (!fName) return false;
-        const basename = fName.split(/[/\\]/).pop();
-        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
-        return m !== null;
+        return isKnownPlotFile(fName, fileData);
     };
 
-    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName)) ? data : [], [data, fileName, filterUnknown]);
-    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName)), [compareDataList, filterUnknown]);
+    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName, data)) ? data : [], [data, fileName, filterUnknown]);
+    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName, c.data)), [compareDataList, filterUnknown]);
 
     // Index-based zoom: controls Brush startIndex/endIndex.
     const [brushStartIdx, setBrushStartIdx] = useState(0);
@@ -119,14 +145,12 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
         let processedData = activeData;
         const keys = Object.keys(activeData[0]);
-        const eventCol = keys.find(col => {
-            const l = col.toLowerCase();
-            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-        });
+        const eventCol = findEventColumn(activeData[0]);
         if (removeRecoveryEvents && eventCol) {
-            processedData = activeData.filter(row => {
-                const eVal = String(row[eventCol] || '').toLowerCase().replace(/\s+/g, '');
-                return !eVal.includes('recovery');
+            // Strip all recovery-tagged rows including recoveryOff / Recovery_Off (Dashboard: no exceptions)
+            processedData = activeData.filter((row) => {
+                const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
+                return !eNorm.includes('recovery');
             });
         }
 
@@ -193,62 +217,59 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     const processedChartData = useMemo(() => {
         if (!activeCompareList || activeCompareList.length === 0) return chartData;
 
-        // Extract and align compare points
-        const compLookups = activeCompareList.map(c => {
-            let pData = c.data || [];
-            if (removeRecoveryEvents && c.data && c.data.length > 0) {
-                const eCol = Object.keys(c.data[0]).find(col => {
-                    const l = col.toLowerCase();
-                    return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-                });
-
+        // Filter recovery rows per compare file (same rules as main), then align by xKey or row index
+        const comparePackages = activeCompareList.map((c) => {
+            let pData = Array.isArray(c.data) ? [...c.data] : [];
+            if (removeRecoveryEvents && pData.length > 0) {
+                const eCol = findEventColumn(pData[0]);
                 if (eCol) {
-                    pData = pData.filter(r => {
-                        const eVal = String(r[eCol] || '').toLowerCase().replace(/\s+/g, '');
-                        if (eVal.includes('recovery')) return false;
-                        return true;
+                    pData = pData.filter((r) => {
+                        const eNorm = String(r[eCol] ?? '').toLowerCase().replace(/\s+/g, '');
+                        return !eNorm.includes('recovery');
                     });
                 }
             }
 
             const lookup = new Map();
-            // Optional interpolation logic (currently using index alignment or closest timestamp)
             pData.forEach((row, i) => {
-                // If the comparison file has the exact same X Axis type (e.g. timestamp or index)
-                const mainXValueMatch = row[xKey] !== undefined ? row[xKey] : (i + 1);
-                lookup.set(mainXValueMatch, row);
+                const xv = row[xKey];
+                if (xv !== undefined && xv !== null && xv !== '') {
+                    lookup.set(xv, row);
+                    lookup.set(String(xv), row);
+                }
+                // Positional alignment when main uses synthetic index after trimming
+                lookup.set(i + 1, row);
             });
-            return lookup;
+            return { lookup, rows: pData, comp: c };
         });
 
-        // Loop over the main chartData and fold over the compareLookup elements
-        // If mainData has 1000 points, but compareData has 1200, we simply extend the timeline bounds.
-        const combined = [];
-        const maxLength = Math.max(
-            chartData.length,
-            ...activeCompareList.map(c => (c.data ? c.data.length : 0))
-        );
+        const maxLength = Math.max(chartData.length, ...comparePackages.map((p) => p.rows.length));
 
+        const combined = [];
         for (let i = 0; i < maxLength; i++) {
             let rowObj = { _globalIndex: i };
 
-            // Seed primary file data
             if (i < chartData.length) {
                 rowObj = { ...rowObj, ...chartData[i] };
             } else {
-                // Determine a synthetic X value using linear projection
-                rowObj[xKey] = (chartData[chartData.length - 1]?.[xKey] || 0) + (i - chartData.length + 1);
+                rowObj[xKey] = (chartData[chartData.length - 1]?.[xKey] ?? 0) + (i - chartData.length + 1);
             }
 
-            // Graft comparison rows corresponding to the current state
-            compLookups.forEach((lookup, idx) => {
-                const compFile = activeCompareList[idx];
-                const matchingPoint = lookup.get(rowObj[xKey]) || (compFile.data && compFile.data[i] ? compFile.data[i] : null);
+            const xf = rowObj[xKey];
+            comparePackages.forEach(({ lookup, rows, comp }) => {
+                let matchingPoint;
+                if (xf !== undefined && xf !== null) {
+                    matchingPoint = lookup.get(xf);
+                    if (matchingPoint === undefined) matchingPoint = lookup.get(String(xf));
+                }
+                if (matchingPoint === undefined && i < rows.length) {
+                    matchingPoint = rows[i];
+                }
 
                 if (matchingPoint) {
-                    allSeriesKeys.forEach(key => {
+                    allSeriesKeys.forEach((key) => {
                         if (matchingPoint[key] !== undefined) {
-                            rowObj[`${key}_compare_${compFile.fileName}`] = matchingPoint[key];
+                            rowObj[`${key}_compare_${comp.fileName}`] = matchingPoint[key];
                         }
                     });
                 }
@@ -580,7 +601,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     {/* Multi Comparison Select */}
                     <div style={{ marginRight: 12 }}>
                         <MultiFileSelect
-                            options={availableFiles.filter(f => isKnownFile(f.name))}
+                            options={availableFiles.filter(f => isKnownFile(f.name, f.data))}
                             selected={compareFileIds || []}
                             onChange={onCompareSelect}
                             placeholder="Compare with..."
@@ -723,9 +744,20 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                         )}
                                         <Legend
                                             verticalAlign="bottom"
-                                            wrapperStyle={{ paddingTop: '10px', bottom: 20 }}
+                                            wrapperStyle={{
+                                                paddingTop: '8px',
+                                                maxHeight: 'min(28vh, 200px)',
+                                                overflowX: 'hidden',
+                                                overflowY: 'auto',
+                                                width: '100%',
+                                            }}
                                             formatter={(value) => (
-                                                <span style={{ color: '#e2e8f0', fontSize: '0.8rem' }}>{value}</span>
+                                                <span
+                                                    style={{ color: '#e2e8f0', fontSize: '0.72rem', display: 'inline-block', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}
+                                                    title={typeof value === 'string' ? value : String(value)}
+                                                >
+                                                    {value}
+                                                </span>
                                             )}
                                         />
                                         {singleViewKeys.flatMap((key, index) => {
@@ -754,7 +786,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                             strokeOpacity={0.9}
                                                             dot={false}
                                                             activeDot={{ r: 4, strokeWidth: 0 }}
-                                                            name={`${key} (${comp.fileName})`}
+                                                            name={`${key} · ${shortDataFileLabel(comp.fileName)}`}
                                                             connectNulls
                                                             isAnimationActive={false}
                                                         />
@@ -824,7 +856,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                                     strokeOpacity={0.8}
                                                                     dot={false}
                                                                     activeDot={{ r: 3, strokeWidth: 0 }}
-                                                                    name={`${key} (${comp.fileName})`}
+                                                                    name={`${key} · ${shortDataFileLabel(comp.fileName)}`}
                                                                     connectNulls
                                                                     isAnimationActive={false}
                                                                 />

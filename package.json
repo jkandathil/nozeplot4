@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:catalog": "node scripts/buildConcentrationCatalog.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "predeploy": "npm run build",
@@ -15,6 +16,7 @@
     "@tensorflow/tfjs": "^4.22.0",
     "@xyflow/react": "^12.10.1",
     "file-saver": "^2.0.5",
+    "firebase": "^12.11.0",
     "framer-motion": "^12.34.0",
     "html-to-image": "^1.11.13",
     "html2canvas": "^1.4.1",

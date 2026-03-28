@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
-    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus,
+    Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen
 } from 'lucide-react';
 import './Sidebar.css';
@@ -58,10 +58,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         folderInputRef.current?.click();
     };
 
-    const filteredFiles = actualFiles.filter(f =>
-        f.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
     const [hoveredFile, setHoveredFile] = useState(null);
     const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
 
@@ -77,6 +73,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const activeAUs = React.useMemo(() => {
         const groups = {};
         for (const f of files) {
+            if (f.isFolder) continue;
             const baseName = f.name.split('/').pop().split('\\').pop();
             const fileParts = baseName.split('_');
             const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
@@ -86,6 +83,10 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         }
         return groups;
     }, [files]);
+
+    const filteredFiles = actualFiles.filter(f =>
+        f.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
     return (
         <aside className="sidebar" style={{ 
@@ -423,6 +424,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <FlaskConical size={14} /> Dilution
                 </button>
                 <button
+                    onClick={() => onPageChange?.('polymerCbMix')}
+                    style={{
+                        gridColumn: '1 / -1',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'polymerCbMix' ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'polymerCbMix' ? '#34d399' : 'var(--text-muted)',
+                        transition: 'all 0.15s',
+                    }}
+                    title="Polymer–carbon black: wt% ↔ volume %"
+                >
+                    <Blend size={14} /> Polymer–CB
+                </button>
+                <button
                     onClick={() => setIsCalculatorOpen(!isCalculatorOpen)}
                     style={{
                         display: 'flex',
@@ -668,8 +691,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                             {Object.keys(activeAUs).map(auId => {
                                 const auFiles = activeAUs[auId];
                                 const auFileIds = auFiles.map(f => f.id);
-                                // Check if ALL files in this AU are currently selected
-                                const isAllSelected = auFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+                                const isAllSelected = auFileIds.length > 0 && auFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
 
                                 return (
                                     <div key={auId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -681,15 +703,14 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                     if (!onSelectFiles) return;
                                                     const currentSelected = [selectedFileId, ...(compareFileIds || [])].filter(Boolean);
                                                     if (e.target.checked) {
-                                                        // Select all files in this AU (union)
                                                         const newSelected = Array.from(new Set([...currentSelected, ...auFileIds]));
                                                         onSelectFiles(newSelected);
                                                     } else {
-                                                        // Deselect all files in this AU
                                                         const newSelected = currentSelected.filter(id => !auFileIds.includes(id));
-                                                        onSelectFiles(newSelected);
+                                                        onSelectFiles(newSelected.length ? newSelected : []);
                                                     }
                                                 }}
+                                                title="Load all files from this device into the workspace (main + compares)"
                                                 style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
                                             />
                                             <span style={{ fontSize: '0.75rem', color: '#f8fafc', fontWeight: 500 }}>{auId}</span>
