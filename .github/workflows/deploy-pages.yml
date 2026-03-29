@@ -1,5 +1,10 @@
 # On push to main: build with Firebase + deploy dist/ to branch gh-pages.
 #
+# If these secrets are missing, the built site shows "Firebase is not configured" for every page
+# (AuthGate wraps the whole app — not related to Separability/Sensitivity). Pushing to main without
+# secrets overwrites gh-pages with a broken bundle even if you previously deployed from a machine
+# with .env.local. Add the four VITE_FIREBASE_* secrets below, then re-run this workflow.
+#
 # Access control: only emails whose domain is VITE_ALLOWED_EMAIL_DOMAIN (noze.ca below)
 # pass AuthGate after Google or email/password sign-in.
 #
@@ -58,6 +63,7 @@ jobs:
           VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL }}
         run: |
           npm ci
+          node scripts/checkFirebaseBuildEnv.mjs
           npm run build
 
       - name: Push to gh-pages
