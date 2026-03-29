@@ -9,6 +9,49 @@
  * @param {string} buffer
  * @returns {{ chunks: string[], rest: string }}
  */
+/** Safe one-line preview of unparsed serial text (for error messages). */
+export function describePartialSerialBuffer(s, maxLen = 100) {
+    if (s == null || s === '') return '';
+    const slice = String(s).slice(0, maxLen);
+    return JSON.stringify(slice) + (String(s).length > maxLen ? '…' : '');
+}
+
+/**
+ * True if `buffer` contains a `{` starting an object whose braces are not yet balanced
+ * (string-aware). Used to extend serial reads briefly when a large SiAC JSON frame is split
+ * across the capture end boundary.
+ */
+export function hasIncompleteLeadingJsonObject(buffer) {
+    const b = String(buffer);
+    const start = b.indexOf('{');
+    if (start < 0) return false;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < b.length; i++) {
+        const c = b[i];
+        if (escape) {
+            escape = false;
+            continue;
+        }
+        if (inString) {
+            if (c === '\\') {
+                escape = true;
+                continue;
+            }
+            if (c === '"') inString = false;
+            continue;
+        }
+        if (c === '"') {
+            inString = true;
+            continue;
+        }
+        if (c === '{') depth++;
+        else if (c === '}') depth--;
+    }
+    return depth > 0;
+}
+
 export function drainJsonObjectsFromBuffer(buffer) {
     const chunks = [];
     let i = 0;
@@ -69,9 +112,10 @@ export function parseSiac32V2Line(line, timestampIso) {
     const s = String(line).replace(/^\r+|\r+$/g, '').trim();
     if (!s) return null;
     const obj = JSON.parse(s);
+    const snRaw = obj.sn ?? obj.SN ?? obj.serial;
     const row = {
         timestamp: timestampIso,
-        sn: obj.sn != null ? String(obj.sn) : '',
+        sn: snRaw != null ? String(snRaw) : '',
     };
     const t = Array.isArray(obj.t) ? obj.t : [];
     for (const piece of t) {
@@ -82,6 +126,48 @@ export function parseSiac32V2Line(line, timestampIso) {
         }
     }
     return row;
+}
+
+/** First non-empty `sn` among parsed capture rows. */
+export function firstNonEmptySnInRows(rows) {
+    if (!rows?.length) return '';
+    for (const r of rows) {
+        const s = String(r?.sn ?? '').trim();
+        if (s) return s;
+    }
+    return '';
+}
+
+/**
+ * True if the row has at least one value beyond `timestamp` / `sn` (e.g. CHR*, RRF* from SiAC `t`[]).
+ * Rows with only id + time (empty `t` or partial JSON) should not be saved.
+ */
+export function captureRowHasSensorValues(row) {
+    if (!row || typeof row !== 'object') return false;
+    for (const k of Object.keys(row)) {
+        if (k === 'timestamp' || k === 'sn') continue;
+        const v = row[k];
+        if (v === '' || v === null || v === undefined) continue;
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Ensures every row has `sn` for workspace naming: use any row that already has `sn`, else the scan result.
+ * Fixes saves to `unknown-device` when the first JSON object omits `sn` or keys differ slightly.
+ */
+export function coerceCaptureRowsSn(rows, fallbackSnFromScan) {
+    if (!rows?.length) return rows;
+    const fb = String(fallbackSnFromScan ?? '').trim();
+    const fromRows = firstNonEmptySnInRows(rows);
+    const sn = fromRows || fb;
+    if (!sn) return rows;
+    return rows.map((r) => {
+        const cur = String(r?.sn ?? '').trim();
+        if (cur) return r;
+        return { ...r, sn };
+    });
 }
 
 /** Stable column order: timestamp, sn, then rest sorted (numeric-aware). */
@@ -105,6 +191,41 @@ export function normalizeCaptureRows(rows) {
         return o;
     });
     return { data, fields: order };
+}
+
+/**
+ * Drop sensor columns that are empty for every row (keeps timestamp + sn).
+ * Avoids CSV columns that exist only because normalize filled them with blanks.
+ */
+export function dropSensorColumnsEmptyInAllRows(data) {
+    if (!data?.length) return data;
+    const keys = new Set();
+    for (const r of data) {
+        Object.keys(r).forEach((k) => keys.add(k));
+    }
+    const priority = ['timestamp', 'sn'];
+    const rest = [...keys]
+        .filter((k) => !priority.includes(k))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const order = [...priority.filter((k) => keys.has(k)), ...rest];
+    const drop = new Set(
+        rest.filter((k) =>
+            data.every((r) => {
+                const v = r[k];
+                return v === '' || v === null || v === undefined;
+            })
+        )
+    );
+    if (!drop.size) return data;
+    const keepOrder = order.filter((k) => !drop.has(k));
+    return data.map((r) => {
+        const o = {};
+        for (const k of keepOrder) {
+            const v = r[k];
+            o[k] = v === undefined || v === null ? '' : v;
+        }
+        return o;
+    });
 }
 
 export const AU_DEVICE_PROFILES = {

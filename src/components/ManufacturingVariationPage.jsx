@@ -23,6 +23,11 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
     const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
     const [targetConcFilter, setTargetConcFilter] = useState(''); // e.g. "50ppb"
     const [filterUnknown, setFilterUnknown] = useState(true);
+    const [baselinePts, setBaselinePts] = useState(() => {
+        const raw = parseInt(localStorage.getItem('aroma_baselinePts') || '50', 10);
+        if (!Number.isFinite(raw) || raw < 10) return 50; // slider min 10; Aroma "off" (0) → sensible default
+        return Math.min(200, raw);
+    });
 
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
 
@@ -31,6 +36,10 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
         window.addEventListener('zen-mode-toggle', handleZenMode);
         return () => window.removeEventListener('zen-mode-toggle', handleZenMode);
     }, []);
+
+    useEffect(() => {
+        localStorage.setItem('aroma_baselinePts', String(baselinePts));
+    }, [baselinePts]);
 
     const isKnownFile = (fName) => {
         if (!filterUnknown) return true;

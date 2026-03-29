@@ -10,7 +10,7 @@ import {
   BarChart2,
   Folder
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import './App.css';
 import { fileManager } from './utils/db';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
@@ -37,6 +37,7 @@ import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import HelpPage from './components/HelpPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import { parseFile } from './utils/fileParser';
+import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -213,8 +214,12 @@ function App() {
     }
   };
 
-  const handleAromaUnitCaptureSave = useCallback(async ({ folderName, fileName, data }) => {
+  const handleAromaUnitCaptureSave = useCallback(async ({ folderName, data, savingAtMs }) => {
     if (!data?.length) return;
+    const resolvedName = buildAuCaptureFileName(
+      data,
+      savingAtMs != null ? new Date(savingAtMs) : new Date()
+    );
     const sampleN = Math.min(data.length, 40);
     const approxSize = Math.max(
       1,
@@ -238,7 +243,7 @@ function App() {
       const fileId = Math.random().toString(36).substr(2, 9);
       await fileManager.saveFile({
         id: fileId,
-        name: fileName,
+        name: resolvedName,
         folderId,
         data,
         size: approxSize,
@@ -526,99 +531,106 @@ function App() {
       ) : (
         <main className="main-content" style={{ position: 'relative' }}>
           <div className="content-area">
-            <AnimatePresence mode="wait">
-              {activePage === 'help' ? (
-                <HelpPage key="help" />
-              ) : activePage === 'gasDesign' ? (
-                <GasSystemDesignPage key="gasDesign" />
-              ) : activePage === 'gasMath' ? (
-                <GasDilutionMathPage key="gasMath" />
-              ) : activePage === 'polymerCbMix' ? (
-                <PolymerCBMixPage key="polymerCbMix" />
-              ) : activePage === 'normalize' ? (
-                <NormalizePage
-                  key="normalize"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                />
-              ) : activePage === 'aromaAnalysis' ? (
-                <AromaAnalysisPage
-                  key="aromaAnalysis"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                  availableFiles={files}
-                  onPageChange={setActivePage}
-                />
-              ) : activePage === 'separability' ? (
-                <SeparabilityAnalysisPage
-                  key="separability"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                  availableFiles={files}
-                  onPageChange={setActivePage}
-                />
-              ) : activePage === 'sensitivity' ? (
-                <SensitivityAnalysisPage
-                  key="sensitivity"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                />
-              ) : activePage === 'recoveryAnalysis' ? (
-                <RecoveryAnalysisPage
-                  key="recoveryAnalysis"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                  availableFiles={files}
-                />
-              ) : activePage === 'manufacturing' ? (
-                <ManufacturingVariationPage
-                  key="manufacturing"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                  availableFiles={files}
-                />
-              ) : activePage === 'csvPlotter' ? (
-                <CSVPlotterPage
-                  key="csvPlotter"
-                  workspaceFiles={files}
-                />
-              ) : activePage === 'aromaUnitCapture' ? (
-                <AromaUnitCapturePage
-                  key="aromaUnitCapture"
-                  onSaveToWorkspace={handleAromaUnitCaptureSave}
-                />
-              ) : activePage === 'mlStudio' ? (
-                <MLStudioPage
-                  key="mlStudio"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  compareDataList={compareDataList}
-                />
-              ) : !selectedFileId ? (
-                <EmptyState
-                  key="empty"
-                  isDragActive={isDragActive}
-                  hasFiles={files.length > 0}
-                  onBrowse={open}
-                />
-              ) : (
-                <ChartArea
-                  key="chart"
-                  data={parsedData?.data}
-                  fileName={parsedData?.fileName}
-                  loading={loading}
-                  compareDataList={compareDataList}
-                  availableFiles={files.filter(f => f.id !== selectedFileId)}
-                  onCompareSelect={handleCompareSelect}
-                  compareFileIds={compareFileIds}
-                />
-              )}
-            </AnimatePresence>
+            {/*
+              Only AU capture stays mounted when hidden so Web Serial + timers keep running.
+              Other routes mount one at a time: mounting every page duplicated DOM ids (e.g. filter-unknown-chk)
+              so labels and focus targeted the wrong hidden controls.
+            */}
+            <div
+              className="au-capture-persistent-session"
+              style={{ display: activePage === 'aromaUnitCapture' ? 'block' : 'none' }}
+              aria-hidden={activePage !== 'aromaUnitCapture'}
+            >
+              <AromaUnitCapturePage onSaveToWorkspace={handleAromaUnitCaptureSave} />
+            </div>
+
+            {activePage !== 'aromaUnitCapture' && (
+              <AnimatePresence mode="wait">
+                {activePage === 'help' ? (
+                  <HelpPage key="help" />
+                ) : activePage === 'gasDesign' ? (
+                  <GasSystemDesignPage key="gasDesign" />
+                ) : activePage === 'gasMath' ? (
+                  <GasDilutionMathPage key="gasMath" />
+                ) : activePage === 'polymerCbMix' ? (
+                  <PolymerCBMixPage key="polymerCbMix" />
+                ) : activePage === 'normalize' ? (
+                  <NormalizePage
+                    key="normalize"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                  />
+                ) : activePage === 'aromaAnalysis' ? (
+                  <AromaAnalysisPage
+                    key="aromaAnalysis"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                    availableFiles={files}
+                    onPageChange={setActivePage}
+                  />
+                ) : activePage === 'separability' ? (
+                  <SeparabilityAnalysisPage
+                    key="separability"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                    availableFiles={files}
+                    onPageChange={setActivePage}
+                  />
+                ) : activePage === 'sensitivity' ? (
+                  <SensitivityAnalysisPage
+                    key="sensitivity"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                  />
+                ) : activePage === 'recoveryAnalysis' ? (
+                  <RecoveryAnalysisPage
+                    key="recoveryAnalysis"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                    availableFiles={files}
+                  />
+                ) : activePage === 'manufacturing' ? (
+                  <ManufacturingVariationPage
+                    key="manufacturing"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                    availableFiles={files}
+                  />
+                ) : activePage === 'csvPlotter' ? (
+                  <CSVPlotterPage key="csvPlotter" workspaceFiles={files} />
+                ) : activePage === 'mlStudio' ? (
+                  <MLStudioPage
+                    key="mlStudio"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    compareDataList={compareDataList}
+                  />
+                ) : !selectedFileId ? (
+                  <EmptyState
+                    key="empty"
+                    isDragActive={isDragActive}
+                    hasFiles={files.length > 0}
+                    onBrowse={open}
+                  />
+                ) : (
+                  <ChartArea
+                    key="chart"
+                    data={parsedData?.data}
+                    fileName={parsedData?.fileName}
+                    loading={loading}
+                    compareDataList={compareDataList}
+                    availableFiles={files.filter(f => f.id !== selectedFileId)}
+                    onCompareSelect={handleCompareSelect}
+                    compareFileIds={compareFileIds}
+                  />
+                )}
+              </AnimatePresence>
+            )}
           </div>
         </main>
       )}

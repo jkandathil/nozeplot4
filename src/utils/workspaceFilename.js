@@ -24,10 +24,12 @@ export function rawDeviceRoleFromFilename(fileName) {
     return m ? m[1].toUpperCase() : null;
 }
 
-/** Serial capture from AU page: siac32v2_<sn>_<stamp>.csv */
+/** Serial capture from AU page: siac32v2_*; legacy capture_*; AU_ID_YYYY-MM-DD_HHMMSS.csv */
 export function isSiacSerialCaptureFileName(fileName) {
     const b = fileBasename(fileName);
-    return /^siac32v2_.+\.csv$/i.test(b);
+    if (/^siac32v2_.+\.csv$/i.test(b)) return true;
+    if (/^capture_\d{4}-\d{2}-\d{2}_\d{6}\.csv$/i.test(b)) return true;
+    return /^.+_\d{4}-\d{2}-\d{2}_\d{6}\.csv$/i.test(b);
 }
 
 /** Heuristic: flattened SiAC JSON rows (CHR*, RRF*, sn, timestamp). */
