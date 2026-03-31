@@ -560,7 +560,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         color: activePage === 'mlStudio' ? '#f43f5e' : 'var(--text-muted)',
                         transition: 'all 0.15s'
                     }}
-                    title="Machine Learning & Prediction"
+                    title="FeNOse ML Studio (inference & training)"
                 >
                     <Brain size={18} />
                 </button>

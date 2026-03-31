@@ -504,16 +504,16 @@ function EquationsTheoryAppendix() {
             </MathBlock>
             <p className="help-eq-note">Relates baseline resistance to sensitivity or separability in the Sensitivity view.</p>
 
-            <h3 className="help-subheading">ML Studio — PCA &amp; t-SNE (reference)</h3>
+            <h3 className="help-subheading">FeNOse / ML Studio (reference)</h3>
             <ul className="help-list help-eq-list">
                 <li>
-                    <strong>PCA:</strong> orthogonal directions maximizing variance; eigenvectors of the covariance matrix of (often standardized) features.
+                    <strong>Inference:</strong> a small MLP predicts NO concentration (ppb) from FeNOse-style event slices and sensor columns A1–H8. Weights live in workspace folder <code>Model/</code>, not in the site bundle.
                 </li>
                 <li>
-                    <strong>t-SNE:</strong> nonlinear 2D embedding preserving local neighborhoods; interpret distances cautiously.
+                    <strong>Training v1:</strong> top‑K feature selection and scaling; <strong>v2:</strong> adds PCA on scaled features before the same style of network. See the Training tab for hyperparameters.
                 </li>
                 <li>
-                    <strong>Supervised models:</strong> random forest / linear models on extracted features; metrics depend on regression vs classification.
+                    <strong>Other pages</strong> (Separability, etc.) may use their own PCA/t‑SNE or stats—those are unrelated to ML Studio.
                 </li>
             </ul>
         </div>
@@ -830,19 +830,18 @@ const GUIDE_SECTIONS = [
         id: 'ml-studio',
         icon: Brain,
         title: 'ML Studio',
-        subtitle: 'PCA, t-SNE, models',
+        subtitle: 'FeNOse — inference & training',
         intro:
-            'Explore patterns in your data with machine learning: features built from each file’s time series, dimensionality reduction (PCA, t-SNE), and simple predictive models (e.g. random forest, linear regression or classification).',
+            '**ML Studio** is the FeNOse workflow only: run a concentration model on a loaded capture, or train/export new weights. There is no separate “Preprocessing & Targets” column—models are kept in workspace folder **Model/** (train in-app or upload the JSON pair).',
         implemented: [
-            'Choose a target column and map labels per file when the panel asks for them',
-            'Train models and view embedding scatter plots and basic accuracy or error summaries',
-            'Adjustable side panel; more chart room when the main sidebar is collapsed',
+            '**Inference:** pick a model from <code>Model/</code> and a loaded CSV/Excel capture; predict ppb',
+            '**Training:** choose labelled workspace files (names containing <code>ppb</code>); set v1/v2 and hyperparameters; artifacts save into <code>Model/</code> and optional download',
+            'Loss curve during/after training; MAE/RMSE summary when training completes',
         ],
         steps: [
-            'Load at least one data file.',
-            'Open **ML Studio**; pick target column and task type (regression/classification).',
-            'Map labels or parameters as the sidebar requests.',
-            'Run training and inspect scatter/embeddings and metrics.',
+            'Upload FeNOse-style captures and (if needed) create folder <code>Model/</code> in the sidebar.',
+            'Open **ML Studio** (brain icon): use **Inference** to predict, or **Training** to build a model.',
+            'After training, use the same saved model name/version under Inference.',
         ],
     },
     {
@@ -892,7 +891,7 @@ const GUIDE_SECTIONS = [
             'Aroma: median baseline, percent change from baseline, moving average, absolute humidity from T and RH',
             'Separability: score S from mean difference and variances (plus a small stability term ε)',
             'Sensitivity (wide tables): baseline R₀, response size, row-wise separability from spread bands, correlation r',
-            'ML Studio: what PCA, t-SNE, and simple models do conceptually',
+            'ML Studio (FeNOse): v1 vs v2 feature pipeline (top‑K vs PCA + scaled) before the MLP head',
         ],
         steps: [],
         equationsAppendix: true,
