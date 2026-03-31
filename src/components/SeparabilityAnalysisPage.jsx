@@ -456,6 +456,19 @@ const SeparabilityAnalysisPage = ({ data: mainData, fileName: mainFileName, comp
                           }
                       }
 
+                      const baselineRowsForR0 =
+                          evCol
+                              ? repFile.filter((row) => {
+                                    if (!row[evCol]) return false;
+                                    const evName = String(row[evCol]).toLowerCase().replace(/\s+/g, '');
+                                    return (
+                                        evName.includes('breath') ||
+                                        evName.includes('rfc') ||
+                                        evName.includes('ambient')
+                                    );
+                                })
+                              : [];
+
                       // Setup Stats
                       const BINS = Math.min(repFile.length, 250); 
                       const binSize = Math.max(1, Math.floor(repFile.length / BINS));
@@ -561,12 +574,7 @@ const SeparabilityAnalysisPage = ({ data: mainData, fileName: mainFileName, comp
                           } else {
                               // If no explicit baseline column exists, compute dynamic baseline from events
                               let firstC = availableClasses[0];
-                              let baselineRows = repFile.filter(row => {
-                                  if (!evCol || !row[evCol]) return false;
-                                  const evName = String(row[evCol]).toLowerCase().replace(/\s+/g, '');
-                                  return evName.includes('breath') || evName.includes('rfc') || evName.includes('ambient');
-                              });
-                              if (baselineRows.length > 0) {
+                              if (baselineRowsForR0.length > 0) {
                                   let rawKeys = Object.keys(sampleRow).filter(k => 
                                       k.trim().toLowerCase() === e.toLowerCase() || 
                                       k.toLowerCase() === `${firstC.toLowerCase()}_${e.toLowerCase()}_raw` ||
@@ -575,7 +583,7 @@ const SeparabilityAnalysisPage = ({ data: mainData, fileName: mainFileName, comp
                                   let bestRawKey = rawKeys.find(k => k.trim() === e) || rawKeys.find(k => k.toLowerCase() === `${firstC.toLowerCase()}_${e.toLowerCase()}_raw`) || rawKeys[0];
                                   
                                   let sumR0 = 0; let countR0 = 0;
-                                  baselineRows.forEach(row => {
+                                  baselineRowsForR0.forEach((row) => {
                                       // Prefer exactly identified raw physical channel to secure literal Ohms
                                       let v = bestRawKey ? parseFloat(row[bestRawKey]) : NaN;
                                       if (isNaN(v)) v = parseFloat(row[`${firstC}_${e}_mean`]);

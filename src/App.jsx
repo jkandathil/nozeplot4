@@ -257,6 +257,43 @@ function App() {
     }
   }, []);
 
+  // Save arbitrary JSON payloads into a workspace folder (used by ML Studio model saving)
+  const handleSaveJsonToWorkspace = useCallback(async ({ folderName, fileName, json }) => {
+    if (!folderName || !fileName) throw new Error('Missing folderName or fileName');
+    let folderId;
+    try {
+      const existing = await fileManager.getAllFiles();
+      const match = existing.find((f) => f.isFolder && String(f.name).toLowerCase() === String(folderName).toLowerCase());
+      if (match) {
+        folderId = match.id;
+      } else {
+        folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+        await fileManager.saveFile({
+          id: folderId,
+          name: folderName,
+          isFolder: true,
+          createdAt: Date.now(),
+        });
+      }
+      const fileId = Math.random().toString(36).substr(2, 9);
+      const approxSize = Math.max(1, new Blob([JSON.stringify(json)]).length);
+      await fileManager.saveFile({
+        id: fileId,
+        name: fileName,
+        folderId,
+        data: json,
+        size: approxSize,
+        createdAt: Date.now(),
+      });
+      const refreshed = await fileManager.getAllFiles();
+      setFiles(refreshed);
+      return { fileId, folderId };
+    } catch (e) {
+      console.error('Save JSON to workspace failed:', e);
+      throw e;
+    }
+  }, []);
+
   const handleDeleteFolder = async (e, folderId) => {
     e.stopPropagation();
     const filesInFolder = files.filter(f => f.folderId === folderId);
@@ -609,6 +646,8 @@ function App() {
                     data={parsedData?.data}
                     fileName={parsedData?.fileName}
                     compareDataList={compareDataList}
+                    workspaceFiles={files}
+                    onSaveJsonToWorkspace={handleSaveJsonToWorkspace}
                   />
                 ) : !selectedFileId ? (
                   <EmptyState

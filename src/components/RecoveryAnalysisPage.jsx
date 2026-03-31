@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, CartesianGrid, Scatter, ScatterChart, ZAxis, Brush } from 'recharts';
 import { Activity, Settings, Maximize2, X, Download, LineChart as LineChartIcon } from 'lucide-react';
 import { toPng } from 'html-to-image';
+import { isKnownPlotFile, looksLikeSiacCaptureData, parseConcentrationMetaFromFile } from '../utils/workspaceFilename.js';
 import './AromaAnalysisPage.css'; // Reuse styles
 
 const SATURATION_VAPOR_PRESSURE_0C = 6.112;
@@ -10,6 +12,11 @@ const MAGNUS_COEFFICIENT_A = 17.67;
 const MAGNUS_COEFFICIENT_B = 243.5;
 const GAS_CONSTANT_RATIO = 2.1674;
 const KELVIN_OFFSET = 273.15;
+
+/** SiAC32-V2 flattened JSON rows use CHR0…CHR31 (device `t` map); RH/T key names vary by firmware — include common substrings. */
+const SIAC32_V2_CHR_SENSORS = Array.from({ length: 32 }, (_, i) => `CHR${i}`).join(', ');
+const SIAC32_V2_HUM_COL_HINTS = 'AQH0, TRHH0, rh, hmd, humidity';
+const SIAC32_V2_TEMP_COL_HINTS = 'AQT0, TRHT0, temp, t';
 
 const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableFiles = [] }) => {
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
@@ -30,13 +37,26 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     const [tempCols, setTempCols] = useState('AQT0, TRHT0');
     const [filterUnknown, setFilterUnknown] = useState(true);
 
-    const isKnownFile = (fName) => {
+    const isKnownFile = (fName, fileData = null) => {
         if (!filterUnknown) return true;
         if (!fName) return false;
-        const basename = fName.split(/[/\\]/).pop();
-        const m = basename.match(/(\d+(?:\.\d+)?)ppb/i);
-        return m !== null;
+        return isKnownPlotFile(fName, fileData);
     };
+
+    const siacAutoAppliedForFileRef = React.useRef('');
+
+    useEffect(() => {
+        if (!fileName || !data?.length) return;
+        if (!looksLikeSiacCaptureData(data)) {
+            if (siacAutoAppliedForFileRef.current === fileName) siacAutoAppliedForFileRef.current = '';
+            return;
+        }
+        if (siacAutoAppliedForFileRef.current === fileName) return;
+        siacAutoAppliedForFileRef.current = fileName;
+        setSensingElements(SIAC32_V2_CHR_SENSORS);
+        setHumCols(SIAC32_V2_HUM_COL_HINTS);
+        setTempCols(SIAC32_V2_TEMP_COL_HINTS);
+    }, [fileName, data]);
 
     // Results
     const [recoveryResults, setRecoveryResults] = useState(null);
@@ -52,6 +72,16 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     const [chronoBrushEndIdx, setChronoBrushEndIdx] = useState(null);
     const chronoChartWrapperRef = React.useRef(null);
 
+    /** AU serial capture `SN_YYYY-MM-DD_HHMMSS.csv` and legacy `_YYYYMMDD-HHMM.csv` trials */
+    const extractChronoSortKey = (name) => {
+        const base = String(name).split(/[/\\]/).pop() || '';
+        const auCap = base.match(/_(\d{4}-\d{2}-\d{2})_(\d{6})\.csv$/i);
+        if (auCap) return `${auCap[1].replace(/-/g, '')}${auCap[2]}`;
+        const legacy = base.match(/_(\d{8}-\d{4})\.csv$/i);
+        if (legacy) return legacy[1];
+        return base;
+    };
+
     const handleProcessRecovery = () => {
         setIsProcessing(true);
         setTimeout(() => {
@@ -59,11 +89,11 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 // Batch input gathering
                 let allFiles = [];
                 if (data && fileName) {
-                    if (isKnownFile(fileName)) allFiles.push({ fileName, data });
+                    if (isKnownFile(fileName, data)) allFiles.push({ fileName, data });
                 }
                 if (compareDataList && compareDataList.length > 0) {
                     compareDataList.forEach(c => {
-                        if (isKnownFile(c.fileName)) allFiles.push(c);
+                        if (isKnownFile(c.fileName, c.data)) allFiles.push(c);
                     });
                 }
 
@@ -73,28 +103,29 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 }
 
                 // Strictly sort files chronologically based on their trailing timestamp to guarantee chronological trial numbering
-                allFiles.sort((a, b) => {
-                    const extractTime = (name) => {
-                        const match = name.match(/_(\d{8}-\d{4})\.csv/i);
-                        return match ? match[1] : name;
-                    };
-                    return extractTime(a.fileName).localeCompare(extractTime(b.fileName));
-                });
+                allFiles.sort((a, b) => extractChronoSortKey(a.fileName).localeCompare(extractChronoSortKey(b.fileName)));
 
                 const sElementsArr = sensingElements.split(',').map(s => s.trim()).filter(Boolean);
                 const humKeysArr = humCols.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
                 const tempKeysArr = tempCols.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-                const getAsauId = (fileName) => {
-                    const baseName = String(fileName).split('/').pop().split('\\').pop();
+                const getAsauId = (path) => {
+                    const baseName = String(path).split('/').pop().split('\\').pop();
                     const fileParts = baseName.split('_');
                     const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
                     return asauPart ? asauPart.toUpperCase() : 'UNKNOWN_AU';
                 };
 
+                const getBatchGroupId = (fileObj) => {
+                    const sn = fileObj.data?.[0]?.sn;
+                    const s = sn != null ? String(sn).trim() : '';
+                    if (s) return s.toUpperCase();
+                    return getAsauId(fileObj.fileName);
+                };
+
                 const groupedFiles = {};
                 allFiles.forEach(f => {
-                    const auId = getAsauId(f.fileName);
+                    const auId = getBatchGroupId(f);
                     if (!groupedFiles[auId]) groupedFiles[auId] = [];
                     groupedFiles[auId].push(f);
                 });
@@ -284,9 +315,12 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         if (trials.length === 0) return;
 
                         let extConc = '';
-                        const concMatch = fileObj.fileName.match(/(\d+(?:\.\d+)?\s*(?:ppb|ppm|ppt|%))/i);
-                        if (concMatch) {
-                            extConc = concMatch[1];
+                        const metaConc = parseConcentrationMetaFromFile(fileObj.fileName, fileData);
+                        if (metaConc?.label) {
+                            extConc = metaConc.label;
+                        } else {
+                            const concMatch = fileObj.fileName.match(/(\d+(?:\.\d+)?\s*(?:ppb|ppm|ppt|%))/i);
+                            if (concMatch) extConc = concMatch[1];
                         }
 
                         processedFileNames.push(fileObj.fileName);
@@ -641,6 +675,15 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
         return () => el.removeEventListener('wheel', listener);
     }, [handleChronoWheel, showChrono]);
 
+    useEffect(() => {
+        if (!showChrono) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, [showChrono]);
+
     const COLORS = ['#38bdf8', '#10b981', '#f43f5e', '#a855f7', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
 
     // Update brush ref when brush is dragged manually
@@ -673,8 +716,23 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
             if (tcVals.length > 0) chronoDeltaTc = Math.max(...tcVals) - Math.min(...tcVals);
         }
 
-        return (
-            <div className="chrono-fullscreen glass-panel" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, background: '#0f172a', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        const chronoOverlay = (
+            <div
+                className="chrono-fullscreen glass-panel"
+                style={{
+                    position: 'fixed',
+                    top: 'var(--auth-session-bar-height, 0px)',
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 20000,
+                    background: '#0f172a',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    boxSizing: 'border-box',
+                }}
+            >
                 <div className="modal-header" style={{ padding: '20px', borderBottom: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.03)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -843,6 +901,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 </div>
             </div>
         );
+
+        return createPortal(chronoOverlay, document.body);
     }
 
     return (
@@ -882,12 +942,13 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                     <h3 className="panel-title"><Settings size={16} /> Analysis Config</h3>
 
                     <div className="form-group">
-                        <label>Target Sensors (A1, A2, etc.)</label>
+                        <label>Target Sensors (A1, A2, or CHR0, CHR1, …)</label>
                         <input
                             type="text"
                             className="text-input"
                             value={sensingElements}
                             onChange={e => setSensingElements(e.target.value)}
+                            title="ASU grid uses A1–H8. SiAC32-V2 workspace captures auto-fill CHR0–CHR31 when the CSV has CHR/RRF columns."
                         />
                     </div>
 
@@ -962,7 +1023,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         />
                         <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
                             <strong>No Unknowns</strong> <br />
-                            <span style={{ color: '#94a3b8' }}>Ignores files that do not have a mapped concentration (e.g. unknown ppb/ppm) in their filename.</span>
+                            <span style={{ color: '#94a3b8' }}>Ignores files that are not “known” plots: ppb/ppm in the name, raw ASU-style CSVs, catalog paths, in-file concentration columns, or SiAC32-V2 serial captures (CHR/RRF rows).</span>
                         </label>
                     </div>
 
@@ -1101,7 +1162,18 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                 return (
                     <div className="modal-overlay" onClick={() => setSelectedPlot(null)} style={{ zIndex: 9999 }}>
-                        <div className="zoomable-plot-modal glass-panel" onClick={(e) => e.stopPropagation()} style={{ pointerEvents: 'auto', width: '90%', height: '85vh', display: 'flex', flexDirection: 'column' }}>
+                        <div
+                            className="zoomable-plot-modal glass-panel"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                                pointerEvents: 'auto',
+                                width: '90%',
+                                height: 'calc(85vh - var(--auth-session-bar-height, 0px))',
+                                maxHeight: 'calc(85dvh - var(--auth-session-bar-height, 0px))',
+                                display: 'flex',
+                                flexDirection: 'column',
+                            }}
+                        >
                             <div className="modal-header" style={{ flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <h3 style={{ margin: 0 }}>{selectedPlot.title}</h3>

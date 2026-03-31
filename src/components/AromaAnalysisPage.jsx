@@ -359,7 +359,15 @@ const ZoomablePlotViewer = ({ plot, onClose }) => {
                     </button>
                 </div>
             </div>
-            <div className="modal-body" ref={chartWrapperRef} style={{ width: '100%', height: 'calc(100vh - 120px)', position: 'relative' }}>
+            <div
+                className="modal-body"
+                ref={chartWrapperRef}
+                style={{
+                    width: '100%',
+                    height: 'calc(100vh - 120px - var(--auth-session-bar-height, 0px))',
+                    position: 'relative',
+                }}
+            >
                 <div className="zoom-hint" style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 10, fontSize: '0.8rem', color: '#94a3b8', background: 'rgba(15,23,42,0.9)', padding: '6px 16px', borderRadius: 20, pointerEvents: 'none', border: '1px solid #334155' }}>
                     {(brushStartIdx > 0 || (brushEndIdx !== null && plot.data && brushEndIdx < plot.data.length - 1))
                         ? <strong style={{ color: '#10b981' }}>Zoomed: {visibleData.length} of {plot.data.length} points</strong>

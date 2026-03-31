@@ -9,11 +9,12 @@ import {
     Tooltip,
     Legend
 } from 'recharts';
-import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare, Image as ImageIcon } from 'lucide-react';
+import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare, Image as ImageIcon, BarChart3 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toPng } from 'html-to-image';
 import MultiFileSelect from './MultiFileSelect';
 import LazyChart from './LazyChart';
+import DashboardBaselineBarModal, { DashboardBaselineGridCard } from './DashboardBaselineBarModal';
 import { isKnownPlotFile } from '../utils/workspaceFilename';
 import './ChartArea.css';
 
@@ -45,6 +46,170 @@ function findEventColumn(sampleRow) {
         .filter((x) => x.score > 0)
         .sort((a, b) => b.score - a.score);
     return ranked[0]?.col ?? null;
+}
+
+/** Parse cell as number when CSV leaves RH/T as strings */
+function cellNumericValue(val) {
+    if (typeof val === 'number' && !Number.isNaN(val)) return val;
+    if (typeof val === 'string' && val.trim() !== '') {
+        const n = Number(val);
+        if (!Number.isNaN(n)) return n;
+    }
+    return null;
+}
+
+function isNumericLikeColumn(sampleRow, col) {
+    return cellNumericValue(sampleRow[col]) !== null;
+}
+
+function findTempColumn(sampleRow) {
+    if (!sampleRow || typeof sampleRow !== 'object') return null;
+    const keys = Object.keys(sampleRow);
+    const ranked = keys
+        .filter((k) => isNumericLikeColumn(sampleRow, k))
+        .map((col) => {
+            const l = col.toLowerCase();
+            let score = 0;
+            if (l.includes('attempt')) score = -1;
+            else if (l === 'temperature' || l === 'temp') score = 100;
+            else if (l.includes('temperature')) score = 90;
+            else if (l.includes('temp')) score = 72;
+            else if (/^t\d+$/.test(l)) score = 45;
+            return { col, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+    return ranked[0]?.col ?? null;
+}
+
+/**
+ * Humidity / RH column — excludes `excludeCol` (e.g. temperature) so T and RH never resolve to the same field.
+ * Accepts numeric-like strings; widens name heuristics (H, humid, rh, rel. humidity, etc.).
+ */
+function findHumidityColumn(sampleRow, excludeCol = null) {
+    if (!sampleRow || typeof sampleRow !== 'object') return null;
+    const keys = Object.keys(sampleRow);
+    const ranked = keys
+        .filter((k) => k !== excludeCol && isNumericLikeColumn(sampleRow, k))
+        .map((col) => {
+            const l = col.toLowerCase();
+            let score = 0;
+            if (l.includes('humidity')) score = 100;
+            else if (l.endsWith('_rh') || l === 'rh' || l.startsWith('rh_')) score = 95;
+            else if (l.includes('relhum') || l.includes('rel_hum') || (l.includes('relative') && l.includes('hum')))
+                score = 88;
+            else if (l.includes('hmd') || l.includes('moist')) score = 72;
+            else if (l.includes('humid')) score = 85;
+            else if (l.includes('rh') && !l.includes('chr')) score = 78;
+            else if (l.length === 1 && l === 'h') score = 48;
+            return { col, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+    return ranked[0]?.col ?? null;
+}
+
+function computeBaselineRowIndices(rows, eventCol) {
+    const totalRows = rows.length;
+    if (!totalRows) return { indices: [], usedEventBaseline: false, totalRows: 0 };
+    if (!eventCol) {
+        return { indices: rows.map((_, i) => i), usedEventBaseline: false, totalRows };
+    }
+    const tagged = [];
+    rows.forEach((row, i) => {
+        const v = row[eventCol];
+        if (typeof v !== 'string') return;
+        const compact = v.toUpperCase().replace(/\s+/g, '');
+        if (
+            compact.includes('RFC') ||
+            compact.includes('AMBIENT') ||
+            compact.includes('BL') ||
+            compact.includes('BASELINE')
+        ) {
+            tagged.push(i);
+        }
+    });
+    if (tagged.length === 0) {
+        return { indices: rows.map((_, i) => i), usedEventBaseline: false, totalRows };
+    }
+    return { indices: tagged, usedEventBaseline: true, totalRows };
+}
+
+function meanNumericForRows(rows, col) {
+    if (col == null) return null;
+    const vals = rows.map((r) => cellNumericValue(r[col])).filter((v) => v != null && !Number.isNaN(v));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+/** A1 … H8 for baseline bar chart allowlist (same grid as Aroma / Recovery defaults) */
+const DASHBOARD_BASELINE_BAR_GRID_ELEMENTS = (() => {
+    const out = [];
+    for (const r of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+        for (let n = 1; n <= 8; n++) out.push(`${r}${n}`);
+    }
+    return out;
+})();
+
+/** Same boundary idea as RecoveryAnalysis: A1 must not match A10 */
+function columnMatchesGridToken(columnName, token) {
+    const kLow = String(columnName).toLowerCase().trim();
+    const pLow = String(token).toLowerCase();
+    if (kLow === pLow) return true;
+    let idx = kLow.indexOf(pLow);
+    while (idx !== -1) {
+        const prev = idx > 0 ? kLow[idx - 1] : null;
+        const next = idx + pLow.length < kLow.length ? kLow[idx + pLow.length] : null;
+        const isPrevValid = prev === null || !(/[a-z0-9]/.test(prev));
+        const isNextValid = next === null || !(/[a-z0-9]/.test(next));
+        if (isPrevValid && isNextValid) return true;
+        idx = kLow.indexOf(pLow, idx + 1);
+    }
+    return false;
+}
+
+function isChrSensorColumnName(k) {
+    const s = String(k).trim();
+    if (/^CHR/i.test(s)) return true;
+    return /(^|[^A-Za-z0-9_])CHR\d+/i.test(s);
+}
+
+function isGasrAuxColumn(k) {
+    const s = String(k).trim();
+    return /^GASR\d*$/i.test(s) || /(^|[^A-Za-z0-9])GASR\d+([^A-Za-z0-9]|$)/i.test(s);
+}
+
+function isFanAuxColumn(k) {
+    const low = String(k).toLowerCase().trim();
+    return low === 'fan' || low.startsWith('fan_') || low.endsWith('_fan') || low.includes('_fan_');
+}
+
+/** Baseline bar chart: only CHR* channels + grid A1–H8; exclude GASR0, FAN, and other aux columns */
+function isBaselineBarSensorKey(k) {
+    if (isGasrAuxColumn(k) || isFanAuxColumn(k)) return false;
+    if (isChrSensorColumnName(k)) return true;
+    return DASHBOARD_BASELINE_BAR_GRID_ELEMENTS.some((el) => columnMatchesGridToken(k, el));
+}
+
+function sortOrderForBaselineBarColumn(fullName) {
+    const u = String(fullName).toUpperCase();
+    for (let gi = 0; gi < DASHBOARD_BASELINE_BAR_GRID_ELEMENTS.length; gi++) {
+        if (columnMatchesGridToken(fullName, DASHBOARD_BASELINE_BAR_GRID_ELEMENTS[gi])) {
+            return { tier: 0, gi, chrN: Infinity, fullName };
+        }
+    }
+    const chr = u.match(/CHR(\d+)/);
+    if (chr) return { tier: 1, gi: Infinity, chrN: parseInt(chr[1], 10), fullName };
+    return { tier: 2, gi: Infinity, chrN: Infinity, fullName };
+}
+
+function compareBaselineBarColumns(a, b) {
+    const ka = sortOrderForBaselineBarColumn(a);
+    const kb = sortOrderForBaselineBarColumn(b);
+    if (ka.tier !== kb.tier) return ka.tier - kb.tier;
+    if (ka.gi !== kb.gi) return ka.gi - kb.gi;
+    if (ka.chrN !== kb.chrN) return ka.chrN - kb.chrN;
+    return String(a).localeCompare(String(b));
 }
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -111,6 +276,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, onCompareSelect, compareFileIds }) => {
     const [viewMode, setViewMode] = useState('grid');
     const [focusSeries, setFocusSeries] = useState(null);
+    const [baselineBarModalOpen, setBaselineBarModalOpen] = useState(false);
     const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(() => localStorage.getItem('aroma_removeRecoveryEvents') === 'false' ? false : true);
     const [filterUnknown, setFilterUnknown] = useState(() => localStorage.getItem('aroma_filterUnknown') === 'false' ? false : true);
 
@@ -280,6 +446,74 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
 
         return combined;
     }, [chartData, activeCompareList, xKey, removeRecoveryEvents, allSeriesKeys]);
+
+    const baselineBarPayload = useMemo(() => {
+        if (!processedChartData?.length || !mainSeriesKeys.length) return null;
+        const row0 = processedChartData[0];
+        const eventCol = findEventColumn(row0);
+        const { indices, usedEventBaseline, totalRows } = computeBaselineRowIndices(processedChartData, eventCol);
+        const baseRows = indices.map((i) => processedChartData[i]);
+        if (!baseRows.length) return null;
+
+        const tempCol = findTempColumn(row0);
+        const humCol = findHumidityColumn(row0, tempCol);
+        const sensorKeys = mainSeriesKeys
+            .filter((k) => k !== tempCol && k !== humCol)
+            .filter((k) => isBaselineBarSensorKey(k))
+            .sort(compareBaselineBarColumns);
+
+        const avgTemp = meanNumericForRows(baseRows, tempCol);
+        const avgRh = meanNumericForRows(baseRows, humCol);
+
+        const compareFile = activeCompareList?.[0];
+        const compareShortLabel = compareFile ? shortDataFileLabel(compareFile.fileName) : null;
+
+        const chartRows = sensorKeys
+            .map((k) => {
+                const vals = baseRows.map((r) => r[k]).filter((v) => typeof v === 'number' && !Number.isNaN(v));
+                if (!vals.length) return null;
+                const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+                const short = k.length > 20 ? `${k.slice(0, 19)}…` : k;
+                let meanCompare = null;
+                if (compareFile) {
+                    const cKey = `${k}_compare_${compareFile.fileName}`;
+                    const cVals = baseRows
+                        .map((r) => r[cKey])
+                        .filter((v) => typeof v === 'number' && !Number.isNaN(v));
+                    if (cVals.length) {
+                        meanCompare = cVals.reduce((a, b) => a + b, 0) / cVals.length;
+                    }
+                }
+                return {
+                    name: short,
+                    nameFull: k,
+                    mean,
+                    meanCompare,
+                    tempLine: avgTemp,
+                    rhLine: avgRh,
+                };
+            })
+            .filter(Boolean);
+
+        if (!chartRows.length) return null;
+
+        const hasCompareOverlay =
+            Boolean(compareFile) && chartRows.some((r) => r.meanCompare != null && !Number.isNaN(r.meanCompare));
+
+        return {
+            chartRows,
+            tempCol,
+            humCol,
+            usedEventBaseline,
+            rowCount: baseRows.length,
+            totalRows,
+            eventCol,
+            compareShortLabel,
+            hasCompareOverlay,
+            compareCount: activeCompareList?.length ?? 0,
+        };
+    }, [processedChartData, mainSeriesKeys, activeCompareList]);
+
     // Identify the global bounds explicitly and calculate stats to minimize layout shift & Recharts unoptimized prop tracking overhead
     const { chartStats, globalYBounds } = useMemo(() => {
         const stats = {};
@@ -617,6 +851,20 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     <button className="icon-btn" onClick={handleDownload} title="Export CSV Data" disabled={allSeriesKeys.length === 0}>
                         <Download size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>CSV</span>
                     </button>
+
+                    {baselineBarPayload && (
+                        <>
+                            <div className="separator" />
+                            <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={() => setBaselineBarModalOpen(true)}
+                                title="Baseline bar chart — sensor means with temperature & humidity"
+                            >
+                                <BarChart3 size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4 }}>Baseline</span>
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -801,6 +1049,12 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                             </div>
                         ) : (
                             <div className="charts-grid">
+                                {baselineBarPayload && (
+                                    <DashboardBaselineGridCard
+                                        payload={baselineBarPayload}
+                                        onClick={() => setBaselineBarModalOpen(true)}
+                                    />
+                                )}
                                 {allSeriesKeys.map((key, index) => (
                                     <div
                                         key={key}
@@ -874,6 +1128,13 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     </div>
                 </>
             )}
+
+            <DashboardBaselineBarModal
+                open={baselineBarModalOpen}
+                onClose={() => setBaselineBarModalOpen(false)}
+                payload={baselineBarPayload}
+                fileName={fileName}
+            />
 
             <div className="chart-footer">
                 <div className="stat-card">

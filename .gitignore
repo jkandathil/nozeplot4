@@ -15,6 +15,10 @@ dist-ssr
 .env.*
 !.env.example
 
+# FeNOse weights / preprocessing — kept locally or in browser workspace only (not shipped on GitHub Pages)
+public/fenose_model/v1/
+public/fenose_model/v2/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

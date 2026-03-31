@@ -138,12 +138,57 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
             windowRows = targetEventRows.slice(startIdx, endIdx);
         }
 
-        const elMap = {};
+        // Baseline does not depend on concentration — compute once per element, not per conc × full data scan.
+        const baselineColByEl = {};
+        ALL_ELEMENTS.forEach((e) => {
+            let rawCol = cols.find(
+                (c) =>
+                    c.toLowerCase().includes(`0 ppb_${e.toLowerCase()}_raw`) ||
+                    c.toLowerCase().includes(`${e.toLowerCase()}_raw`)
+            );
+            if (!rawCol) rawCol = cols.find((c) => c.toLowerCase().includes(`_${e.toLowerCase()}_mean`) && c.includes('0 ppb'));
+            baselineColByEl[e] = rawCol || null;
+        });
+        const baselineSumByEl = Object.fromEntries(ALL_ELEMENTS.map((e) => [e, 0]));
+        const baselineCountByEl = Object.fromEntries(ALL_ELEMENTS.map((e) => [e, 0]));
+        data.forEach((row) => {
+            const ev = String(row.event_name || row.phase || row.mode || row.state || '').toLowerCase();
+            if (
+                !(
+                    ev.includes('breathsaplingrfc') ||
+                    ev.includes('breath') ||
+                    ev.includes('rfc') ||
+                    ev.includes('ambient')
+                )
+            )
+                return;
+            ALL_ELEMENTS.forEach((e) => {
+                const col = baselineColByEl[e];
+                if (!col) return;
+                const val = parseFloat(row[col]);
+                if (!isNaN(val)) {
+                    baselineSumByEl[e] += val;
+                    baselineCountByEl[e] += 1;
+                }
+            });
+        });
+        ALL_ELEMENTS.forEach((e) => {
+            if (baselineCountByEl[e] === 0 && baselineColByEl[e]) {
+                const val = parseFloat(data[0][baselineColByEl[e]]);
+                if (!isNaN(val)) {
+                    baselineSumByEl[e] = val;
+                    baselineCountByEl[e] = 1;
+                }
+            }
+        });
 
-        activeConcs.forEach(concLayer => {
-            elMap[concLayer] = ALL_ELEMENTS.map(e => {
-                let baselineSum = 0;
-                let baselineCount = 0;
+        const elMap = {};
+        const activeProcRows = hasFeno ? windowRows : data;
+
+        activeConcs.forEach((concLayer) => {
+            elMap[concLayer] = ALL_ELEMENTS.map((e) => {
+                const baselineR =
+                    baselineCountByEl[e] > 0 ? baselineSumByEl[e] / baselineCountByEl[e] : 0;
 
                 let maxNegativeResponse = 0;
                 let spreadTotal = 0;
@@ -152,23 +197,7 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
                 let avgResponseSum = 0;
                 let avgResponseCount = 0;
 
-                // Extract BaseLine specifically from normal dataloop
-                data.forEach(row => {
-                    const ev = String(row.event_name || row.phase || row.mode || row.state || '').toLowerCase();
-                    if (ev.includes('breathsaplingrfc') || ev.includes('breath') || ev.includes('rfc') || ev.includes('ambient')) {
-                        let rawCol = cols.find(c => c.toLowerCase().includes(`0 ppb_${e.toLowerCase()}_raw`) || c.toLowerCase().includes(`${e.toLowerCase()}_raw`));
-                        if (!rawCol) rawCol = cols.find(c => c.toLowerCase().includes(`_${e.toLowerCase()}_mean`) && c.includes('0 ppb'));
-                        let val = parseFloat(row[rawCol]);
-                        if (!isNaN(val)) {
-                            baselineSum += val;
-                            baselineCount++;
-                        }
-                    }
-                });
-
-                const activeProcRows = hasFeno ? windowRows : data;
-
-                activeProcRows.forEach(row => {
+                activeProcRows.forEach((row) => {
                     let vMean = parseFloat(row[`${concLayer}_${e}_mean`]);
                     let vMin = parseFloat(row[`${concLayer}_${e}_min`]);
                     let v = !isNaN(vMin) ? vMin : vMean;
@@ -204,17 +233,6 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
                     }
                 });
 
-                if (baselineCount === 0) {
-                    let rawCol = cols.find(c => c.toLowerCase().includes(`0 ppb_${e.toLowerCase()}_raw`) || c.toLowerCase().includes(`${e.toLowerCase()}_raw`));
-                    if (!rawCol) rawCol = cols.find(c => c.toLowerCase().includes(`_${e.toLowerCase()}_mean`) && c.includes('0 ppb'));
-                    if (rawCol) {
-                        baselineSum = parseFloat(data[0][rawCol]) || 0;
-                        baselineCount = 1;
-                    }
-                }
-
-                const baselineR = baselineCount > 0 ? (baselineSum / baselineCount) : 0;
-                
                 const sensitivityMag = sensitivityMetric === 'avg_20_80' 
                     ? (avgResponseCount > 0 ? Math.abs(avgResponseSum / avgResponseCount) : 0)
                     : Math.abs(maxNegativeResponse);
@@ -240,10 +258,12 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
     }, [data, sensitivityMetric]);
 
     useEffect(() => {
-        if (concs && concs.length > 0 && selectedConcs.length === 0) {
-            setSelectedConcs([concs[concs.length - 1]]);
-        }
-    }, [concs, selectedConcs]);
+        setSelectedConcs((prev) => {
+            if (!concs?.length) return prev;
+            if (prev.length > 0) return prev;
+            return [concs[concs.length - 1]];
+        });
+    }, [concs]);
 
     const elementLinesData = useMemo(() => {
         if (!showTrajectories || selectedConcs.length < 2) return [];
@@ -509,7 +529,7 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
                                         <div style={{ background: 'rgba(15, 23, 42, 0.3)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '16px' }}>
                                             <h4 style={{ margin: '0 0 16px 0', fontSize: '0.95rem', color: '#cbd5e1', textAlign: 'center' }}>Baseline vs Sensitivity</h4>
                                             <ResponsiveContainer width="100%" height={320}>
-                                                <ScatterChart margin={{ top: 10, right: 20, bottom: 40, left: 40 }}>
+                                                <ScatterChart isAnimationActive={false} margin={{ top: 10, right: 20, bottom: 40, left: 40 }}>
                                                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                                                     <XAxis type="number" dataKey="baselineR" name="Baseline (Ω)" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Baseline Resistance (Ω)', position: 'bottom', offset: 20, fill: '#cbd5e1', fontSize: 11 }} />
                                                     <YAxis type="number" dataKey="sensitivityMag" name="Sensitivity" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Sensitivity (%)', angle: -90, position: 'left', offset: 10, fill: '#cbd5e1', fontSize: 11 }} />
@@ -556,7 +576,7 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
                                         <div style={{ background: 'rgba(15, 23, 42, 0.3)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '16px' }}>
                                             <h4 style={{ margin: '0 0 16px 0', fontSize: '0.95rem', color: '#cbd5e1', textAlign: 'center' }}>Baseline vs Separability</h4>
                                             <ResponsiveContainer width="100%" height={320}>
-                                                <ScatterChart margin={{ top: 10, right: 20, bottom: 40, left: 40 }}>
+                                                <ScatterChart isAnimationActive={false} margin={{ top: 10, right: 20, bottom: 40, left: 40 }}>
                                                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                                                     <XAxis type="number" dataKey="baselineR" name="Baseline (Ω)" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Baseline Resistance (Ω)', position: 'bottom', offset: 20, fill: '#cbd5e1', fontSize: 11 }} />
                                                     <YAxis type="number" dataKey="avgSep" name="Separability" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Separability (S)', angle: -90, position: 'left', offset: 10, fill: '#cbd5e1', fontSize: 11 }} />
@@ -618,7 +638,7 @@ const SensitivityAnalysisPage = ({ data, fileName }) => {
                                         style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }}
                                     >
                                         <ResponsiveContainer width="100%" height="100%">
-                                        <ScatterChart margin={{ top: 20, right: 30, bottom: 50, left: 25 }}>
+                                        <ScatterChart isAnimationActive={false} margin={{ top: 20, right: 30, bottom: 50, left: 25 }}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                                             
                                             <XAxis 

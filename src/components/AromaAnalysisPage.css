@@ -257,10 +257,11 @@
 
 .zoomable-plot-modal {
     position: fixed;
-    top: 0;
+    top: var(--auth-session-bar-height, 0px);
     left: 0;
     width: 100vw;
-    height: 100vh;
+    height: calc(100vh - var(--auth-session-bar-height, 0px));
+    max-height: calc(100dvh - var(--auth-session-bar-height, 0px));
     z-index: 1000;
     background: rgba(15, 23, 42, 0.98);
     display: flex;

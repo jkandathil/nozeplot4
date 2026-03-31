@@ -695,7 +695,13 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                         </div>
                     </div>
                 ) : (
-                    <div style={{ display: 'flex', gap: '20px', height: 'calc(100vh - 120px)' }}>
+                    <div
+                        style={{
+                            display: 'flex',
+                            gap: '20px',
+                            height: 'calc(100vh - 120px - var(--auth-session-bar-height, 0px))',
+                        }}
+                    >
                         {/* Sidebar controls */}
                         <AnimatePresence>
                         {isSidebarVisible && (

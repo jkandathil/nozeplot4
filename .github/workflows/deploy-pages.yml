@@ -1,4 +1,5 @@
 # On push to main: build with Firebase + deploy dist/ to branch gh-pages.
+# FeNOse weights are not in the repo (gitignored); users train or upload models in-app to workspace Model/.
 #
 # If these secrets are missing, the built site shows "Firebase is not configured" for every page
 # (AuthGate wraps the whole app — not related to Separability/Sensitivity). Pushing to main without

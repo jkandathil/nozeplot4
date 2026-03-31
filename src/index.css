@@ -1,4 +1,7 @@
 :root {
+  /* Set by AuthGate when signed in (ResizeObserver) so 100vh/fixed overlays don’t sit under the session bar */
+  --auth-session-bar-height: 0px;
+
   /* Colors - Modern Dark Theme */
   --bg-primary: #0f172a;
   /* Slate 900 */

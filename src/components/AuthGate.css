@@ -1,18 +1,35 @@
 .auth-gate-screen {
     flex: 1;
     min-height: 0;
+    min-height: 100dvh;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding-top: max(clamp(12px, 4vw, 32px), env(safe-area-inset-top, 0px));
+    padding-right: max(clamp(12px, 4vw, 32px), env(safe-area-inset-right, 0px));
+    padding-bottom: max(clamp(12px, 4vw, 32px), env(safe-area-inset-bottom, 0px));
+    padding-left: max(clamp(12px, 4vw, 32px), env(safe-area-inset-left, 0px));
     background: var(--bg-primary);
 }
 
+@media (max-height: 720px) {
+    .auth-gate-screen {
+        justify-content: flex-start;
+    }
+}
+
 .auth-gate-card {
-    max-width: 420px;
+    flex-shrink: 0;
+    min-width: 0;
     width: 100%;
-    padding: 32px;
+    max-width: min(28rem, 100%);
+    padding: clamp(1.125rem, 4vw, 2rem);
     border-radius: 16px;
     border: 1px solid var(--border-color);
     background: rgba(30, 41, 59, 0.75);
@@ -28,8 +45,32 @@
 .auth-gate-title {
     font-size: 1.25rem;
     font-weight: 600;
-    margin: 0 0 12px;
+    margin: 0 0 10px;
     color: var(--text-primary);
+}
+
+.auth-gate-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 0 0 18px;
+}
+
+.auth-gate-brand-logo {
+    display: block;
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.auth-gate-brand-name {
+    font-family: 'Outfit', var(--font-family);
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--accent-primary);
 }
 
 .auth-gate-muted {
@@ -69,12 +110,13 @@
 }
 
 .auth-gate-card-wide {
-    max-width: 440px;
+    max-width: min(40rem, 100%);
     text-align: left;
 }
 
 .auth-gate-card-wide .auth-gate-title,
-.auth-gate-card-wide .auth-gate-icon {
+.auth-gate-card-wide .auth-gate-icon,
+.auth-gate-card-wide .auth-gate-brand {
     text-align: center;
 }
 
@@ -237,15 +279,18 @@
 
 .auth-session-bar {
     flex-shrink: 0;
+    position: relative;
+    z-index: 200;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 12px;
     padding: 6px 14px;
+    min-height: 36px;
     font-size: 0.78rem;
-    background: rgba(15, 23, 42, 0.95);
+    background: rgba(15, 23, 42, 0.98);
     border-bottom: 1px solid var(--border-color);
-    z-index: 50;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
 }
 
 .auth-session-email {

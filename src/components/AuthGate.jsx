@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import {
     GoogleAuthProvider,
     signInWithPopup,
@@ -20,15 +20,33 @@ function formatAuthError(e) {
     const code = e?.code || '';
     const msg = e?.message || 'Sign-in failed.';
     if (code === 'auth/unauthorized-domain') {
-        return `${msg} Add this site’s domain under Firebase → Authentication → Settings → Authorized domains.`;
+        return `${msg} In Firebase → Authentication → Settings → Authorized domains, add this browser hostname (exactly as in the address bar). Examples: use http://localhost:5173 (add localhost) or http://127.0.0.1:5173 (add 127.0.0.1 — it is not the same as localhost). For GitHub Pages add YOUR_USERNAME.github.io.`;
     }
     if (code === 'auth/operation-not-allowed') {
-        return 'Google sign-in is disabled. In Firebase Console → Authentication → Sign-in method, enable Google.';
+        return 'That sign-in provider is disabled. Firebase Console → Authentication → Sign-in method: enable Google (and Email/Password if you use it).';
     }
     if (code === 'auth/popup-blocked') {
         return 'Popup was blocked. Try “Continue with Google (full page)” below or allow popups for this site.';
     }
+    if (code === 'auth/network-request-failed') {
+        return `${msg} Check your connection and any ad-blocker. If it still fails, Google Cloud → APIs & Services → Credentials → your Browser key: under Application restrictions → HTTP referrers, add this full origin (e.g. http://localhost:5173/* and https://YOUR_USER.github.io/nozeplot4/*).`;
+    }
+    if (code === 'auth/invalid-api-key' || /^auth\/api-key-not-valid/i.test(String(code))) {
+        return `${msg} Confirm VITE_FIREBASE_API_KEY matches Firebase → Project settings → Your apps. Rebuild after changing .env.local.`;
+    }
+    if (code === 'auth/web-storage-unsupported') {
+        return 'This browser blocks storage needed for sign-in. Try another browser or turn off private mode.';
+    }
     return msg;
+}
+
+/** Firebase lists localhost and 127.0.0.1 separately; devs often open 127.0.0.1 while only localhost is authorized. */
+function getDevLocalhostInsteadOfLoopbackHref() {
+    if (typeof window === 'undefined' || !import.meta.env.DEV) return null;
+    if (window.location.hostname !== '127.0.0.1') return null;
+    const { port, pathname, search, hash } = window.location;
+    const p = port ? `:${port}` : '';
+    return `http://localhost${p}${pathname}${search}${hash}`;
 }
 
 export default function AuthGate({ children }) {
@@ -37,8 +55,29 @@ export default function AuthGate({ children }) {
     const [firebaseUser, setFirebaseUser] = useState(null);
     const [appAllowed, setAppAllowed] = useState(false);
     const [verifyInfo, setVerifyInfo] = useState('');
+    const sessionBarRef = useRef(null);
 
     const auth = getFirebaseAuth();
+
+    useLayoutEffect(() => {
+        const root = document.documentElement;
+        if (!appAllowed || !firebaseUser) {
+            root.style.setProperty('--auth-session-bar-height', '0px');
+            return;
+        }
+        const el = sessionBarRef.current;
+        if (!el) return;
+        const apply = () => {
+            root.style.setProperty('--auth-session-bar-height', `${el.getBoundingClientRect().height}px`);
+        };
+        apply();
+        const ro = new ResizeObserver(apply);
+        ro.observe(el);
+        return () => {
+            ro.disconnect();
+            root.style.setProperty('--auth-session-bar-height', '0px');
+        };
+    }, [appAllowed, firebaseUser]);
 
     const applyFirebaseUser = useCallback(async (u) => {
         if (!u) {
@@ -203,7 +242,7 @@ export default function AuthGate({ children }) {
     if (appAllowed && firebaseUser) {
         return (
             <div className="auth-root">
-                <div className="auth-session-bar">
+                <div ref={sessionBarRef} className="auth-session-bar">
                     <span className="auth-session-email" title={firebaseUser.email || ''}>
                         {firebaseUser.email}
                     </span>
@@ -246,16 +285,40 @@ export default function AuthGate({ children }) {
         );
     }
 
+    const devLocalhostFixHref =
+        gateError.toLowerCase().includes('unauthorized-domain')
+            ? getDevLocalhostInsteadOfLoopbackHref()
+            : null;
+
     return (
         <div className="auth-gate-screen">
             <div className="auth-gate-card auth-gate-card-wide">
-                <ShieldAlert className="auth-gate-icon" size={40} />
                 <h1 className="auth-gate-title">Sign in</h1>
+                <div className="auth-gate-brand" aria-hidden="true">
+                    <img
+                        className="auth-gate-brand-logo"
+                        src={`${import.meta.env.BASE_URL}logo_noze_circle.png`}
+                        alt=""
+                        width={44}
+                        height={44}
+                    />
+                    <span className="auth-gate-brand-name">Nozeplot4</span>
+                </div>
                 <p className="auth-gate-muted">
-                    Access is for <strong>{allowedDomainsLabel()}</strong> only. You must use a <strong>verified</strong>{' '}
-                    email (Google accounts are usually verified; email sign-up gets a Firebase verification link).
+                    This app is for <strong>{allowedDomainsLabel()}</strong> email addresses only. Sign in with Google, or
+                    create an account with email and password — we’ll send you a short message to confirm your address
+                    before you can continue.
                 </p>
                 {gateError ? <p className="auth-gate-error">{gateError}</p> : null}
+                {devLocalhostFixHref ? (
+                    <button
+                        type="button"
+                        className="auth-gate-secondary-btn"
+                        onClick={() => window.location.replace(devLocalhostFixHref)}
+                    >
+                        Open using localhost (same port) — fixes most local Firebase errors
+                    </button>
+                ) : null}
                 <button type="button" className="auth-gate-google-btn" onClick={handleGoogleSignIn}>
                     <LogIn size={18} />
                     Continue with Google
@@ -264,13 +327,9 @@ export default function AuthGate({ children }) {
                     Continue with Google (full page)
                 </button>
                 <p className="auth-gate-hint">
-                    If you see “The requested action is invalid”: use the full-page option, confirm <strong>localhost</strong> is in
-                    Firebase authorized domains, and in{' '}
-                    <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">
-                        Google Cloud → Credentials
-                    </a>{' '}
-                    open your <strong>Web client</strong> (OAuth 2.0) and add{' '}
-                    <code>http://localhost:5174</code> under <strong>Authorized JavaScript origins</strong>.
+                    If the Google sign-in window doesn’t open or you see an error, try{' '}
+                    <strong>Continue with Google (full page)</strong> instead. If you still can’t get in, contact your IT
+                    team or Noze support — they can help with your account.
                 </p>
                 <div className="auth-gate-divider">
                     <span>or</span>
@@ -330,8 +389,12 @@ function EmailPasswordForm({ auth, setGateError }) {
                 setGateError('Invalid email address.');
             } else if (code === 'auth/too-many-requests') {
                 setGateError('Too many attempts. Try again later.');
+            } else if (code === 'auth/user-not-found') {
+                setGateError('No account for that email. Use “Register” or check the spelling.');
+            } else if (code === 'auth/weak-password') {
+                setGateError('Password is too weak. Use at least 6 characters.');
             } else {
-                setGateError(err?.message || 'Request failed.');
+                setGateError(formatAuthError(err));
             }
         } finally {
             setBusy(false);

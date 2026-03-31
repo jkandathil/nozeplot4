@@ -6,6 +6,353 @@
     position: relative;
 }
 
+/* FeNOse-only layout (no preprocessing sidebar) */
+.ml-studio-page--fenose {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+}
+
+.ml-content--fenose {
+    max-width: 1320px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 16px;
+}
+
+.ml-fenose-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.ml-fenose-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 16px;
+    flex-shrink: 0;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    width: fit-content;
+    max-width: 100%;
+}
+
+.ml-fenose-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 9px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+    font-family: inherit;
+}
+
+.ml-fenose-tab:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.ml-fenose-tab--active {
+    color: #e2e8f0;
+    background: rgba(56, 189, 248, 0.18);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+.ml-fenose-tab:focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+}
+
+.ml-fenose-tab-panels {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.ml-fenose-tab-panel {
+    flex: 1;
+    min-height: 0;
+    max-height: calc(100dvh - 200px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+}
+
+.ml-fenose-tab-panel[hidden] {
+    display: none !important;
+}
+
+.ml-fenose-header-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.12);
+}
+
+.ml-fenose-header-sub {
+    margin: 6px 0 0 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    max-width: 52rem;
+}
+
+.ml-fenose-card {
+    min-width: 0;
+}
+
+.ml-fenose-card-desc {
+    margin-top: 0;
+    margin-bottom: 14px;
+    color: var(--text-muted);
+    font-size: 0.86rem;
+    line-height: 1.45;
+}
+
+.ml-fenose-empty {
+    padding: 18px 12px;
+    min-height: 120px;
+    height: auto;
+}
+
+.ml-fenose-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.ml-fenose-train-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+}
+
+.ml-fenose-train-data-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.ml-fenose-train-cols {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 6px;
+}
+
+@media (min-width: 720px) {
+    .ml-fenose-train-cols {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.ml-fenose-file-list {
+    background: rgba(15, 23, 42, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+    max-height: min(42vh, 380px);
+    min-height: 140px;
+    overflow-y: auto;
+}
+
+.ml-fenose-train-side {
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    min-width: 0;
+}
+
+.ml-fenose-file-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.ml-fenose-file-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.ml-fenose-file-row input {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.ml-fenose-file-row-name {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+    line-height: 1.35;
+}
+
+.ml-fenose-input-full {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.ml-fenose-hint {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.ml-fenose-hint code {
+    font-size: 0.85em;
+}
+
+.ml-fenose-train-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    align-items: center;
+}
+
+.ml-fenose-params-fieldset {
+    margin: 0;
+    padding: 14px 16px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.25);
+    min-width: 0;
+}
+
+.ml-fenose-params-legend {
+    padding: 0 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.ml-fenose-train-params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(152px, 1fr));
+    gap: 12px 14px;
+    align-items: end;
+}
+
+@media (min-width: 960px) {
+    .ml-fenose-train-params {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+}
+
+.ml-fenose-param {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ml-fenose-param--wide {
+    grid-column: 1 / -1;
+    max-width: min(100%, 420px);
+}
+
+.ml-fenose-train-run-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+}
+
+.ml-fenose-train-progress {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.ml-fenose-chart-card {
+    margin-top: 4px;
+    padding: 14px 16px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.35);
+    min-width: 0;
+}
+
+.ml-fenose-chart-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.ml-fenose-chart-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ml-fenose-chart-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
+.ml-fenose-chart-body {
+    width: 100%;
+    height: 280px;
+    min-height: 220px;
+}
+
+.ml-fenose-train-results {
+    margin-top: 8px;
+}
+
+.ml-fenose-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+
 .ml-sidebar {
     background-color: var(--bg-secondary);
     border-right: 1px solid var(--border-color);

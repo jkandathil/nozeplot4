@@ -20,6 +20,7 @@ import {
     Info,
     Sigma,
     Blend,
+    Usb,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -534,6 +535,7 @@ const GUIDE_SECTIONS = [
             'Multi-file workspace with folders, search, and compare selection',
             'CSV and Excel (.xlsx / .xls) import and parsing',
             'Session save/restore via .noze workspace files',
+            '**AU capture:** live USB serial capture from supported aroma units (Chrome / Edge) saves straight into the workspace',
         ],
         steps: [
             'On first launch, enter your display name (stored locally).',
@@ -552,6 +554,7 @@ const GUIDE_SECTIONS = [
             'Firebase web config is supplied at **build time** (see <code>.env.example</code>): <code>VITE_FIREBASE_*</code> plus <code>VITE_ALLOWED_EMAIL_DOMAIN</code> or <code>VITE_ALLOWED_EMAIL_DOMAINS</code>',
             '**Google** sign-in: Firebase must mark the email verified (normal for Google); domain must match the allow list',
             '**Email / password**: register with an allowed-domain address; Firebase sends a **verification link** — you cannot use the app until you open that link and click **I’ve verified**',
+            'If the Google popup is blocked, use **Continue with Google (full page)**; the sign-in layout scales for small screens and safe areas (notches)',
             'A session bar shows the signed-in email and **Sign out**',
         ],
         steps: [
@@ -575,6 +578,9 @@ const GUIDE_SECTIONS = [
             'Select all / clear compare for batch comparison on Dashboard and analysis pages',
             'Delete individual files, bulk delete, or clear entire workspace',
             'Tooltips on files when hovering for quick metadata',
+            '**Export CSV:** download icon on a file row saves that workspace file as CSV',
+            '**Folder ZIP:** from a folder’s menu, download all files in that folder as CSV files inside a ZIP',
+            '**All DataFiles ZIP:** workspace header action downloads every data file at the root as CSV inside a ZIP',
         ],
         steps: [
             'Click **Upload Files** or **Upload Folder** in the sidebar.',
@@ -643,13 +649,34 @@ const GUIDE_SECTIONS = [
             'Concentration labels from filenames (**ppb** pattern, ALAAC-style), optional in-file columns, or folder paths that match the app’s bundled concentration map (same idea as Normalize)',
             'Plots: time-series averages, monotonic curves, separations by unit, environmental overlays (T, RH, absolute humidity), etc.',
             'Single-plot modal: zoom, reset, **Download PNG** (with Y-axis label)',
-            'Folder compare flow for batch aroma comparison (opens dedicated view from Aroma page when used)',
+            '**Folder compare:** on the Aroma page, open the full-screen **folder compare** view for batch side-by-side work; closing it returns you to Aroma',
         ],
         steps: [
             'Select main file (and comparisons if batch note says to add them on Dashboard first).',
             'Adjust sidebar options (elements, temp/hum columns, filter, baseline points, toggles).',
             'Run **Run Pipeline & Plot** (or equivalent).',
             'Click a plot card to open fullscreen zoom; use **Download PNG** to export.',
+        ],
+    },
+    {
+        id: 'aroma-unit-capture',
+        icon: Usb,
+        title: 'AU capture',
+        subtitle: 'SiAC / aroma unit over USB (Web Serial)',
+        intro:
+            'Record live JSON lines from a supported **SiAC / aroma unit** over USB using the browser’s **Web Serial** API. Captures are normalized to table rows and can be **saved into the workspace** as files for Aroma, Normalize, and other tools.',
+        implemented: [
+            '**Browser:** Chromium-based desktop browsers with Web Serial (e.g. **Chrome**, **Edge**). Not available in Firefox, Safari, or typical mobile browsers',
+            '**Device profiles** (e.g. SIAC32_V2) set baud rate and how lines are parsed into columns',
+            'Connect to a port, optional **scan** to list candidate devices, timed capture with progress, stop early, and **save to workspace** with generated filenames (including serial-based folder naming when detected)',
+            '**Multi-AU:** select several discovered units and run the **same timed window** in parallel',
+            'The capture module **stays mounted** while you use other pages so an in-progress recording is not torn down when you navigate away (you can return to AU capture to monitor or finish)',
+        ],
+        steps: [
+            'Connect the unit with USB and use **Chrome or Edge** on desktop.',
+            'Open **AU capture** from the sidebar (next to SE Analysis).',
+            'Choose the profile, **Connect** (or **Scan** and pick a device), set duration, then start capture.',
+            'When done, **Save to workspace**; select the new file in the sidebar and open **Aroma** or another analysis page.',
         ],
     },
     {
@@ -693,7 +720,7 @@ const GUIDE_SECTIONS = [
         id: 'recovery',
         icon: TrendingUp,
         title: 'Recovery analysis',
-        subtitle: 'Exposure & recovery dynamics',
+        subtitle: 'Exposure & recovery dynamics (sidebar: Drift Map)',
         intro:
             'Focuses on defining exposure vs recovery phases (via keywords in event or similar columns), computing recovery metrics, and plotting sensor and environmental traces over time.',
         implemented: [
@@ -719,6 +746,7 @@ const GUIDE_SECTIONS = [
             'Summarizes variation across files or concentration buckets—useful for manufacturing or repeatability studies using the same column naming conventions as other aroma-style tools.',
         implemented: [
             'Concentration filter and optional “known file” (ppb in name) filtering',
+            '**Baseline sampling window (points)** for R0 extraction—adjustable slider; the same value is kept in sync with **Aroma baseline points** (shared preference)',
             'Bar/line/scatter style summaries of spread across elements',
             'Batch processing across workspace files selected for compare',
         ],
@@ -731,19 +759,19 @@ const GUIDE_SECTIONS = [
     {
         id: 'csv-plotter',
         icon: FileSpreadsheet,
-        title: 'CSV plotter',
-        subtitle: 'Standalone file → charts',
+        title: 'SE Analysis (CSV plotter)',
+        subtitle: 'Workspace files or ad-hoc upload',
         intro:
-            'A self-contained plotting area where you can load CSV files directly inside the page without using the main workspace list—handy for ad-hoc plots.',
+            'Plot CSV data in a dedicated view. The sidebar label is **SE Analysis**; you can **pick files already in the workspace** (including inside folders) or **upload** CSV / Excel for a one-off chart without changing the global main file.',
         implemented: [
-            'In-page CSV upload and parse',
-            'Composed/line charts with zoom controls (similar patterns to Aroma-style plot cards)',
-            'Does not require a sidebar-selected main file',
+            'Browse **workspace files and folders** from the page, or upload CSV / Excel from disk',
+            'Composed/line charts with column search, X-axis choice, and zoom controls (patterns similar to Aroma plot cards)',
+            'Does not require the Dashboard **main** file to be set to the same dataset',
         ],
         steps: [
-            'Open **CSV Plotter** from the sidebar.',
-            'Upload a CSV through the page UI.',
-            'Choose series and use zoom/export as offered on the page.',
+            'Open **SE Analysis** from the sidebar.',
+            'Either attach a workspace file / folder from the in-page browser or **upload** a file.',
+            'Choose X axis and series, then use zoom and export options on the page.',
         ],
     },
     {
