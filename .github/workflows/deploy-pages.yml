@@ -1,9 +1,9 @@
 # On push to main: build with Firebase + deploy dist/ to branch gh-pages.
 # FeNOse weights are not in the repo (gitignored); users train or upload models in-app to workspace Model/.
 #
-# If the four required Firebase secrets are missing, CI still builds using placeholders; the live site
-# shows "Firebase is not configured" until you add secrets and redeploy. Add the VITE_FIREBASE_* secrets
-# below for a working sign-in build.
+# Default Firebase web config is inlined below (same as .env.example / local dev) so Pages works without
+# repo secrets. These are public client identifiers; restrict abuse in Google Cloud → Credentials → your
+# browser key (HTTP referrers). Set repository secrets to override any value (e.g. after key rotation).
 #
 # Access control: only emails whose domain is VITE_ALLOWED_EMAIL_DOMAIN (noze.ca below)
 # pass AuthGate after Google or email/password sign-in.
@@ -52,16 +52,15 @@ jobs:
 
       - name: Install and build
         env:
-          # Missing secrets → placeholders so the build completes; AuthGate shows not configured until real values are set.
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || '__FIREBASE_NOT_CONFIGURED__' }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || '__FIREBASE_NOT_CONFIGURED__' }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || '__FIREBASE_NOT_CONFIGURED__' }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || '__FIREBASE_NOT_CONFIGURED__' }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          # Secrets override defaults (defaults = nozeplots4 web app; public client config, same as shipped JS).
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || 'AIzaSyDjMDLpyK6dRaqjYQe-w19VJmvOLJTwcrU' }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || 'nozeplots4.firebaseapp.com' }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || 'nozeplots4' }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || '1:467315626009:web:1a6a310a870e775c88da88' }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET || 'nozeplots4.firebasestorage.app' }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || '467315626009' }}
           VITE_ALLOWED_EMAIL_DOMAIN: noze.ca
-          # Optional: override if repo name ≠ URL path (otherwise app uses window.location on the live site)
-          VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL }}
+          VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL || 'https://jkandathil.github.io/nozeplot4' }}
         run: |
           npm ci
           node scripts/checkFirebaseBuildEnv.mjs
