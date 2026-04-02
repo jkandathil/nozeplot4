@@ -59,6 +59,13 @@ export function estimateWorkspaceFileBytes(file) {
             return 0;
         }
     }
+    if (file.data != null && typeof file.data === 'object' && !Array.isArray(file.data)) {
+        try {
+            return Math.max(1, new Blob([JSON.stringify(file.data)]).length);
+        } catch {
+            return typeof file.size === 'number' && file.size > 0 ? file.size : 0;
+        }
+    }
     return 0;
 }
 

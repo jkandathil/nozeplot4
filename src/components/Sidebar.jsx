@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
@@ -13,7 +13,14 @@ import {
     downloadFolderContentsAsCsvZip,
     downloadRootDataFilesAsCsvZip,
 } from '../utils/workspaceCsvDownload';
+import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace.js';
+
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
+
+function fileBelongsToFolder(file, folderId) {
+    if (!file || file.isFolder || folderId == null) return false;
+    return String(file.folderId) === String(folderId);
+}
 
 const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder }) => {
     const fileInputRef = useRef(null);
@@ -29,6 +36,29 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
     const actualFiles = files.filter(f => !f.isFolder);
     const customFolders = files.filter(f => f.isFolder);
+
+    /** Expand Model/ and FeNOse_synthetic/ when they have files so contents aren’t hidden collapsed */
+    useEffect(() => {
+        const expandNames = new Set(
+            [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME].map((n) => String(n).toLowerCase())
+        );
+        const matchFolders = (files || []).filter(
+            (f) => f.isFolder && expandNames.has(String(f.name).toLowerCase())
+        );
+        if (matchFolders.length === 0) return;
+        setExpandedFolders((prev) => {
+            const next = new Set(prev);
+            let changed = false;
+            for (const folder of matchFolders) {
+                const hasChild = (files || []).some((f) => !f.isFolder && fileBelongsToFolder(f, folder.id));
+                if (hasChild && !next.has(folder.id)) {
+                    next.add(folder.id);
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [files]);
 
     const handleMouseDown = React.useCallback((e) => {
         if (isCollapsed) return; // disable resize while collapsed
@@ -919,7 +949,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 )}
                                 {customFolders.map(folder => {
                                     const folderFiles = sortFolderFilesNewestFirst(
-                                        filteredFiles.filter(f => f.folderId === folder.id)
+                                        filteredFiles.filter((f) => fileBelongsToFolder(f, folder.id))
                                     );
                                     const folderFileIds = folderFiles.map(f => f.id);
                                     const isAllSelected = folderFiles.length > 0 && folderFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));

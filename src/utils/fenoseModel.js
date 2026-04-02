@@ -110,6 +110,12 @@ export function parseFenoseDeviceIdFromFilename(name) {
     return m ? m[1].toUpperCase() : 'UNKNOWN';
 }
 
+function trainingSampleLabel(row) {
+    const b = String(row?.fileName || row?.name || '').split(/[/\\]/).pop() || '';
+    if (!b) return 'sample';
+    return b.length > 42 ? `${b.slice(0, 40)}…` : b;
+}
+
 export function buildFenoseDatasetFromFiles(files) {
     const rows = [];
     for (const f of files || []) {
@@ -313,7 +319,6 @@ export async function trainFenoseV1FromFiles(
     const Xtrain = split.train.map((r) => topIdx.map((j) => r.x[j] ?? 0));
     const ytrain = split.train.map((r) => r.y);
     const Xtest = split.test.map((r) => topIdx.map((j) => r.x[j] ?? 0));
-    const ytest = split.test.map((r) => r.y);
 
     const { mean, std } = standardizeFit(Xtrain);
     const XtrainSc = standardizeApply(Xtrain, mean, std);
@@ -325,6 +330,11 @@ export async function trainFenoseV1FromFiles(
 
     const predPpb = predLogArr.map((v) => Math.expm1(Math.max(0, Math.min(10, v))));
     const ytestPpb = split.test.map((r) => Math.expm1(r.y));
+    const validationPoints = split.test.map((r, i) => ({
+        actual: ytestPpb[i],
+        predicted: predPpb[i],
+        label: trainingSampleLabel(r),
+    }));
 
     const weights = await denseWeightsToFenoseJson(model);
     const preprocessing = {
@@ -342,6 +352,7 @@ export async function trainFenoseV1FromFiles(
             trainCount: split.train.length,
             MAE_ppb: mae(ytestPpb, predPpb),
             RMSE_ppb: rmse(ytestPpb, predPpb),
+            validationPoints,
         },
     };
 }
@@ -399,6 +410,11 @@ export async function trainFenoseV2FromFiles(
         model.predict(tf.tensor2d(XtestPca, [XtestPca.length, XtestPca[0].length], 'float32')).dataSync()
     );
     const predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.min(yMax, v * yMax)));
+    const validationPoints = split.test.map((r, i) => ({
+        actual: yTest[i],
+        predicted: predPpb[i],
+        label: trainingSampleLabel(r),
+    }));
 
     const weights = await denseWeightsToFenoseJson(model);
 
@@ -434,6 +450,7 @@ export async function trainFenoseV2FromFiles(
             trainCount: split.train.length,
             MAE_ppb: mae(yTest, predPpb),
             RMSE_ppb: rmse(yTest, predPpb),
+            validationPoints,
         },
     };
 }

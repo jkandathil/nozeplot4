@@ -56,6 +56,364 @@ function Mo({ children, className = '' }) {
     return <span className={`help-math-op ${className}`.trim()}>{children}</span>;
 }
 
+/**
+ * Comprehensive ML Studio deep-dive guide embedded into the Help page.
+ * Covers: device overview, capture phases, feature extraction, training
+ * pipelines v1/v2, synthetic data calibration, inference, and DS fundamentals.
+ */
+function MLStudioDeepDive() {
+    return (
+        <div className="ml-guide-wrapper">
+
+            {/* ── 1. Device overview ───────────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">The FeNOse device</h3>
+            <p className="help-eq-para">
+                FeNOse is a breath-analysis instrument containing <strong>64 metal-oxide (MOx) gas sensors</strong> arranged in an 8 × 8 grid (columns A–H, rows 1–8, giving identifiers <code>A1</code>–<code>H8</code>). When a patient exhales slowly and steadily into the device, each sensor shifts its electrical resistance in response to the chemistry of the breath — primarily <strong>fractional exhaled nitric oxide (FeNO)</strong>, a validated biomarker for eosinophilic airway inflammation.
+                Each measurement capture is saved as a CSV file with one row per time-step, 64 sensor-resistance columns, environmental readings (temperature, humidity, pressure), and an <code>event_name</code> column that labels each phase of the measurement.
+            </p>
+
+            {/* ── 2. Capture phases ────────────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Measurement phases</h3>
+            <p className="help-eq-para">Every FeNOse capture contains three labeled phases:</p>
+            <div className="ml-phase-grid">
+                <div className="ml-phase-card ml-phase-ambient">
+                    <span className="ml-phase-badge">Phase 1</span>
+                    <strong className="ml-phase-name">AmbientSamplingRFC</strong>
+                    <p className="ml-phase-desc">~100 rows in ambient room air. Establishes each sensor's resting resistance before any breath gas reaches the array.</p>
+                </div>
+                <span className="ml-phase-arrow">→</span>
+                <div className="ml-phase-card ml-phase-feno">
+                    <span className="ml-phase-badge">Phase 2</span>
+                    <strong className="ml-phase-name">FeNOMeasurement</strong>
+                    <p className="ml-phase-desc">~100 rows during active exhalation. Sensors respond to NO and other trace gases present in the breath sample.</p>
+                </div>
+                <span className="ml-phase-arrow">→</span>
+                <div className="ml-phase-card ml-phase-window">
+                    <span className="ml-phase-badge">Phase 3</span>
+                    <strong className="ml-phase-name">FeNOWindow</strong>
+                    <p className="ml-phase-desc">~15 rows of steady-state plateau. Captures the most stable NO signal with the lowest row-to-row noise — the key diagnostic window.</p>
+                </div>
+            </div>
+            <div className="ml-callout ml-callout-tip">
+                <strong>Why separate phases?</strong> Absolute sensor resistances drift with temperature and humidity. Measuring the <em>relative change</em> from ambient to breath (not the raw value) makes the feature independent of slow environmental drift and device-to-device baseline differences.
+            </div>
+
+            {/* ── 3. Feature extraction ────────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Feature extraction — from phases to a numeric vector</h3>
+            <p className="help-eq-para">
+                For each capture, the extractor collapses the three phases into a fixed-length vector the model can digest. Four features are computed per sensor (64 sensors × 4 = 256 per-sensor values), plus 6 global cross-sensor statistics and 3 environmental features — <strong>up to ~267 features total</strong>.
+            </p>
+            <div className="ml-table-wrap">
+                <table className="ml-data-table">
+                    <thead>
+                        <tr>
+                            <th>Prefix</th>
+                            <th>Source phases</th>
+                            <th>Formula</th>
+                            <th>What it captures</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>nd_*</code></td>
+                            <td>Ambient → FeNO</td>
+                            <td>(FeNO mean − amb mean) / amb mean</td>
+                            <td><strong>Normalised delta</strong> — fractional change from baseline; the primary NO-sensitivity signal</td>
+                        </tr>
+                        <tr>
+                            <td><code>d_*</code></td>
+                            <td>Ambient → FeNO</td>
+                            <td>FeNO mean − amb mean (Ω)</td>
+                            <td><strong>Raw delta</strong> — absolute resistance change; complements nd_ for sensors with very high or low baseline</td>
+                        </tr>
+                        <tr>
+                            <td><code>fs_*</code></td>
+                            <td>FeNOWindow std</td>
+                            <td>Std dev of window-phase rows</td>
+                            <td><strong>FeNO window noise</strong> — sensor stability during the plateau; high values indicate noisy or partially saturated sensors</td>
+                        </tr>
+                        <tr>
+                            <td><code>wd_*</code></td>
+                            <td>Window − Ambient</td>
+                            <td>Window phase mean − ambient mean</td>
+                            <td><strong>Window delta</strong> — plateau-level response; cross-validates nd_ using only the most stable rows</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p className="help-eq-para">
+                Global features include the mean <code>nd_</code> across all 64 sensors, mean raw delta, and four cross-sensor spread statistics. Environmental features (<code>AQT0</code> temperature, <code>AQH0</code> humidity, <code>AQP0</code> pressure) help the model account for ambient conditions that shift sensor baselines.
+            </p>
+
+            {/* ── 4. Training pipelines ────────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Training pipelines</h3>
+            <p className="help-eq-para">
+                ML Studio supports two pipeline variants. Both end in the same type of neural network — a <strong>multilayer perceptron (MLP)</strong> implemented in TensorFlow.js — but differ in how features are selected, compressed, and how the ppb target is scaled before training.
+            </p>
+
+            <h4 className="ml-subhead-2">Version 1 — Top-K → Scale → MLP (log target)</h4>
+            <div className="ml-pipeline-flow">
+                <div className="ml-pipeline-step">~267 features<br/><small>per capture</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>Top-K selection</strong><small>rank by |corr(feat, log(ppb+1))|</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>StandardScaler</strong><small>subtract mean, divide σ</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>MLP</strong><small>predict log(ppb+1)</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>exp(x) − 1</strong><small>back to ppb</small></div>
+            </div>
+            <p className="help-eq-para">
+                Log-transforming the target (log(ppb + 1)) compresses the upper range of the 0–100 ppb scale so the model minimises percentage error rather than raw absolute error. This is especially important near the clinical decision boundaries (~25 ppb and ~50 ppb), where a 5 ppb error matters far more than it does at 100 ppb.
+            </p>
+
+            <h4 className="ml-subhead-2">Version 2 — Top-K → Scale → PCA → MLP (scaled target)</h4>
+            <div className="ml-pipeline-flow">
+                <div className="ml-pipeline-step">~267 features</div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>Top-K selection</strong><small>rank by |corr(feat, ppb)|</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>StandardScaler</strong></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>PCA</strong><small>retain 95% variance</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>MLP</strong><small>predict ppb ÷ yMax</small></div>
+                <span className="ml-pipeline-arrow">→</span>
+                <div className="ml-pipeline-step"><strong>× yMax</strong><small>back to ppb</small></div>
+            </div>
+            <p className="help-eq-para">
+                PCA is inserted after scaling to <em>decorrelate</em> sensor features. Because many MOx sensors respond similarly to NO, their <code>nd_</code> values are highly correlated — PCA collapses these into a smaller set of orthogonal components, reducing the MLP's input dimension and its tendency to overfit. The target is divided by the maximum training ppb (<code>yMax</code>), pushing it into the [0, 1] range, which generally produces a more stable training curve than an unbounded regression target.
+            </p>
+
+            {/* ── 5. MLP architecture ──────────────────────────────────── */}
+            <h3 className="help-subheading">MLP architecture</h3>
+            <p className="help-eq-para">
+                The network runs entirely in the browser via <strong>TensorFlow.js</strong> — no server-side compute is required. Default architecture (all values configurable in the Training tab):
+            </p>
+            <ul className="help-list">
+                <li><strong>Input layer:</strong> one neuron per retained feature (after Top-K and optional PCA, typically 20–40 inputs)</li>
+                <li><strong>Hidden layer 1:</strong> 64 neurons, ReLU activation</li>
+                <li><strong>Hidden layer 2:</strong> 32 neurons, ReLU activation</li>
+                <li><strong>Output layer:</strong> 1 neuron, linear activation — predicts the transformed target (log ppb or ppb/yMax)</li>
+                <li><strong>Optimiser:</strong> Adam (adaptive learning rate, default lr = 0.001)</li>
+                <li><strong>Loss function:</strong> mean squared error (MSE) on the transformed target</li>
+            </ul>
+            <div className="ml-callout ml-callout-warn">
+                <strong>Small-dataset caution:</strong> a default network with 64+32 hidden neurons has several thousand trainable parameters. The standard FeNOse dataset has only ~35 labelled captures — the model <em>will</em> overfit without sufficient training data. Synthetic augmentation (30–50 replicates per concentration level) is the primary mitigation.
+            </div>
+
+            {/* ── 6. Synthetic data pipeline ───────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Synthetic data pipeline</h3>
+            <p className="help-eq-para">
+                Collecting real FeNOse captures is time-consuming. ML Studio's synthetic generator produces <em>physics-informed</em> captures for any target ppb value, using the same three-phase structure as a real measurement. Each synthetic capture inherits realistic noise and device variability derived from whatever real data exists in your workspace.
+            </p>
+
+            <h4 className="ml-subhead-2">Calibration parameters — 6 values per sensor</h4>
+            <p className="help-eq-para">
+                The generator is governed by 6 calibration parameters for each of the 64 sensors. These are computed automatically from labelled real captures in the workspace; if real data is unavailable for a sensor, the app falls back to device-batch defaults.
+            </p>
+            <div className="ml-table-wrap">
+                <table className="ml-data-table">
+                    <thead>
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Meaning</th>
+                            <th>Estimated from real data as…</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>amb_med</code></td>
+                            <td>Median ambient resistance (Ω)</td>
+                            <td>Median of all ambient-phase readings across real captures</td>
+                        </tr>
+                        <tr>
+                            <td><code>nd_slope</code></td>
+                            <td>NO sensitivity — Δnd per ppb</td>
+                            <td>OLS slope of normalised delta (nd) regressed against ppb across all real captures</td>
+                        </tr>
+                        <tr>
+                            <td><code>amb_cv</code></td>
+                            <td>Device-to-device baseline spread (log-normal σ)</td>
+                            <td>Coefficient of variation of per-capture ambient medians</td>
+                        </tr>
+                        <tr>
+                            <td><code>noise_cv</code></td>
+                            <td>Within-phase electronic noise (σ as a fraction of baseline)</td>
+                            <td>Median of per-capture within-phase std divided by amb_med</td>
+                        </tr>
+                        <tr>
+                            <td><code>sens_cv</code></td>
+                            <td>Capture-to-capture sensitivity jitter (σ of nd_slope multiplier)</td>
+                            <td>Standard deviation of per-capture (nd/ppb) values relative to their mean</td>
+                        </tr>
+                        <tr>
+                            <td><code>zero_std_nd</code></td>
+                            <td>Zero-point offset noise (σ of nd at 0 ppb)</td>
+                            <td>Std of nd values from 0 ppb captures only</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h4 className="ml-subhead-2">Generation steps for one synthetic capture at target ppb</h4>
+            <ol className="help-steps">
+                <li>
+                    <strong>Seed the PRNG:</strong> a deterministic <em>mulberry32</em> pseudo-random number generator is seeded from the user-supplied seed, producing reproducible augmentation data regardless of session or browser.
+                </li>
+                <li>
+                    <strong>Sample per-device baseline spread:</strong> for each sensor, draw a log-normal multiplier using <code>amb_cv</code>. This simulates unit-to-unit variation in baseline resistance across different physical devices or measurement sessions.
+                    <br/><small style={{color:'#64748b'}}>ambBase = amb_med × exp(N(0, amb_cv))</small>
+                </li>
+                <li>
+                    <strong>Sample sensitivity jitter:</strong> scale <code>nd_slope</code> by a Gaussian multiplier with σ = <code>sens_cv</code> (~13%). This captures the fact that the same sensor's sensitivity to NO varies slightly from one breath capture to the next.
+                    <br/><small style={{color:'#64748b'}}>effSlope = nd_slope × (1 + N(0, sens_cv))</small>
+                </li>
+                <li>
+                    <strong>Sample zero-point offset:</strong> draw a small nd offset from N(0, <code>zero_std_nd</code>) to simulate drift in the sensor's zero reading — i.e., the nd value the sensor shows even at 0 ppb.
+                </li>
+                <li>
+                    <strong>Generate ambient rows (~100):</strong> Gaussian noise around <code>ambBase</code> with σ = <code>noise_cv × ambBase</code> per sensor. These rows mimic Phase 1 of a real capture.
+                </li>
+                <li>
+                    <strong>Generate FeNO rows (~100):</strong> for each row, compute the expected sensor value as{' '}
+                    <code>ambBase × (1 + effSlope × ppb + zeroOffset) + noise</code>. The key driver is the <code>effSlope × ppb</code> term — how much the sensor shifts from baseline in response to NO.
+                </li>
+                <li>
+                    <strong>Generate window rows (~15):</strong> same model as FeNO rows, but with slightly lower noise, representing the stable plateau phase.
+                </li>
+            </ol>
+            <div className="ml-callout ml-callout-tip">
+                <strong>Recommended augmentation strategy:</strong> generate <strong>30–50 synthetic replicates per concentration level</strong> (covering 0, 5, 10, 20, 50, 75, 100 ppb). Train exclusively on synthetic data and keep all 35 real captures as a <em>held-out test set</em>. This prevents real-data quirks from contaminating training and gives an honest estimate of generalisation performance.
+            </div>
+
+            {/* ── 7. Inference workflow ────────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Model inference workflow</h3>
+            <ol className="help-steps">
+                <li>Upload a FeNOse-style CSV capture to the workspace. It must contain sensor columns <code>A1</code>–<code>H8</code> and an <code>event_name</code> column with the three phase labels.</li>
+                <li>Open <strong>ML Studio → Inference</strong> and select a saved model from the <code>Model/</code> folder. A model consists of a paired <code>*.json</code> (architecture + pipeline metadata) and <code>*.weights.bin</code> (trained weights).</li>
+                <li>The app extracts features from the capture using the <em>same</em> feature extractor, Top-K indices, StandardScaler parameters, and (for v2) PCA components that were frozen at training time.</li>
+                <li>The normalised feature vector is passed through the TensorFlow.js model to produce a single output — the transformed ppb prediction.</li>
+                <li>The output is inverse-transformed (exp(x)−1 for v1; × yMax for v2) and displayed as the predicted FeNO concentration in ppb.</li>
+            </ol>
+            <div className="ml-callout ml-callout-warn">
+                <strong>Pipeline lock-in:</strong> the scaler, PCA (if v2), and the list of selected feature indices are all stored inside the model JSON at training time. Changing any pipeline parameter (K, feature types, etc.) requires retraining. Running inference with a mismatched pipeline will silently produce incorrect predictions.
+            </div>
+
+            {/* ── 8. Data science fundamentals ─────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Data science fundamentals</h3>
+
+            <h4 className="ml-subhead-2">Error metrics — MAE and RMSE</h4>
+            <p className="help-eq-para">
+                After training, ML Studio reports two error metrics computed on the training split:
+            </p>
+            <ul className="help-list">
+                <li>
+                    <strong>MAE (Mean Absolute Error)</strong> — the average absolute difference between predicted and true ppb. Intuitive interpretation: an MAE of 4 ppb means predictions are off by 4 ppb on average. Treats all errors equally regardless of their magnitude.
+                </li>
+                <li>
+                    <strong>RMSE (Root Mean Square Error)</strong> — the square root of the average squared error. Penalises large individual errors more heavily than MAE. An RMSE much larger than MAE suggests occasional large outlier predictions. For clinical FeNO use, large errors near diagnostic thresholds are more consequential, so RMSE is often the key metric to watch.
+                </li>
+            </ul>
+            <MathBlock label="Error metrics">
+                <MRow>
+                    <Mi>MAE</Mi><Mo>=</Mo>
+                    <Frac num={<>1</>} den={<>n</>}/>
+                    <span className="help-math-sum-wrap">
+                        <span className="help-math-sum">∑</span>
+                        <sub className="help-math-sum-sub">i=1…n</sub>
+                    </span>
+                    <span className="help-math-abs">|</span>
+                    <Mi>ŷ<sub>i</sub></Mi><Mo className="help-math-minus">−</Mo><Mi>y<sub>i</sub></Mi>
+                    <span className="help-math-abs">|</span>
+                </MRow>
+                <MRow>
+                    <Mi>RMSE</Mi><Mo>=</Mo>
+                    <span style={{fontSize:'1.3em',lineHeight:1,verticalAlign:'middle',color:'#cbd5e1'}}>√</span>
+                    <Frac num={<>1</>} den={<>n</>}/>
+                    <span className="help-math-sum-wrap">
+                        <span className="help-math-sum">∑</span>
+                        <sub className="help-math-sum-sub">i=1…n</sub>
+                    </span>
+                    <Mo>(</Mo><Mi>ŷ<sub>i</sub></Mi><Mo className="help-math-minus">−</Mo><Mi>y<sub>i</sub></Mi><Mo>)</Mo>
+                    <sup>2</sup>
+                </MRow>
+                <p className="help-math-caption">n = number of samples; ŷ = predicted ppb; y = true ppb</p>
+            </MathBlock>
+
+            <h4 className="ml-subhead-2">Overfitting and underfitting</h4>
+            <div className="help-theory-box">
+                <p className="help-theory-lead">The central challenge in supervised learning is finding the right model complexity:</p>
+                <ul className="help-theory-list">
+                    <li>
+                        <strong>Underfitting:</strong> the model is too simple (or undertrained) to capture the signal. Training loss and test loss are both high. Fix: more epochs, larger network, better features.
+                    </li>
+                    <li>
+                        <strong>Overfitting:</strong> the model memorises training data including its noise — training loss is low but test loss is high. The model fails on unseen captures. Fix: more data (synthetic augmentation), dropout regularisation, early stopping, or a smaller network.
+                    </li>
+                    <li>
+                        <strong>The FeNOse situation:</strong> with only 35 real captures and an MLP with hundreds of parameters, overfitting is almost guaranteed without augmentation. The training loss curve falling while validation loss levels off or rises is the diagnostic signal to watch.
+                    </li>
+                </ul>
+            </div>
+
+            <h4 className="ml-subhead-2">Train / validation / test split</h4>
+            <p className="help-eq-para">
+                <strong>Training set:</strong> data the model sees and optimises its weights against.{' '}
+                <strong>Validation set:</strong> data used to monitor generalisation during training and to choose hyperparameters (learning rate, K, network size). The model never trains directly on validation data, but choices made using it indirectly influence the final model.{' '}
+                <strong>Test set:</strong> data held out entirely until the very end — never touched during training or hyperparameter search. Performance on the test set is the only honest estimate of real-world accuracy.
+            </p>
+            <div className="ml-callout ml-callout-info">
+                <strong>FeNOse recommendation:</strong> hold all 35 real captures as the test set. Train only on synthetic data. This treats real data as the true evaluation benchmark rather than mixing it into the training pipeline.
+            </div>
+
+            <h4 className="ml-subhead-2">Feature selection — Top-K by correlation</h4>
+            <p className="help-eq-para">
+                Starting with 267 features and fewer training examples than features is dangerous — many features will be noise, and the model will learn spurious correlations. Top-K selection ranks all features by <strong>Pearson correlation with the target</strong> (log ppb for v1, raw ppb for v2) and retains the K highest-magnitude correlators. Because correlation is computed only on training examples, the test set remains uncontaminated.
+            </p>
+            <p className="help-eq-para">
+                Typical K values: 20–50. Too small: useful features are discarded. Too large: noisy features overwhelm the signal. The optimal K can be found via cross-validation, or by monitoring validation loss as K is varied.
+            </p>
+
+            <h4 className="ml-subhead-2">StandardScaler — zero-mean, unit-variance normalisation</h4>
+            <p className="help-eq-para">
+                Raw sensor features span very different numerical ranges. <code>nd_</code> values are small fractions (typically −0.1 to +0.1), while <code>d_</code> values (raw Ω changes) can be hundreds or thousands. Feeding un-scaled features to a neural network causes some weights to dominate simply because their inputs are numerically larger. StandardScaler subtracts the per-feature training mean and divides by the per-feature training standard deviation, giving each feature a mean of 0 and a variance of 1. This normalisation is computed on training data only and applied identically to validation, test, and future inference data.
+            </p>
+
+            <h4 className="ml-subhead-2">Principal Component Analysis (PCA)</h4>
+            <p className="help-eq-para">
+                PCA finds the directions in feature space (principal components) along which data varies the most. The first component points in the direction of maximum variance; each subsequent component is orthogonal to all previous ones and captures the next largest variance. By keeping only the components that explain 95% of the total variance, PCA:
+            </p>
+            <ul className="help-list">
+                <li>Removes redundancy — many FeNOse sensors respond similarly to NO, so their <code>nd_</code> features are correlated; PCA collapses these into fewer, uncorrelated components</li>
+                <li>Reduces the MLP's input dimension, lowering parameter count and overfitting risk</li>
+                <li>Produces uncorrelated inputs, which generally makes gradient descent converge faster and more reliably</li>
+            </ul>
+            <p className="help-eq-para">
+                PCA is fit on the <em>training set only</em> and applied (transform, no refit) to validation, test, and inference data using the same component vectors.
+            </p>
+
+            <h4 className="ml-subhead-2">Log-transforming the target</h4>
+            <p className="help-eq-para">
+                FeNO concentrations range from 0 to ~100 ppb, but the clinically important boundaries are at ~25 ppb and ~50 ppb. Without transformation, MSE loss disproportionately penalises large errors at high ppb values (because (100−90)² = 100 while (25−15)² = 100 too, but the latter is diagnostically far more critical). Taking <code>log(ppb + 1)</code> maps the range to approximately 0–4.6, compressing the upper end and forcing the model to optimise something closer to percentage error — which is the medically meaningful quantity. The +1 ensures log(0) is defined and equals 0.
+            </p>
+
+            <h4 className="ml-subhead-2">Adam optimiser</h4>
+            <p className="help-eq-para">
+                Adam (Adaptive Moment Estimation) adapts the learning rate separately for each weight parameter based on estimates of the first and second moments of the gradient. Compared to vanilla stochastic gradient descent, Adam converges much faster on problems with sparse or noisy gradients — which is typical of small, augmented sensor datasets. Default hyperparameters (β₁ = 0.9, β₂ = 0.999, ε = 1×10⁻⁸) work well in most cases; the main tunable knob is the global learning rate (default: 0.001).
+            </p>
+
+        </div>
+    );
+}
+
 /** User-facing formulas for the Help guide */
 function EquationsTheoryAppendix() {
     return (
@@ -419,17 +777,17 @@ function EquationsTheoryAppendix() {
                     <strong>Sensitivity (% dR/R):</strong> max |negative excursion| on min/mean in FeNO window, or mean of means on central 20–80% of FeNO rows.
                 </li>
                 <li className="help-eq-li-with-block">
-                    <strong>Separability (per row, averaged):</strong>{' '}
-                    <span className="help-math-greek">σ</span>
-                    <sub>1</sub>, <span className="help-math-greek">σ</span>
-                    <sub>2</sub> = (σ<sub>max</sub> − σ<sub>min</sub>)/2; v<sub>i</sub> = <span className="help-math-greek">σ</span>
-                    <sub>i</sub>
-                    <sup>2</sup>.
+                    <div style={{ marginBottom: '12px' }}>
+                        <strong>Separability (per row, averaged):</strong>{' '}
+                        <span className="help-math-greek">σ</span>
+                        <sub>1</sub>, <span className="help-math-greek">σ</span>
+                        <sub>2</sub> = (σ<sub>max</sub> − σ<sub>min</sub>)/2; v<sub>i</sub> = <span className="help-math-greek">σ</span>
+                        <sub>i</sub>
+                        <sup>2</sup>.
+                    </div>
                     <MathBlock label="Row separability">
                         <MRow>
-                            <Mi>
-                                S<sub>row</sub>
-                            </Mi>
+                            <Mi>S<sub>row</sub></Mi>
                             <Mo>=</Mo>
                             <Frac
                                 num={
@@ -447,78 +805,50 @@ function EquationsTheoryAppendix() {
                             />
                         </MRow>
                     </MathBlock>
-                </li>
-                <li>
-                    <strong>Signal spread:</strong> mean of <span className="help-math-abs">|</span>σ<sub>max</sub> − σ<sub>min</sub>
-                    <span className="help-math-abs">|</span> over the same rows.
+                    <p className="help-eq-note" style={{ marginTop: '8px' }}>
+                        <strong>Physics Tip:</strong> When μ₁ ≈ μ₂, the sensor is "blind" to the gas change. When spread (v) is high, the sensor is "noisy." The best sensors have high μ separation and low variance.
+                    </p>
                 </li>
             </ul>
 
-            <h3 className="help-subheading">Pearson correlation <em>r</em></h3>
-            <p className="help-eq-para">For <em>n</em> pairs (x<sub>i</sub>, y<sub>i</sub>):</p>
-            <MathBlock label="Pearson correlation coefficient">
-                <MRow className="help-math-row-multiline">
-                    <Mi>r</Mi>
-                    <Mo>=</Mo>
-                    <Frac
-                        num={
-                            <span className="help-math-pearson-num">
-                                n <span className="help-math-sum">∑</span> x<sub>i</sub>y<sub>i</sub>
-                                <span className="help-math-minus"> − </span>
-                                <span className="help-math-parens">
-                                    (<span className="help-math-sum">∑</span> x<sub>i</sub>)
-                                </span>
-                                <span className="help-math-parens">
-                                    (<span className="help-math-sum">∑</span> y<sub>i</sub>)
-                                </span>
-                            </span>
-                        }
-                        den={
-                            <span className="help-math-pearson-den">
-                                <span className="help-math-sqrt-prefix">√</span>
-                                <span className="help-math-sqrt-content">
-                                    <span className="help-math-bracket-pair">
-                                        <span>
-                                            n<span className="help-math-sum">∑</span> x<sub>i</sub>
-                                            <sup>2</sup>
-                                            <span className="help-math-minus"> − </span>
-                                            <span className="help-math-parens">
-                                                (<span className="help-math-sum">∑</span> x<sub>i</sub>)<sup>2</sup>
-                                            </span>
-                                        </span>
-                                        <span className="help-math-times-between">·</span>
-                                        <span>
-                                            n<span className="help-math-sum">∑</span> y<sub>i</sub>
-                                            <sup>2</sup>
-                                            <span className="help-math-minus"> − </span>
-                                            <span className="help-math-parens">
-                                                (<span className="help-math-sum">∑</span> y<sub>i</sub>)<sup>2</sup>
-                                            </span>
-                                        </span>
-                                    </span>
-                                </span>
-                            </span>
-                        }
-                    />
+            <h3 className="help-subheading">Principal Component Analysis (PCA) — Variance Maximization</h3>
+            <p className="help-eq-para">
+                PCA is the fundamental cornerstone of <strong>Chemometrics</strong>. In a 64-sensor array, sensors close to each other often respond identically. PCA identifies the "Directions of Variation" and collapses the 64 sensors into a few "Principal Components" that capture 95% of the information.
+            </p>
+            <MathBlock label="PCA projection">
+                <MRow>
+                    <Mi><strong>z</strong></Mi><Mo>=</Mo>
+                    <Mi><strong>V</strong><sub>:,1…d</sub><sup>T</sup></Mi>
+                    <Mo>(</Mo>
+                    <Mi><strong>x</strong></Mi><Mo className="help-math-minus">−</Mo><Mi><strong>μ</strong></Mi>
+                    <Mo>)</Mo>
                 </MRow>
+                <p className="help-math-caption">
+                    z = Compressed feature vector; V = Eigenvectors (Principal Directions); x = Scaled original features.
+                </p>
             </MathBlock>
-            <p className="help-eq-note">Relates baseline resistance to sensitivity or separability in the Sensitivity view.</p>
 
-            <h3 className="help-subheading">FeNOse / ML Studio (reference)</h3>
-            <ul className="help-list help-eq-list">
+            <ul className="help-list help-eq-list" style={{ marginTop: '24px' }}>
                 <li>
-                    <strong>Inference:</strong> a small MLP predicts NO concentration (ppb) from FeNOse-style event slices and sensor columns A1–H8. Weights live in workspace folder <code>Model/</code>, not in the site bundle.
-                </li>
-                <li>
-                    <strong>Training v1:</strong> top‑K feature selection and scaling; <strong>v2:</strong> adds PCA on scaled features before the same style of network. See the Training tab for hyperparameters.
-                </li>
-                <li>
-                    <strong>Other pages</strong> (Separability, etc.) may use their own PCA/t‑SNE or stats—those are unrelated to ML Studio.
+                    <strong>Other pages:</strong> Separability, Aroma PCA, and t-SNE may use their own PCA or statistics — those are computed independently and are unrelated to ML Studio's model pipeline.
                 </li>
             </ul>
+
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Fundamentals of Digital Olfaction</h3>
+            <div className="help-theory-box">
+                <p className="help-theory-lead"><strong>Why 64 Sensors?</strong></p>
+                <p className="help-eq-para">
+                    In biology, the mammalian nose doesn't have one "gold" sensor for each smell. Instead, it uses a large array of hundreds of <strong>semi-selective</strong> receptors. A single odorant molecule might trigger many different receptors to varying degrees, creating a unique <strong>combinatorial code</strong> (a fingerprint).
+                </p>
+                <p className="help-eq-para">
+                    FeNOse mimics this by using 64 different metal-oxide (MOx) formulations. Some are highly sensitive to Nitric Oxide (NO), while others respond more to humidity, alcohols, or sulfur compounds. By analyzing the <em>entire array</em>, the ML model can "filter out" the background interference and isolate the true FeNO signal.
+                </p>
+            </div>
         </div>
     );
 }
+
 
 /**
  * User guide sections: id = anchor for table of contents
@@ -528,14 +858,19 @@ const GUIDE_SECTIONS = [
         id: 'overview',
         icon: BookOpen,
         title: 'Overview',
-        subtitle: 'What NozePlot is',
+        subtitle: 'The Digital Olfaction Workspace',
         intro:
-            'NozePlot (NozePlot4) is a browser-based analytics workspace for sensor and CSV data. Everything runs on your computer in the browser—your files stay on your device and are not uploaded to a server.',
+            'NozePlot (NozePlot4) is a next-generation analytics platform for **Digital Olfaction**—the science of converting chemical signals into digital insights. It provides a browser-based, privacy-first environment for processing high-dimensional sensor data.',
+        fundamentals: [
+            '**The Sensing Principle:** Most sensors in the app are "Chemiresistors." They change their electrical resistance when gas molecules adsorb onto their surface.',
+            '**Browser-First Compute:** By running all logic (including ML) locally, we ensure your proprietary chemical data never leaves your machine, while providing a hardware-accelerated UI.',
+            '**Data Privacy:** Zero cloud-storage of your CSV files ensures compliance with strict research and IP requirements.',
+        ],
         implemented: [
             'Multi-file workspace with folders, search, and compare selection',
             'CSV and Excel (.xlsx / .xls) import and parsing',
             'Session save/restore via .noze workspace files',
-            '**AU capture:** live USB serial capture from supported aroma units (Chrome / Edge) saves straight into the workspace',
+            '**AU capture:** live USB serial capture from supported aroma units (Chrome / Edge)',
         ],
         steps: [
             'On first launch, enter your display name (stored locally).',
@@ -544,68 +879,25 @@ const GUIDE_SECTIONS = [
         ],
     },
     {
-        id: 'sign-in',
-        icon: Info,
-        title: 'Sign-in',
-        subtitle: 'Required — Google + allowed email domain',
-        intro:
-            'The app **requires** **Google sign-in** (Firebase). Only verified emails on allowed domains (for example <strong>@noze.ca</strong>) can use the workspace. There is no anonymous or offline mode.',
-        implemented: [
-            'Firebase web config is supplied at **build time** (see <code>.env.example</code>): <code>VITE_FIREBASE_*</code> plus <code>VITE_ALLOWED_EMAIL_DOMAIN</code> or <code>VITE_ALLOWED_EMAIL_DOMAINS</code>',
-            '**Google** sign-in: Firebase must mark the email verified (normal for Google); domain must match the allow list',
-            '**Email / password**: register with an allowed-domain address; Firebase sends a **verification link** — you cannot use the app until you open that link and click **I’ve verified**',
-            'If the Google popup is blocked, use **Continue with Google (full page)**; the sign-in layout scales for small screens and safe areas (notches)',
-            'A session bar shows the signed-in email and **Sign out**',
-        ],
-        steps: [
-            'Open the app and either **Continue with Google** or sign in with **email + password** (after registering).',
-            'Use an address on the allowed domain (e.g. <code>name@noze.ca</code>).',
-            'If you registered by email, open the Firebase verification message, then return and click **I’ve verified — continue**.',
-            'Deployers: enable **Google** and **Email/Password** in Firebase, set authorized domains and env vars, then rebuild.',
-        ],
-    },
-    {
-        id: 'workspace',
-        icon: FolderOpen,
-        title: 'Workspace & files',
-        subtitle: 'Upload, folders, main vs compare',
-        intro:
-            'The sidebar lists every file in your workspace. You can organize uploads into custom folders, search by name, and export or restore the whole session.',
-        implemented: [
-            'Upload single files or an entire folder (preserves paths where supported)',
-            'Create named folders and upload into a specific folder',
-            'Main file: click once to plot as primary; multi-select adds comparison files',
-            'Select all / clear compare for batch comparison on Dashboard and analysis pages',
-            'Delete individual files, bulk delete, or clear entire workspace',
-            'Tooltips on files when hovering for quick metadata',
-            '**Export CSV:** download icon on a file row saves that workspace file as CSV',
-            '**Folder ZIP:** from a folder’s menu, download all files in that folder as CSV files inside a ZIP',
-            '**All DataFiles ZIP:** workspace header action downloads every data file at the root as CSV inside a ZIP',
-        ],
-        steps: [
-            'Click **Upload Files** or **Upload Folder** in the sidebar.',
-            'Click a file to set it as the **main** dataset (charts use this first).',
-            'Ctrl/Cmd-click or use your app’s multi-select to add **comparison** files (where supported).',
-            'Use **Export** (cloud-down icon) to save a `.noze` snapshot; **Restore** (monitor-up) to reload one.',
-        ],
-    },
-    {
         id: 'dashboard',
         icon: LayoutDashboard,
         title: 'Dashboard',
-        subtitle: 'Raw time-series grid',
+        subtitle: 'Raw Time-Series Analysis',
         intro:
-            'Shows **raw** numeric columns from the main file (and merged comparison series where configured). This is for quick visual inspection—not baseline-normalized data.',
+            'The Dashboard is your primary window into the **raw physics** of the experiment. It visualizes the absolute electrical state of every sensor in the array simultaneously.',
+        fundamentals: [
+            '**Absolute Resistance (Ω):** This is the raw "at-rest" value of a sensor. It depends on the sensor\'s material lot, age, and temperature.',
+            '**Baseline Drift:** Sensors naturally drift over minutes or hours. The dashboard helps you identify if a sensor has "stabilized" before starting a measurement.',
+            '**Cross-Sensor Correlation:** High-quality arrays show synchronous movement across related sensors. Random "spikes" in one sensor usually indicate electrical noise rather than chemical signal.',
+        ],
         implemented: [
-            'Automatic X-axis: uses a date/time/timestamp column if column names match (date, time, stamp, etc.); otherwise uses sample index **1, 2, 3…**',
-            'Grid of mini charts per numeric series; click a chart to focus and zoom',
-            'Zoom slider, brush, and wheel zoom on the focused chart',
-            'Comparison overlay: merge by matching X values or row index when keys differ',
-            'Multi-file picker to choose which files to compare',
+            'Automatic X-axis detection (date/time/timestamp vs sample index)',
+            'Grid of mini charts per numeric series; click to focus and zoom',
+            'Comparison overlay: merge multiple files by matching time or index',
+            'Interactive brush and wheel zoom for high-resolution inspection',
         ],
         steps: [
             'Select a main file in the sidebar.',
-            'Stay on **Dashboard** (default when a file is selected).',
             'Optionally add comparison files and pick series from the compare UI.',
             'Click a small chart to open the zoomable single-chart view.',
         ],
@@ -614,302 +906,244 @@ const GUIDE_SECTIONS = [
         id: 'normalize',
         icon: Activity,
         title: 'Normalize',
-        subtitle: 'Baseline & % change',
+        subtitle: 'The Physics of Relative Response',
         intro:
-            'Interactive baseline selection and normalization to percent change relative to a chosen window. Supports the main file plus comparison files on one chart.',
+            'In chemical sensing, **absolute values are deceptive**. Normalization converts raw resistance into a **dimensionless ratio**, which is the fundamental unit of chemical sensitivity.',
+        fundamentals: [
+            '**Why dR/R?** A sensor shifting from 10kΩ to 9kΩ (10% drop) is physically equivalent to a sensor of the same type shifting from 100kΩ to 90kΩ. Normalization removes the "baseline bias" and allows you to compare different sensors directly.',
+            '**Fractional Change:** By calculating `(Current - Baseline) / Baseline`, we isolate the chemical interaction from the electronic background.',
+            '**Thermal Stability:** Because baseline windows usually occur at the start of a run, normalization "zeros out" the impact of ambient temperature at the moment the test began.',
+        ],
         implemented: [
-            'Drag on the chart to define a baseline region (highlighted band)',
-            'Normalized view shows % change from baseline mean per series',
-            'Brush for horizontal navigation on long runs',
-            'All traces for a given concentration use the **same color**; labels come from **ppb/ppm** in the filename, concentration-like CSV columns, or—when folder uploads preserve paths—a built-in map that matches session-folder names to curated normalized exports',
-            'Baseline window **stays** when you add or remove compare files or toggle concentration chips; it **resets** when you pick another main file, when the chart switches between a time column and index **1, 2, 3…**, or when recovery-event trimming is turned on or off',
-            'Optional recovery filtering on event/phase columns; optional moving average or Gaussian smoothing',
-            'Concentration chips limit which levels appear when those levels can be parsed',
-            'Same X-axis rules as Dashboard (time column if detected, else index 1, 2, 3…)',
+            'Interactive baseline selection via horizontal drag (highlighted band)',
+            'Automatic concentration parsing and color-coordinated traces',
+            'Moving average and Gaussian smoothing to enhance Signal-to-Noise Ratio (SNR)',
+            'Recovery filtering to remove "tail" data and focus on the peak response',
         ],
         steps: [
-            'Open **Normalize** with a file selected.',
-            'Drag horizontally on the plot to set the baseline interval.',
-            'Add comparison files; the baseline band is kept so you do not have to reselect it for each new file.',
-            'Use concentration chips when shown to choose which levels are plotted.',
-            'Toggle normalized vs raw as provided by the UI.',
+            'Open **Normalize** and drag on the chart to set the baseline interval.',
+            'Add comparison files; the baseline window is automatically applied to all.',
+            'Toggle between "Normalized" and "Raw" to see the impact of the baseline shift.',
         ],
     },
     {
         id: 'aroma',
         icon: LineChart,
         title: 'Aroma analysis',
-        subtitle: 'Batch pipeline & plots',
+        subtitle: 'Pattern Recognition & Fingerprinting',
         intro:
-            'Batch processing for aroma/sensor-style datasets: filtering, optional event-based truncation (e.g. FeNO/breath windows), moving average, baseline normalization from RFC/ambient rows or first N points, and many derived plots.',
+            'Aroma analysis moves from looking at single sensors to looking at the **Shape of the Array**. This is where we extract the "chemical fingerprint" of a sample.',
+        fundamentals: [
+            '**Combinatorial Sensing:** We don\'t rely on one "best" sensor. Different chemical elements (analytes) produce different <em>patterns</em> across the 64-sensor grid.',
+            '**Phase Truncation:** By focusing only on the "Window" phase (the steady-state plateau), we remove the kinetic rise-time noise and get a more stable estimate of concentration.',
+            '**Environmental Decoupling:** Uses temperature and humidity data to compute **Absolute Humidity (g/m³)**, which is often a better predictor of sensor interference than Relative Humidity.',
+        ],
         implemented: [
-            'Configurable sensing element and temperature/humidity column patterns',
-            'Moving-average filter window; baseline point count for automatic normalization',
-            'Optional removal of non-breath event blocks when event columns exist; FeNO truncation (seconds × sample rate heuristic)',
-            'Concentration labels from filenames (**ppb** pattern, ALAAC-style), optional in-file columns, or folder paths that match the app’s bundled concentration map (same idea as Normalize)',
-            'Plots: time-series averages, monotonic curves, separations by unit, environmental overlays (T, RH, absolute humidity), etc.',
-            'Single-plot modal: zoom, reset, **Download PNG** (with Y-axis label)',
-            '**Folder compare:** on the Aroma page, open the full-screen **folder compare** view for batch side-by-side work; closing it returns you to Aroma',
+            'Batch pipeline processing for multiple files simultaneously',
+            'Automatic RFC (Reference) baseline extraction',
+            'Plots for Time-series, Monotonicity, and Environmental Overlays',
+            'PNG export with axes and labels for report generation',
         ],
         steps: [
-            'Select main file (and comparisons if batch note says to add them on Dashboard first).',
-            'Adjust sidebar options (elements, temp/hum columns, filter, baseline points, toggles).',
-            'Run **Run Pipeline & Plot** (or equivalent).',
-            'Click a plot card to open fullscreen zoom; use **Download PNG** to export.',
-        ],
-    },
-    {
-        id: 'aroma-unit-capture',
-        icon: Usb,
-        title: 'AU capture',
-        subtitle: 'SiAC / aroma unit over USB (Web Serial)',
-        intro:
-            'Record live JSON lines from a supported **SiAC / aroma unit** over USB using the browser’s **Web Serial** API. Captures are normalized to table rows and can be **saved into the workspace** as files for Aroma, Normalize, and other tools.',
-        implemented: [
-            '**Browser:** Chromium-based desktop browsers with Web Serial (e.g. **Chrome**, **Edge**). Not available in Firefox, Safari, or typical mobile browsers',
-            '**Device profiles** (e.g. SIAC32_V2) set baud rate and how lines are parsed into columns',
-            'Connect to a port, optional **scan** to list candidate devices, timed capture with progress, stop early, and **save to workspace** with generated filenames (including serial-based folder naming when detected)',
-            '**Multi-AU:** select several discovered units and run the **same timed window** in parallel',
-            'The capture module **stays mounted** while you use other pages so an in-progress recording is not torn down when you navigate away (you can return to AU capture to monitor or finish)',
-        ],
-        steps: [
-            'Connect the unit with USB and use **Chrome or Edge** on desktop.',
-            'Open **AU capture** from the sidebar (next to SE Analysis).',
-            'Choose the profile, **Connect** (or **Scan** and pick a device), set duration, then start capture.',
-            'When done, **Save to workspace**; select the new file in the sidebar and open **Aroma** or another analysis page.',
+            'Select files and adjust pipeline settings (filtering, smoothing).',
+            'Run **Run Pipeline & Plot** to generate the analysis suite.',
+            'Use the "Folder Compare" view for side-by-side batch evaluation.',
         ],
     },
     {
         id: 'separability',
         icon: Target,
         title: 'Separability analysis',
-        subtitle: 'Element discrimination metrics',
+        subtitle: 'Metric of Discrimination Power',
         intro:
-            'Computes separability-style scores between conditions (e.g. concentrations) per sensing element, with visualizations such as heatmaps, radar-style views, and scatter summaries.',
+            'Separability asks the core question: **Can we actually see the difference?** It provides a statistical score for how well an element distinguishes between two states.',
+        fundamentals: [
+            '**Signal-to-Spread Ratio:** A high "Signal" (difference in means) is useless if the "Noise" (variance) is higher. Separability penalizes noisy data.',
+            '**The Epsilon Term (ε):** A small stability factor added to prevent division by zero when sensors are perfectly stable, ensuring robust scoring.',
+            '**Discriminative Power:** Use this to rank your sensors. High-separability sensors are candidates for "Top-K" feature selection in ML models.',
+        ],
         implemented: [
-            'Pairwise separability statistics (variance-aware separation between groups)',
-            'Baseline resistance and stability-style summaries per element',
-            'Interactive charts with tooltips; optional panel layout and zen/sidebar modes where wired',
-            'Batch-oriented workflows when multiple files are available from workspace',
+            'Pairwise separability heatmaps and radar views',
+            'Variance-aware comparison between concentrations',
+            'Statistical ranking of sensors based on discrimination performance',
         ],
         steps: [
-            'Load data and open **Separability** from the sidebar.',
-            'Configure any on-page filters or element scope.',
-            'Run analysis and inspect charts; use plot interactions as on other pages.',
-        ],
-    },
-    {
-        id: 'sensitivity',
-        icon: Zap,
-        title: 'Sensitivity analysis',
-        subtitle: '3D-style performance views',
-        intro:
-            'Visualizes sensitivity and related metrics across elements and conditions; supports trajectory-style views to see how responses evolve across concentrations or trials.',
-        implemented: [
-            'Aggregate sensitivity visualizations for the loaded dataset',
-            'Trajectory toggles where implemented (connected series across conditions)',
-            'Chart export or zoom patterns consistent with other analysis pages',
-        ],
-        steps: [
-            'Select your main CSV and open **Sensitivity**.',
-            'Use on-page toggles (e.g. trajectories) to change the view.',
-            'Interpret axes using chart labels and legends.',
-        ],
-    },
-    {
-        id: 'recovery',
-        icon: TrendingUp,
-        title: 'Recovery analysis',
-        subtitle: 'Exposure & recovery dynamics (sidebar: Drift Map)',
-        intro:
-            'Focuses on defining exposure vs recovery phases (via keywords in event or similar columns), computing recovery metrics, and plotting sensor and environmental traces over time.',
-        implemented: [
-            'Configurable exposure/recovery keywords; optional hardware recovery handling',
-            'Humidity/temperature column patterns; optional filter to files with known **ppb** in filename',
-            'Chronological ordering of batch files when timestamps appear in names',
-            'Recovery result tables and plots; chrono plots with environmental overlays (e.g. absolute humidity)',
-            'PNG export for charts where implemented',
-        ],
-        steps: [
-            'Add main + compare files with consistent naming if using ppb filtering.',
-            'Set sensing elements and temp/humidity columns to match your CSV headers.',
-            'Tune exposure/recovery keywords to match your event labels.',
-            'Run processing and open individual plots for detail.',
-        ],
-    },
-    {
-        id: 'manufacturing',
-        icon: Factory,
-        title: 'Manufacturing variation',
-        subtitle: 'Lot / concentration consistency',
-        intro:
-            'Summarizes variation across files or concentration buckets—useful for manufacturing or repeatability studies using the same column naming conventions as other aroma-style tools.',
-        implemented: [
-            'Concentration filter and optional “known file” (ppb in name) filtering',
-            '**Baseline sampling window (points)** for R0 extraction—adjustable slider; the same value is kept in sync with **Aroma baseline points** (shared preference)',
-            'Bar/line/scatter style summaries of spread across elements',
-            'Batch processing across workspace files selected for compare',
-        ],
-        steps: [
-            'Open **Mfg Variation** with relevant files selected.',
-            'Set sensing element patterns and optional concentration filter.',
-            'Run analysis and review variation charts.',
-        ],
-    },
-    {
-        id: 'csv-plotter',
-        icon: FileSpreadsheet,
-        title: 'SE Analysis (CSV plotter)',
-        subtitle: 'Workspace files or ad-hoc upload',
-        intro:
-            'Plot CSV data in a dedicated view. The sidebar label is **SE Analysis**; you can **pick files already in the workspace** (including inside folders) or **upload** CSV / Excel for a one-off chart without changing the global main file.',
-        implemented: [
-            'Browse **workspace files and folders** from the page, or upload CSV / Excel from disk',
-            'Composed/line charts with column search, X-axis choice, and zoom controls (patterns similar to Aroma plot cards)',
-            'Does not require the Dashboard **main** file to be set to the same dataset',
-        ],
-        steps: [
-            'Open **SE Analysis** from the sidebar.',
-            'Either attach a workspace file / folder from the in-page browser or **upload** a file.',
-            'Choose X axis and series, then use zoom and export options on the page.',
-        ],
-    },
-    {
-        id: 'gas-design',
-        icon: Network,
-        title: 'Gas system design',
-        subtitle: 'Flow diagram editor',
-        intro:
-            'Interactive node-based editor for gas delivery / plumbing style diagrams using React Flow.',
-        implemented: [
-            'Drag-and-drop style nodes and connections for system layout',
-            'Local editing in the browser (diagram state is page-local unless you screenshot/export)',
-        ],
-        steps: [
-            'Open **Gas Design**.',
-            'Add nodes and connect edges to model your system.',
-            'Use the page’s controls for layout or export if available.',
-        ],
-    },
-    {
-        id: 'dilution',
-        icon: FlaskConical,
-        title: 'Dilution math',
-        subtitle: 'Gas dilution calculator',
-        intro:
-            'Calculator for dilution-related quantities (mass flows, concentrations, and related gas-mixing math).',
-        implemented: [
-            'Dedicated inputs for dilution parameters and computed outputs',
-            'Static reference math—no dataset required',
-        ],
-        steps: [
-            'Open **Dilution**.',
-            'Enter known quantities in the fields provided.',
-            'Read calculated results from the page.',
-        ],
-    },
-    {
-        id: 'polymer-cb',
-        icon: Blend,
-        title: 'Polymer–CB mix',
-        subtitle: 'wt% ↔ volume %',
-        intro:
-            'Converts **weight percent carbon black** to **volume fraction** (and **phr**) for a two-component polymer composite, using **ideal volume additivity** and densities you enter (g/cm³).',
-        implemented: [
-            'Forward: wt% CB + ρ_CB + ρ_polymer → φ_CB, volume % CB, phr',
-            'Inverse: volume % CB → wt% CB and phr',
-            'Defaults are editable (e.g. ρ_CB ≈ 1.85, ρ_polymer ≈ 0.95 g/cm³)—tune to your materials',
-        ],
-        steps: [
-            'Open **Polymer–CB** in the sidebar tool row (under Dilution).',
-            'Set carbon black and polymer densities.',
-            'Choose **wt% → vol%** or **vol% → wt%** and enter the known value.',
+            'Load multiple concentrations into the workspace.',
+            'Open **Separability** to see which sensors are the most "honest" reporters of gas change.',
         ],
     },
     {
         id: 'ml-studio',
         icon: Brain,
         title: 'ML Studio',
-        subtitle: 'FeNOse — inference & training',
+        subtitle: 'Advanced Prediction & Generalization',
         intro:
-            '**ML Studio** is the FeNOse workflow only: run a concentration model on a loaded capture, or train/export new weights. There is no separate “Preprocessing & Targets” column—models are kept in workspace folder **Model/** (train in-app or upload the JSON pair).',
+            'ML Studio uses Neural Networks to map complex sensor patterns to precise gas concentrations (ppb). It solves the "Cross-Sensitivity" problem using non-linear math.',
+        fundamentals: [
+            '**The Challenge of "Small Data":** Biological data is expensive to collect. We use **Synthetic Augmentation** to teach the model about variance without needing thousands of real human samples.',
+            '**Dimensionality Reduction (PCA):** In a 64-sensor array, many sensors are redundant. PCA collapses these into "Principal Components," preventing the model from "overfitting" on noise.',
+            '**Log-Space Optimization:** We train models to minimize relative error (log-space) rather than absolute error, because a 5 ppb error at low levels is more critical than at high levels.',
+        ],
         implemented: [
-            '**Inference:** pick a model from <code>Model/</code> and a loaded CSV/Excel capture; predict ppb',
-            '**Training:** choose labelled workspace files (names containing <code>ppb</code>); set v1/v2 and hyperparameters; artifacts save into <code>Model/</code> and optional download',
-            'Loss curve during/after training; MAE/RMSE summary when training completes',
+            'Training pipelines (v1: Correlation-based, v2: PCA-based)',
+            'Local TensorFlow.js model training and weights management',
+            'Physics-informed synthetic data generator with calibration cloning',
+            'Inference engine for real-time ppb prediction on new CSVs',
         ],
         steps: [
-            'Upload FeNOse-style captures and (if needed) create folder <code>Model/</code> in the sidebar.',
-            'Open **ML Studio** (brain icon): use **Inference** to predict, or **Training** to build a model.',
-            'After training, use the same saved model name/version under Inference.',
+            'Generate 30-50 synthetic replicates per concentration to "pre-train" your model.',
+            'Run the Training pipeline and watch the Loss Curve.',
+            'Use the Inference tab to validate your model against high-quality real samples.',
+        ],
+        CustomContent: MLStudioDeepDive,
+    },
+    {
+        id: 'recovery',
+        icon: TrendingUp,
+        title: 'Recovery analysis',
+        subtitle: 'Adsorption & Desorption Kinetics',
+        intro:
+            'Sensor "Recovery" is the time it takes for gas molecules to unbind from the sensor surface. This section analyzes the **speed and completeness** of that return to baseline.',
+        fundamentals: [
+            '**Hysteresis:** Sensors often return to baseline slower than they rose. This "memory effect" is a critical factor in how quickly you can run the next test.',
+            '**Drift Mapping:** By looking at the "post-exposure" level, we can calculate the drift or "poisoning" of the sensor material.',
+            '**Kinetic Constants:** The shape of the recovery curve (exponential decay) can reveal the binding energy of the gas to the sensor surface.',
+        ],
+        implemented: [
+            'Exposure vs. Recovery phase identification using keywords',
+            'Chrono-plots showing return-to-base dynamics over multiple trials',
+            'Environmental tracking to see if humidity spikes delay sensor recovery',
+        ],
+        steps: [
+            'Upload a long file containing multiple exposure/purge cycles.',
+            'Set keywords (e.g., "Ambient", "FeNO") to help the app slice the data.',
         ],
     },
     {
-        id: 'calculator',
-        icon: Calculator,
-        title: 'Calculator',
-        subtitle: 'Floating tool',
+        id: 'dilution',
+        icon: FlaskConical,
+        title: 'Dilution math',
+        subtitle: 'Mastering the Gas Mix',
         intro:
-            'A popup scientific-style calculator available from the sidebar without leaving your current page.',
+            'Precision sensing requires precision sources. This tool handles the mass-balance math needed to create specific gas concentrations in the lab.',
+        fundamentals: [
+            '**Conservation of Mass:** Flow rate math assumes that gas molecules are neither created nor destroyed during mixing.',
+            '**MFC Scaling:** Mass Flow Controllers (MFCs) are often calibrated for N2. The tool helps you calculate the correct setpoints for varied carrier gases.',
+            '**Concentration Scaling:** `C1V1 = C2V2` — the fundamental law of dilution used to calculate the final target ppb.',
+        ],
         implemented: [
-            'Opens as overlay; toggle from calculator icon in the sidebar tool row',
-            'Independent of selected dataset',
+            'Multi-stage gas dilution calculator',
+            'Support for Mass Flow Controller (MFC) setpoint derivation',
+            'Common gas constants for correction factors',
         ],
         steps: [
-            'Click the **calculator** icon in the sidebar (next to Dilution / ML shortcuts).',
-            'Dismiss the panel when finished.',
+            'Enter your source tank concentration and target ppb.',
+            'The tool provides the flow rates needed for your dilution system.',
         ],
     },
     {
-        id: 'workspace-export',
-        icon: DownloadCloud,
-        title: 'Workspace export & restore',
-        subtitle: '.noze files',
+        id: 'gas-design',
+        icon: Network,
+        title: 'Gas system design',
+        subtitle: 'Fluidic Architecture',
         intro:
-            'Saves your current setup—main file, comparison files, and which page you were on—into a single downloadable <strong>.noze</strong> file. Restoring opens that layout again after a refresh.',
+            'The physical "plumbing" of a gas system impacts the signal. This editor helps you document the topology of your delivery system.',
+        fundamentals: [
+            '**Dead Volume:** Unused space in pipes causes "smearing" of the gas signal. Mapping your system helps identify slow-response bottlenecks.',
+            '**Flow Path Topology:** Understanding where pressure drops occur and how gas reaches the sensor array is critical for troubleshooting "laggy" data.',
+            '**Documenting the Rig:** A stable rig is a stable signal. Use the diagram to version your experimental setups.',
+        ],
         implemented: [
-            'Export packs your workspace layout and references to the files you had loaded',
-            'Import applies the saved layout; the browser reloads once to put everything back in place',
-            'Your uploaded files must still be present in the workspace after restore (re-upload if you cleared them)',
+            'Node-based editor (React Flow) for plumbing diagrams',
+            'Configurable connectors for MFCs, Valves, Tanks, and Sensors',
+            'Visual documentation of experimental setup',
         ],
         steps: [
-            'Click **Export** (green cloud) in the workspace header when files exist.',
-            'Save the `.noze` file somewhere safe.',
-            'Later, click **Restore** (purple monitor) and choose the same `.noze` file.',
-            'If you removed files from the workspace, add them again, then restore if needed.',
+            'Drag nodes from the palette to model your mass-flow rig.',
+            'Connect components to show the flow path from tanks to the array.',
+        ],
+    },
+    {
+        id: 'manufacturing',
+        icon: Factory,
+        title: 'Manufacturing variation',
+        subtitle: 'Repeatability & Quality Control',
+        intro:
+            'Every sensor is slightly different. This view quantifies the "Batch Effect" across hundreds of sensors or dozens of devices.',
+        fundamentals: [
+            '**Lot Variation:** Differences in ink thickness or firing temperature cause "Lot-to-Lot" variation.',
+            '**Coefficient of Variation (CV):** A standard measure of precision. Lower CV means your sensor process is more stable and repeatable.',
+            '**Statistical Envelopes:** By looking at the Min/Max bands, you can set "Gating" criteria to reject bad sensors before they reach the customer.',
+        ],
+        implemented: [
+            'Variation summaries across files and concentration buckets',
+            'CV calculations per element across multiple runs',
+            'Statistical spread visualizations (error bars, box summaries)',
+        ],
+        steps: [
+            'Select a large batch of baseline files.',
+            'Run analysis to identify "outlier" sensors that fall outside the normal spread.',
+        ],
+    },
+    {
+        id: 'aroma-unit-capture',
+        icon: Usb,
+        title: 'AU capture',
+        subtitle: 'Real-Time Hardware Interfacing',
+        intro:
+            'Live data acquisition directly from the sensor hardware. This section bridges the gap between physical sensors and digital data.',
+        fundamentals: [
+            '**Serial Communication (UART):** Data is streamed bit-by-bit from the device over USB.',
+            '**Parsing Heuristics:** The app identifies JSON packets or byte-streams and maps them to a spreadsheet-like CSV format in real-time.',
+            '**Sampling Rate:** The "heartbeat" of your data. High sampling (e.g. 10Hz) captures fast kinetics but creates larger files.',
+        ],
+        implemented: [
+            'Web Serial API integration for browser-based USB capture',
+            'Support for multi-device parallel recording',
+            'Real-time data streaming and auto-save to workspace',
+        ],
+        steps: [
+            'Connect device, pick the UART profile, and click **Connect**.',
+            'Set the duration and watch the live plot stream into your workspace.',
         ],
     },
     {
         id: 'equations-theory',
         icon: Sigma,
         title: 'Equations & statistical theory',
-        subtitle: 'Formulas behind the charts and analysis views',
+        subtitle: 'Deep-Dive: The Math Behind the Insights',
         intro:
-            'This section explains the main math in plain language: how baseline and percent change are defined, how environmental humidity is derived, what the separability score means, and how wide sensitivity tables are read.',
+            'This logic-centric section explains the exact mathematical definitions used throughout the app—from Pearson correlations to sensor slopes.',
         implemented: [
-            'Normalize: mean over your chosen X window, percent change from that mean; baseline selection persists when adding compares (see Normalize section)',
-            'Aroma: median baseline, percent change from baseline, moving average, absolute humidity from T and RH',
-            'Separability: score S from mean difference and variances (plus a small stability term ε)',
-            'Sensitivity (wide tables): baseline R₀, response size, row-wise separability from spread bands, correlation r',
-            'ML Studio (FeNOse): v1 vs v2 feature pipeline (top‑K vs PCA + scaled) before the MLP head',
+            'Normalize: fractional vs percent change definitions',
+            'Aroma: moving average, absolute humidity, and median-based baselines',
+            'Separability: detailed S-score formula with unbiased variance',
+            'ML Studio: v1/v2 pipelines and PCA eigenvectors',
         ],
         steps: [],
         equationsAppendix: true,
     },
     {
-        id: 'theory',
-        icon: Info,
-        title: 'Theory & metrics (reference)',
-        subtitle: 'How to read the numbers',
+        id: 'workspace',
+        icon: FolderOpen,
+        title: 'Workspace & files',
+        subtitle: 'Project Management Basis',
         intro:
-            'Short glossary. For full formulas see **Equations & statistical theory** above.',
-        implemented: [
-            'Baseline resistance (Ω): typical “at rest” level before or without target exposure; estimated from RFC/ambient/breath rows where applicable',
-            'Sensitivity (% ΔR/R): magnitude of relative resistance change from baseline at response (sign convention depends on page—often largest negative excursion for chemiresistors)',
-            'Separability S: mean separation between conditions relative to spread (variance-based); higher → easier to tell conditions apart',
-            'Signal spread: within-condition variability (e.g. from σ_max − σ_min bands in wide-format data); lower → tighter repeatability',
+            'Your workspace is a **Stateful Environment**. It preserves your analysis context across browser refreshes using LocalStorage and IndexedDB.',
+        fundamentals: [
+            '**Persistent State:** Settings like sensor names, filter windows, and selected models are saved to your browser database.',
+            '**.noze Archives:** These files don\'t just contain data—they contain the "Analysis Session," including which files were being compared.',
+            '**File Immutability:** The app never "edits" your original CSV files; it creates "virtual views" of the data to preserve the original findings.',
         ],
-        steps: [],
+        implemented: [
+            'Folder-based organization and batch file export',
+            'Session Save/Restore via binary `.noze` snapshots',
+            'Direct Excel to CSV conversion in the browser',
+        ],
+        steps: [
+            'Use folders to group replicates or concentrations.',
+            'Download a `.noze` session at the end of the day to backup your progress.',
+        ],
     },
 ];
 
@@ -936,12 +1170,31 @@ function SectionCard({ section, index }) {
                 )}
             </p>
 
+            {section.fundamentals && section.fundamentals.length > 0 && (
+                <div className="help-fundamentals-box">
+                    <h3 className="help-subheading">Scientific Basis & Fundamentals</h3>
+                    <ul className="help-list fundamentals-list">
+                        {section.fundamentals.map((item, i) => (
+                            <li key={i}>
+                                {item.split('**').map((part, j) =>
+                                    j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             {section.implemented && section.implemented.length > 0 && (
                 <>
-                    <h3 className="help-subheading">What is implemented</h3>
+                    <h3 className="help-subheading">Features Included</h3>
                     <ul className="help-list">
                         {section.implemented.map((item, i) => (
-                            <li key={i}>{item}</li>
+                            <li key={i}>
+                                {item.split('**').map((part, j) =>
+                                    j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+                                )}
+                            </li>
                         ))}
                     </ul>
                 </>
@@ -963,6 +1216,9 @@ function SectionCard({ section, index }) {
                     </ol>
                 </>
             )}
+
+            {/* Optional deep-dive component for sections that need rich content */}
+            {section.CustomContent && <section.CustomContent />}
         </motion.article>
     );
 }
@@ -1012,8 +1268,8 @@ const HelpPage = () => {
                 <div className="help-sections">
                     {GUIDE_SECTIONS.map((section, idx) => (
                         <SectionCard key={section.id} section={section} index={idx} />
-                    ))}
-                </div>
+                            ))}
+                        </div>
             </div>
 
             <div className="help-footer-banner">

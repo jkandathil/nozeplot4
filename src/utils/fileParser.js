@@ -5,7 +5,13 @@ export const parseFile = (fileObj) => {
     return new Promise((resolve, reject) => {
         if (!fileObj) return reject(new Error("No file provided"));
 
-        if (fileObj.data && Array.isArray(fileObj.data) && fileObj.data.length > 0) {
+        const hasRows =
+            fileObj.data &&
+            Array.isArray(fileObj.data) &&
+            fileObj.data.length > 0 &&
+            typeof fileObj.data[0] === 'object' &&
+            fileObj.data[0] !== null;
+        if (hasRows) {
             resolve({
                 id: fileObj.id,
                 fileName: fileObj.name || fileObj.fileName,
@@ -15,13 +21,20 @@ export const parseFile = (fileObj) => {
             return;
         }
 
-        if (!fileObj.file) {
-            return reject(new Error("File Blob is missing or 0 bytes! Please re-upload raw CSV."));
-        }
+        const blob = fileObj.file;
+        const blobOk = blob && typeof blob.size === 'number' && blob.size > 0;
+        const csvFallback =
+            (typeof fileObj.csvText === 'string' && fileObj.csvText.trim().length > 0 && fileObj.csvText) ||
+            (typeof fileObj.csvSnapshot === 'string' && fileObj.csvSnapshot.trim().length > 0 && fileObj.csvSnapshot) ||
+            null;
 
-        const isExcel = fileObj.name.endsWith('.xlsx') || fileObj.name.endsWith('.xls');
+        const baseName = fileObj.name || fileObj.fileName || '';
+        const isExcel = baseName.endsWith('.xlsx') || baseName.endsWith('.xls');
 
         if (isExcel) {
+            if (!blobOk) {
+                return reject(new Error("File Blob is missing or 0 bytes! Please re-upload raw CSV."));
+            }
             const reader = new FileReader();
             reader.onload = (e) => {
                 try {
@@ -57,16 +70,20 @@ export const parseFile = (fileObj) => {
                 }
             };
             reader.onerror = (error) => reject(error);
-            reader.readAsBinaryString(fileObj.file);
+            reader.readAsBinaryString(blob);
         } else {
-            Papa.parse(fileObj.file, {
+            const papaSource = blobOk ? blob : csvFallback;
+            if (!papaSource) {
+                return reject(new Error("File Blob is missing or 0 bytes! Please re-upload raw CSV."));
+            }
+            Papa.parse(papaSource, {
                 header: true,
                 dynamicTyping: true,
                 skipEmptyLines: true,
                 complete: (results) => {
                     resolve({
                         id: fileObj.id,
-                        fileName: fileObj.name,
+                        fileName: fileObj.name || fileObj.fileName,
                         data: results.data,
                         meta: results.meta
                     });

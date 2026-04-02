@@ -535,3 +535,208 @@
 .help-eq-list li {
     margin-bottom: 10px;
 }
+
+/* ── ML Studio deep-dive guide ───────────────────────────────────── */
+.ml-guide-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+}
+
+/* Phase grid (3 boxes side by side) */
+.ml-phase-grid {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0 0 18px 0;
+}
+
+.ml-phase-card {
+    flex: 1;
+    min-width: 150px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(15, 23, 42, 0.55);
+}
+
+.ml-phase-card.ml-phase-ambient { border-color: rgba(56, 189, 248, 0.28); }
+.ml-phase-card.ml-phase-feno   { border-color: rgba(129, 140, 248, 0.28); }
+.ml-phase-card.ml-phase-window { border-color: rgba(52, 211, 153, 0.28); }
+
+.ml-phase-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: rgba(56, 189, 248, 0.12);
+    color: #38bdf8;
+    margin-bottom: 7px;
+}
+
+.ml-phase-name {
+    display: block;
+    font-size: 0.83rem;
+    color: #f1f5f9;
+    margin-bottom: 7px;
+    font-weight: 600;
+}
+
+.ml-phase-desc {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #94a3b8;
+    line-height: 1.55;
+}
+
+.ml-phase-arrow {
+    color: #475569;
+    font-size: 1.5rem;
+    align-self: center;
+    flex-shrink: 0;
+    padding: 0 2px;
+}
+
+/* Pipeline flow: horizontal boxes with arrows */
+.ml-pipeline-flow {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin: 0 0 14px 0;
+}
+
+.ml-pipeline-step {
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    font-size: 0.78rem;
+    color: #cbd5e1;
+    line-height: 1.4;
+    text-align: center;
+}
+
+.ml-pipeline-step strong {
+    display: block;
+    color: #f1f5f9;
+    font-size: 0.82rem;
+    margin-bottom: 2px;
+}
+
+.ml-pipeline-step small {
+    color: #64748b;
+    font-size: 0.72rem;
+    display: block;
+    margin-top: 1px;
+}
+
+.ml-pipeline-arrow {
+    color: #475569;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+
+/* Feature / calibration tables */
+.ml-table-wrap {
+    overflow-x: auto;
+    margin: 0 0 16px 0;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ml-data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    color: #cbd5e1;
+}
+
+.ml-data-table th {
+    background: rgba(15, 23, 42, 0.65);
+    color: #94a3b8;
+    font-weight: 600;
+    font-size: 0.73rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 9px 13px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    white-space: nowrap;
+}
+
+.ml-data-table td {
+    padding: 8px 13px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    vertical-align: top;
+    line-height: 1.5;
+}
+
+.ml-data-table tr:last-child td {
+    border-bottom: none;
+}
+
+.ml-data-table tr:hover td {
+    background: rgba(56, 189, 248, 0.04);
+}
+
+.ml-data-table code {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: #7dd3fc;
+    white-space: nowrap;
+}
+
+/* h4-level sub-headings inside the deep-dive */
+.ml-subhead-2 {
+    margin: 18px 0 8px 0;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #a5b4fc;
+}
+
+/* Callout boxes */
+.ml-callout {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 0.86rem;
+    line-height: 1.6;
+    margin: 0 0 16px 0;
+    color: #cbd5e1;
+}
+
+.ml-callout strong {
+    color: #f1f5f9;
+}
+
+.ml-callout.ml-callout-tip {
+    background: rgba(52, 211, 153, 0.07);
+    border: 1px solid rgba(52, 211, 153, 0.2);
+    border-left: 3px solid rgba(52, 211, 153, 0.5);
+}
+
+.ml-callout.ml-callout-warn {
+    background: rgba(251, 191, 36, 0.07);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+    border-left: 3px solid rgba(251, 191, 36, 0.5);
+}
+
+.ml-callout.ml-callout-info {
+    background: rgba(56, 189, 248, 0.06);
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    border-left: 3px solid rgba(56, 189, 248, 0.45);
+}
+
+/* Separator between deep-dive sections */
+.ml-section-sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 20px 0 18px 0;
+}
