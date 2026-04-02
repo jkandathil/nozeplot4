@@ -5,6 +5,9 @@ import { parseFenoseDeviceIdFromFilename } from './fenoseModel.js';
  * Phases and columns match extractFenoseFeaturesFromRows:
  * AmbientSamplingRFC, FeNOMeasurement, optional FeNOWindow; A1–H8; AQT0, AQH0, AQP0.
  *
+ * Temporal behaviour (wash-in, recovery, drift) is designed so ML features (means, feno std,
+ * window deltas) resemble real captures, not IID plateaus per phase.
+ *
  * Calibration strategy
  * ─────────────────────
  * Call computeCalibrationFromFiles(parsedRealFiles) to derive all six per-sensor
@@ -318,6 +321,29 @@ function randNormal(rnd, mean = 0, std = 1) {
     return mean + std * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
 }
 
+/**
+ * Mild saturation / curvature in ND vs ppb (linear calibration remains primary).
+ * @param {number} curveJitter  N(0,1)-scaled term, fixed per synthetic capture
+ */
+function effectivePpbForNd(ppb, curveJitter) {
+    const y = Math.max(0, Number(ppb) || 0);
+    if (y <= 0) return 0;
+    const sat = 1 / (1 + 0.0065 * y);
+    const cj = Number.isFinite(curveJitter) ? curveJitter : 0;
+    const curve = 1 + cj * Math.min(1, y / 80);
+    return y * sat * curve;
+}
+
+function samplePhaseDriftCoeffs(rnd) {
+    return { lin: randNormal(rnd, 0, 0.01), quad: randNormal(rnd, 0, 0.006) };
+}
+
+/** Normalized time 0..1 within phase; coeffs from {@link samplePhaseDriftCoeffs}. */
+function phaseDriftMultiplierFromCoeffs(c, t01) {
+    const u = t01 * 2 - 1;
+    return 1 + c.lin * u + c.quad * (u * u - 0.33);
+}
+
 // ─── Generator ───────────────────────────────────────────────────────────────
 
 function _clampSynthCount(v, fallback, lo, hi) {
@@ -327,15 +353,21 @@ function _clampSynthCount(v, fallback, lo, hi) {
 }
 
 /**
- * Generate synthetic FeNOse rows whose nd feature distribution matches real data.
+ * Generate synthetic FeNOse rows whose phase structure matches real captures.
  *
- * Per-capture variability model (three independent noise sources):
- *   1. Baseline offset  : ambBase[s] = amb_med × exp(N(0, amb_cv²))
- *      → shifts absolute sensor level but cancels in nd (kept for realism)
- *   2. Sensitivity jitter: effective_slope = nd_slope × (1 + N(0, sens_cv²))
- *      → the dominant source of nd variability between captures (~13%)
- *   3. Zero-offset noise : per-capture additive offset in nd space (zero_std_nd)
- *      → residual environmental / drift component independent of ppb
+ * Per-capture variability (unchanged statistical core):
+ *   1. Baseline offset: ambBase[s] = amb_med × exp(N(0, amb_cv²))
+ *   2. Sensitivity jitter: nd_slope × (1 + N(0, sens_cv))
+ *   3. Zero-offset in ND: zero_std_nd
+ *
+ * Dynamics layered on top (v2):
+ *   • Ambient: slow within-phase baseline drift (linear + quadratic in time).
+ *   • FeNO: wash-in curve 1 − exp(−i/τ); τ grows slightly with ppb (slower approach at high dose).
+ *           Extra row noise while transient (raises fenoStd like real data).
+ *   • Window: exponential recovery of excess ND toward ambient, per-sensor τ, optional damped ripple.
+ *   • ND vs ppb: mild saturation + per-capture curvature on top of linear slope (concentration-specific shape).
+ *   • Aux (AQT/AQH/AQP): gentle correlated drift across row index within each phase.
+ *   • Tiny common-mode multiplicative noise per row (shared airflow / thermal).
  *
  * @param {object} opts
  * @param {number}  opts.ppb
@@ -366,78 +398,115 @@ export function generateSyntheticFenoseRows({
     const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0);
 
     // ── Per-capture parameters ──────────────────────────────────────────────
-    const ambBase     = {};   // absolute baseline level for this capture
-    const noiseSig    = {};   // row-level absolute noise std
-    const effNdSlope  = {};   // effective nd_slope with capture-to-capture jitter
-    const zeroOffset  = {};   // per-capture zero nd offset
+    const ambBase     = {};
+    const noiseSig    = {};
+    const effNdSlope  = {};
+    const zeroOffset  = {};
+    const tauRecover  = {};
 
     for (const s of SENSOR_COLS) {
         const c = cal[s] || FALLBACK_CALIBRATION[s];
 
-        // 1. Baseline (log-normal so always positive)
         const deviceOffset = Math.exp(randNormal(rnd, 0, c.amb_cv));
         ambBase[s]  = c.amb_med * deviceOffset;
         noiseSig[s] = ambBase[s] * c.noise_cv;
 
-        // 2. Sensitivity jitter (normal ±sens_cv around nominal slope)
         const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv);
         effNdSlope[s] = c.nd_slope * sensJitter;
 
-        // 3. Zero-offset noise in nd space (independent of ppb)
         zeroOffset[s] = randNormal(rnd, 0, c.zero_std_nd);
+
+        const tauBase = (2.6 + 3.8 * rnd()) * (1 + 0.28 * y / (y + 28));
+        tauRecover[s] = Math.max(0.9, tauBase * Math.exp(randNormal(rnd, 0, 0.14)));
     }
 
-    const aqt = 22 + randNormal(rnd, 0, 1.5);
-    const aqh = 45 + randNormal(rnd, 0, 8);
-    const aqp = 990 + randNormal(rnd, 0, 5);
+    const yNd = effectivePpbForNd(y, randNormal(rnd, 0, 0.012));
+    const riseTau =
+        (3 + 2.9 * y / (y + 32)) * (0.86 + 0.28 * rnd());
+    const riseTauClamped = Math.max(0.55, riseTau);
+    const transientNoiseBoost = 1.28 + 0.55 * rnd();
+    const rippleAmp = (0.025 + 0.035 * rnd()) * Math.min(1, y / (y + 15));
+
+    const driftAmb = samplePhaseDriftCoeffs(rnd);
+    const driftFeno = samplePhaseDriftCoeffs(rnd);
+    const driftWin = samplePhaseDriftCoeffs(rnd);
+
+    const aqt0 = 22 + randNormal(rnd, 0, 1.5);
+    const aqh0 = 45 + randNormal(rnd, 0, 8);
+    const aqp0 = 990 + randNormal(rnd, 0, 5);
+    const aqtSlope = randNormal(rnd, 0, 0.04);
+    const aqhSlope = randNormal(rnd, 0, 0.35);
+    const aqpSlope = randNormal(rnd, 0, 0.55);
 
     const rows = [];
 
     // ── AmbientSamplingRFC ──────────────────────────────────────────────────
     for (let i = 0; i < rowsAmbient; i++) {
+        const t01 = rowsAmbient <= 1 ? 0 : i / (rowsAmbient - 1);
+        const driftM = phaseDriftMultiplierFromCoeffs(driftAmb, t01);
         const row = {
             event_name: 'AmbientSamplingRFC',
-            AQT0: aqt + randNormal(rnd, 0, 0.03),
-            AQH0: aqh + randNormal(rnd, 0, 0.3),
-            AQP0: aqp + randNormal(rnd, 0, 0.5),
+            AQT0: aqt0 + aqtSlope * t01 + randNormal(rnd, 0, 0.03),
+            AQH0: aqh0 + aqhSlope * t01 + randNormal(rnd, 0, 0.3),
+            AQP0: aqp0 + aqpSlope * t01 + randNormal(rnd, 0, 0.5),
         };
+        const cm = 1 + randNormal(rnd, 0, 0.0018);
         for (const s of SENSOR_COLS) {
-            row[s] = ambBase[s] + randNormal(rnd, 0, noiseSig[s]);
+            const base = ambBase[s] * driftM;
+            row[s] = cm * (base + randNormal(rnd, 0, noiseSig[s]));
         }
         rows.push(row);
     }
 
-    // ── FeNOMeasurement ─────────────────────────────────────────────────────
-    // Target nd = effNdSlope[s] * y + zeroOffset[s]
-    // → absolute target = ambBase[s] * (1 + target_nd) = ambBase[s] + delta
+    // ── FeNOMeasurement (reaction / wash-in + elevated transient noise) ──────
+    let lastRise = 0;
     for (let i = 0; i < rowsFeno; i++) {
+        const rise = 1 - Math.exp(-i / riseTauClamped);
+        lastRise = rise;
+        const t01 = rowsFeno <= 1 ? 1 : i / (rowsFeno - 1);
+        const driftM = phaseDriftMultiplierFromCoeffs(driftFeno, t01);
+        const transient = transientNoiseBoost * (1 - rise);
         const row = {
             event_name: 'FeNOMeasurement',
-            AQT0: aqt + 0.2  + randNormal(rnd, 0, 0.03),
-            AQH0: aqh         + randNormal(rnd, 0, 0.3),
-            AQP0: aqp         + randNormal(rnd, 0, 0.5),
+            AQT0: aqt0 + 0.25 + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.03),
+            AQH0: aqh0 + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.3),
+            AQP0: aqp0 + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
         };
+        const cm = 1 + randNormal(rnd, 0, 0.0022);
         for (const s of SENSOR_COLS) {
-            const targetNd = effNdSlope[s] * y + zeroOffset[s];
-            row[s] = ambBase[s] * (1 + targetNd) + randNormal(rnd, 0, noiseSig[s]);
+            const ndResp = effNdSlope[s] * yNd * rise;
+            const ndTot = ndResp + zeroOffset[s];
+            const base = ambBase[s] * driftM * (1 + ndTot);
+            const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
+            row[s] = cm * (base + randNormal(rnd, 0, sig));
         }
         rows.push(row);
     }
 
-    // ── FeNOWindow ──────────────────────────────────────────────────────────
+    // ── FeNOWindow (exponential recovery + mild damped overshoot) ───────────
     if (rowsWindow > 0) {
-        for (let i = 0; i < rowsWindow; i++) {
-            const frac = 0.15 + (i / Math.max(rowsWindow - 1, 1)) * 0.55;
+        for (let j = 0; j < rowsWindow; j++) {
+            const t01 = rowsWindow <= 1 ? 0 : j / (rowsWindow - 1);
+            const driftM = phaseDriftMultiplierFromCoeffs(driftWin, t01);
             const row = {
                 event_name: 'FeNOWindow',
-                AQT0: aqt + randNormal(rnd, 0, 0.03),
-                AQH0: aqh + randNormal(rnd, 0, 0.3),
-                AQP0: aqp + randNormal(rnd, 0, 0.5),
+                AQT0: aqt0 + 0.42 + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, 0.03),
+                AQH0: aqh0 + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.3),
+                AQP0: aqp0 + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, 0.5),
             };
+            const cm = 1 + randNormal(rnd, 0, 0.0018);
             for (const s of SENSOR_COLS) {
-                const fullNd    = effNdSlope[s] * y + zeroOffset[s];
-                const partialNd = fullNd * (1 - frac);
-                row[s] = ambBase[s] * (1 + partialNd) + randNormal(rnd, 0, noiseSig[s]);
+                const ndPlateau = effNdSlope[s] * yNd * lastRise + zeroOffset[s];
+                const excess0 = ndPlateau - zeroOffset[s];
+                const tr = tauRecover[s];
+                const decay = Math.exp(-j / tr);
+                const ripple =
+                    rippleAmp * Math.sin((j + 0.7) * 0.95) * decay * Math.abs(excess0);
+                const ndTot = zeroOffset[s] + excess0 * decay + ripple;
+                const base = ambBase[s] * driftM * (1 + ndTot);
+                const relax = 0.35 + 0.65 * (1 - decay);
+                const sig = noiseSig[s] * Math.sqrt(Math.max(0.2, relax));
+                row[s] = cm * (base + randNormal(rnd, 0, sig));
             }
             rows.push(row);
         }
