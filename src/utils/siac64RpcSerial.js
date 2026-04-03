@@ -50,9 +50,9 @@ export async function writeSiac64RpcLine(port, payloadObj, options = {}) {
     if (!port?.writable) return;
     const writer = port.writable.getWriter();
     try {
-        // Send a precursor newline to exit any partial command or silence the shell prompt if needed
-        await writer.write(encoder.encode('\n'));
-        await delay(options.preWriteDelayMs || 15);
+        // Send Ctrl+C then newline to clear any hung shell process or partial command
+        await writer.write(encoder.encode('\x03\n'));
+        await delay(options.preWriteDelayMs || 25);
 
         const ending = options.lineEnding ?? '\r\n';
         const cmdLine = `${buildSiac64RpcSendCommandLine(payloadObj)}${ending}`;
