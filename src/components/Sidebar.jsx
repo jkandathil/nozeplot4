@@ -1,19 +1,22 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import {
-    Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2,
+    Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2, Pencil,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
-import { estimateWorkspaceFileBytes } from '../utils/workspaceFilename';
+import {
+    estimateWorkspaceFileBytes,
+    formatWorkspaceDataSize,
+    sumWorkspaceDataBytes,
+} from '../utils/workspaceFilename';
 import {
     downloadWorkspaceFileAsCsv,
     downloadFolderContentsAsCsvZip,
     downloadRootDataFilesAsCsvZip,
 } from '../utils/workspaceCsvDownload';
-import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace.js';
 
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
@@ -22,12 +25,12 @@ function fileBelongsToFolder(file, folderId) {
     return String(file.folderId) === String(folderId);
 }
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [sidebarWidth, setSidebarWidth] = useState(250);
+    const [sidebarWidth, setSidebarWidth] = useState(348);
     const [expandedFolders, setExpandedFolders] = useState(new Set());
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
     
@@ -37,28 +40,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const actualFiles = files.filter(f => !f.isFolder);
     const customFolders = files.filter(f => f.isFolder);
 
-    /** Expand Model/ and FeNOse_synthetic/ when they have files so contents aren’t hidden collapsed */
-    useEffect(() => {
-        const expandNames = new Set(
-            [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME].map((n) => String(n).toLowerCase())
-        );
-        const matchFolders = (files || []).filter(
-            (f) => f.isFolder && expandNames.has(String(f.name).toLowerCase())
-        );
-        if (matchFolders.length === 0) return;
-        setExpandedFolders((prev) => {
-            const next = new Set(prev);
-            let changed = false;
-            for (const folder of matchFolders) {
-                const hasChild = (files || []).some((f) => !f.isFolder && fileBelongsToFolder(f, folder.id));
-                if (hasChild && !next.has(folder.id)) {
-                    next.add(folder.id);
-                    changed = true;
-                }
-            }
-            return changed ? next : prev;
-        });
-    }, [files]);
+    const workspaceTotalDataBytes = useMemo(() => sumWorkspaceDataBytes(files), [files]);
 
     const handleMouseDown = React.useCallback((e) => {
         if (isCollapsed) return; // disable resize while collapsed
@@ -97,6 +79,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const [hoveredFile, setHoveredFile] = useState(null);
     const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
     const [csvExportBusy, setCsvExportBusy] = useState(false);
+    const [auDevicesExpanded, setAuDevicesExpanded] = useState(false);
 
     const onDownloadFileCsv = async (e, file) => {
         e.stopPropagation();
@@ -187,8 +170,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     style={{
                         position: 'absolute',
                         top: 0,
-                        right: -3,
-                        width: '6px',
+                        right: -5,
+                        width: '10px',
                         height: '100%',
                         cursor: 'col-resize',
                         zIndex: 100,
@@ -250,7 +233,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
             {/* Page navigation */}
             {!isCollapsed && (
-            <div style={{
+            <div className="sidebar-page-nav" style={{
                 display: 'flex',
                 pointerEvents: 'auto',
                 opacity: 1,
@@ -277,7 +260,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'dashboard' ? 'rgba(56,189,248,0.15)' : 'transparent',
                         color: activePage === 'dashboard' ? 'var(--accent-primary)' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Dashboard"
                 >
@@ -299,7 +281,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'help' ? 'rgba(129,140,248,0.2)' : 'transparent',
                         color: activePage === 'help' ? '#a5b4fc' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="User guide — instructions for every section"
                 >
@@ -321,7 +302,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'normalize' ? 'rgba(251,191,36,0.15)' : 'transparent',
                         color: activePage === 'normalize' ? '#fbbf24' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Baseline Normalization"
                 >
@@ -343,7 +323,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'aromaAnalysis' ? 'rgba(16,185,129,0.15)' : 'transparent',
                         color: activePage === 'aromaAnalysis' ? '#10b981' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Aroma Sensor Data Analysis"
                 >
@@ -365,7 +344,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'separability' ? 'rgba(251,191,36,0.15)' : 'transparent',
                         color: activePage === 'separability' ? '#fbbf24' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Time-Resolved Separability Analysis"
                 >
@@ -387,7 +365,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'sensitivity' ? 'rgba(59,130,246,0.15)' : 'transparent',
                         color: activePage === 'sensitivity' ? '#3b82f6' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Element Sensitivity & Performance Map"
                 >
@@ -409,7 +386,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'recoveryAnalysis' ? 'rgba(245,158,11,0.15)' : 'transparent',
                         color: activePage === 'recoveryAnalysis' ? '#f59e0b' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Chronological Baseline Recovery & Drift Tracker"
                 >
@@ -431,7 +407,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
                         color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="SE Analysis from Custom CSV Data"
                 >
@@ -453,7 +428,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'aromaUnitCapture' ? 'rgba(45,212,191,0.15)' : 'transparent',
                         color: activePage === 'aromaUnitCapture' ? '#2dd4bf' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Capture SiAC / aroma unit over USB serial (Chrome)"
                 >
@@ -475,7 +449,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'manufacturing' ? 'rgba(244,63,94,0.15)' : 'transparent',
                         color: activePage === 'manufacturing' ? '#f43f5e' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Manufacturing Variation and Yield Analysis"
                 >
@@ -487,7 +460,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             {/* Utility Tools Section */}
             {!isCollapsed && (
                 <>
-            <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 16, marginTop: 12 }}>
+            <div className="sidebar-tools-grid" style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 16, marginTop: 12 }}>
                 <button
                     onClick={() => onPageChange?.('gasDesign')}
                     style={{
@@ -503,7 +476,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'gasDesign' ? 'rgba(168,85,247,0.15)' : 'rgba(255,255,255,0.02)',
                         color: activePage === 'gasDesign' ? '#a855f7' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Design of Gas Dilution System"
                 >
@@ -524,7 +496,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'gasMath' ? 'rgba(56,189,248,0.15)' : 'rgba(255,255,255,0.02)',
                         color: activePage === 'gasMath' ? '#38bdf8' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Gas-Dilution Math Tool"
                 >
@@ -546,7 +517,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'polymerCbMix' ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.02)',
                         color: activePage === 'polymerCbMix' ? '#34d399' : 'var(--text-muted)',
-                        transition: 'all 0.15s',
                     }}
                     title="Polymer–carbon black: wt% ↔ volume %"
                 >
@@ -567,7 +537,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: isCalculatorOpen ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.02)',
                         color: isCalculatorOpen ? '#10b981' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="Popup Calculator"
                 >
@@ -588,7 +557,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         fontWeight: 600,
                         background: activePage === 'mlStudio' ? 'rgba(244,63,94,0.15)' : 'rgba(255,255,255,0.02)',
                         color: activePage === 'mlStudio' ? '#f43f5e' : 'var(--text-muted)',
-                        transition: 'all 0.15s'
                     }}
                     title="FeNOse ML Studio (inference & training)"
                 >
@@ -701,7 +669,15 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
             <div className="file-list-container">
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 className="section-title" style={{ margin: 0, fontSize: '0.65rem', fontWeight: 600 }}>Workspace ({files.length})</h3>
+                    <div className="workspace-header-title-block">
+                        <h3 className="workspace-header-heading">Workspace</h3>
+                        <span
+                            className="workspace-header-total-size"
+                            title="Approximate total stored size of all workspace files (folders are metadata only)"
+                        >
+                            {formatWorkspaceDataSize(workspaceTotalDataBytes)}
+                        </span>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {/* Session Restore Button */}
                         <button
@@ -793,7 +769,49 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
                 {Object.keys(activeAUs).length > 0 && (
                     <div style={{ marginBottom: '16px', padding: '10px', background: 'rgba(56, 189, 248, 0.08)', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.15)' }}>
-                        <span style={{ fontSize: '0.65rem', color: '#38bdf8', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Available AU Devices</span>
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={auDevicesExpanded}
+                            onClick={() => setAuDevicesExpanded((v) => !v)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setAuDevicesExpanded((v) => !v);
+                                }
+                            }}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                cursor: 'pointer',
+                                marginBottom: auDevicesExpanded ? '8px' : 0,
+                                userSelect: 'none',
+                            }}
+                            title={auDevicesExpanded ? 'Collapse AU list' : 'Expand AU list'}
+                        >
+                            {auDevicesExpanded ? (
+                                <ChevronDown size={14} color="#38bdf8" aria-hidden />
+                            ) : (
+                                <ChevronRight size={14} color="#38bdf8" aria-hidden />
+                            )}
+                            <span
+                                style={{
+                                    fontSize: '0.65rem',
+                                    color: '#38bdf8',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px',
+                                    fontWeight: 600,
+                                    flex: 1,
+                                }}
+                            >
+                                Available AU Devices
+                            </span>
+                            <span style={{ fontSize: '0.6rem', color: '#94a3b8', fontWeight: 500 }}>
+                                ({Object.keys(activeAUs).length})
+                            </span>
+                        </div>
+                        {auDevicesExpanded ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {Object.keys(activeAUs).map(auId => {
                                 const auFiles = activeAUs[auId];
@@ -823,7 +841,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                             <span style={{ fontSize: '0.75rem', color: '#f8fafc', fontWeight: 500 }}>{auId}</span>
                                         </label>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>({auFiles.length})</span>
+                                            <span style={{ fontSize: '0.65rem', color: '#94a3b8' }} title="Number of workspace files for this AU">
+                                                ({auFiles.length})
+                                            </span>
                                             {onDeleteFiles && (
                                                 <button
                                                     onClick={(e) => {
@@ -855,6 +875,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 );
                             })}
                         </div>
+                        ) : null}
                     </div>
                 )}
                 <div className="workspace-files-container">
@@ -872,8 +893,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 </div>
                                 <div className="file-details">
                                     <span className="file-name">{file.name}</span>
-                                    <span className="file-meta">
-                                        {(estimateWorkspaceFileBytes(file) / 1024).toFixed(1)} KB
+                                    <span className="file-meta" title="Approximate size of stored data">
+                                        {formatWorkspaceDataSize(estimateWorkspaceFileBytes(file))}
                                     </span>
                                 </div>
                                 <button
@@ -951,6 +972,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     const folderFiles = sortFolderFilesNewestFirst(
                                         filteredFiles.filter((f) => fileBelongsToFolder(f, folder.id))
                                     );
+                                    const folderDataBytes = sumWorkspaceDataBytes(folderFiles);
                                     const folderFileIds = folderFiles.map(f => f.id);
                                     const isAllSelected = folderFiles.length > 0 && folderFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
 
@@ -970,7 +992,21 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                 >
                                                     {isExpanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
                                                     <Folder size={14} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
-                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>{folder.name}</span>
+                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>
+                                                        {folder.name}
+                                                        {folderFiles.length > 0 ? (
+                                                            <span
+                                                                style={{
+                                                                    fontWeight: 500,
+                                                                    color: '#94a3b8',
+                                                                    marginLeft: 6,
+                                                                }}
+                                                                title="Approximate total data in this folder"
+                                                            >
+                                                                · {formatWorkspaceDataSize(folderDataBytes)}
+                                                            </span>
+                                                        ) : null}
+                                                    </span>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                     {folderFiles.length > 0 && (
@@ -999,6 +1035,16 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                             <Download size={14} color="#34d399" />
                                                         </button>
                                                     )}
+                                                    {onRenameFolder ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => onRenameFolder(e, folder.id)}
+                                                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1, color: '#94a3b8' }}
+                                                            title="Rename folder"
+                                                        >
+                                                            <Pencil size={14} />
+                                                        </button>
+                                                    ) : null}
                                                     <button onClick={(e) => onDeleteFolder(e, folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1, color: '#ef4444' }} title="Delete Folder"><Trash2 size={14} /></button>
                                                 </div>
                                             </div>
@@ -1014,6 +1060,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                     const isRootExpanded = expandedFolders.has('root-data-files');
                                     const rootFileIds = allDataFiles.map(f => f.id);
                                     const isAllRootSelected = allDataFiles.length > 0 && rootFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+                                    const rootDataBytes = sumWorkspaceDataBytes(allDataFiles);
 
                                     return (
                                         <div style={{ marginBottom: '12px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', overflow: 'hidden' }}>
@@ -1029,7 +1076,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                 >
                                                     {isRootExpanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
                                                     <Folder size={14} color="#38bdf8" fill="rgba(56,189,248,0.2)" />
-                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>DataFiles</span>
+                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, userSelect: 'none' }}>
+                                                        DataFiles
+                                                        {allDataFiles.length > 0 ? (
+                                                            <span
+                                                                style={{ fontWeight: 500, color: '#94a3b8', marginLeft: 6 }}
+                                                                title="Approximate total data in root workspace files"
+                                                            >
+                                                                · {formatWorkspaceDataSize(rootDataBytes)}
+                                                            </span>
+                                                        ) : null}
+                                                    </span>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                     {allDataFiles.length > 0 && (

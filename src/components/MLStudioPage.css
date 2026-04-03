@@ -259,6 +259,54 @@
     color: var(--text-muted);
 }
 
+.ml-fenose-capacity-meter {
+    margin: 0 0 10px 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+}
+
+.ml-fenose-capacity-banner {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.ml-fenose-capacity-banner strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.88rem;
+}
+
+.ml-fenose-capacity-banner-list {
+    margin: 0;
+    padding-left: 1.15rem;
+}
+
+.ml-fenose-capacity-banner-list li {
+    margin-bottom: 4px;
+}
+
+.ml-fenose-capacity-banner-foot {
+    margin: 8px 0 0 0;
+    font-size: 0.78rem;
+    opacity: 0.9;
+}
+
+.ml-fenose-capacity-banner--warn {
+    background: rgba(251, 191, 36, 0.12);
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    color: var(--text-primary);
+}
+
+.ml-fenose-capacity-banner--severe {
+    background: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.5);
+    color: var(--text-primary);
+}
+
 .ml-fenose-synthetic-controls {
     display: grid;
     grid-template-columns: 1fr;

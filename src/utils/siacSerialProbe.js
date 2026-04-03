@@ -1,4 +1,8 @@
-import { drainJsonObjectsFromBuffer } from './siacDeviceProfiles.js';
+import {
+    drainJsonObjectsFromBuffer,
+    extractAuSerialNumberFromParsedJson,
+} from './siacDeviceProfiles.js';
+import { writeSiac64RpcLine, sanitizeSiacFirmwareJsonText } from './siac64RpcSerial.js';
 
 export function delay(ms) {
     return new Promise((r) => setTimeout(r, ms));
@@ -114,8 +118,8 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
             buffer = rest;
             for (const jsonStr of chunks) {
                 try {
-                    const obj = JSON.parse(jsonStr);
-                    const sn = obj.sn != null ? String(obj.sn).trim() : '';
+                    const obj = JSON.parse(sanitizeSiacFirmwareJsonText(jsonStr));
+                    const sn = extractAuSerialNumberFromParsedJson(obj);
                     if (sn) {
                         found = sn;
                         break;
@@ -130,8 +134,8 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
             const { chunks } = drainJsonObjectsFromBuffer(buffer);
             for (const jsonStr of chunks) {
                 try {
-                    const obj = JSON.parse(jsonStr);
-                    const sn = obj.sn != null ? String(obj.sn).trim() : '';
+                    const obj = JSON.parse(sanitizeSiacFirmwareJsonText(jsonStr));
+                    const sn = extractAuSerialNumberFromParsedJson(obj);
                     if (sn) {
                         found = sn;
                         break;
@@ -328,8 +332,9 @@ export async function openSerialPortForSiAc(port, baseOpenOpts, extra = {}) {
 
 /**
  * Close if needed, open, probe for sn, always close. One port at a time.
+ * @param {Record<string, unknown> | null} [rpcProbePayload] If set, sends `rpc send "…"` (SiAC64 shell) before reading.
  */
-export async function scanProbeSerialPort(port, openOpts, readTimeoutMs) {
+export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProbePayload = null) {
     const t = getSerialPlatformTiming();
     const readMs = readTimeoutMs ?? t.scanReadTimeoutMs;
     const bustAfterMs = readMs + t.bustExtraMs;
@@ -378,13 +383,52 @@ export async function scanProbeSerialPort(port, openOpts, readTimeoutMs) {
         await trySiAcStreamWakeWrite(port, t);
         await delay(t.afterWritablePingMs);
 
+        if (rpcProbePayload && typeof rpcProbePayload === 'object') {
+            try {
+                /* Shell `rpc send '…'` + raw JSON line — some mux-dev builds only accept one style. */
+                await writeSiac64RpcLine(port, rpcProbePayload, {
+                    alsoSendRawJson: true,
+                    postWriteDelayMs: 25,
+                });
+                /* TELEMETRY JSON is large; give the stack time before read. */
+                await delay(t.win ? 520 : 380);
+            } catch {
+                /* ignore — probe read may still see passive stream */
+            }
+        }
+
         const closeOnFirstBust = !t.win;
         let sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+
+        /* SiAC64: first TELEMETRY can be slow or lost; resend RPC once before OS-specific retries. */
+        if (!sn && rpcProbePayload && typeof rpcProbePayload === 'object') {
+            try {
+                await writeSiac64RpcLine(port, rpcProbePayload, {
+                    alsoSendRawJson: true,
+                    postWriteDelayMs: 25,
+                });
+                await delay(t.win ? 520 : 400);
+                sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+            } catch {
+                /* ignore */
+            }
+        }
 
         if (!sn && t.win) {
             await applyAlternateWindowsSerialSignals(port);
             await trySiAcStreamWakeWrite(port, t);
             await delay(t.afterWritablePingMs);
+            if (rpcProbePayload && typeof rpcProbePayload === 'object') {
+                try {
+                    await writeSiac64RpcLine(port, rpcProbePayload, {
+                        alsoSendRawJson: true,
+                        postWriteDelayMs: 25,
+                    });
+                    await delay(420);
+                } catch {
+                    /* ignore */
+                }
+            }
             const secondMs = t.scanSecondReadMs;
             sn = await readAuSerialWithWatchdog(port, secondMs, secondMs + 5000, true);
         }

@@ -1,7 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
 import {
   LayoutDashboard,
   FileText,
@@ -37,6 +35,7 @@ import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import HelpPage from './components/HelpPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import { parseFile } from './utils/fileParser';
+import { getBrowserStorageEstimate, uploadWorkloadHints } from './utils/browserCapacityHints.js';
 import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
 import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from './utils/fenoseWorkspace.js';
 import {
@@ -49,6 +48,32 @@ import {
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
 } from './utils/fenoseSyntheticDataset.js';
+
+const RESERVED_WORKSPACE_FOLDER_NAMES = new Set(
+  [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME].map((s) => String(s).toLowerCase())
+);
+
+/** Keep sidebar metadata but drop row payloads so huge FeNOse_synthetic/ folders do not OOM React on refresh. */
+function workspaceFilesForReactState(all) {
+  if (!Array.isArray(all) || all.length === 0) return all;
+  const synthFolderIds = new Set();
+  for (const f of all) {
+    if (
+      f.isFolder &&
+      String(f.name).toLowerCase() === FENOSE_SYNTHETIC_FOLDER_NAME.toLowerCase()
+    ) {
+      synthFolderIds.add(String(f.id));
+    }
+  }
+  if (synthFolderIds.size === 0) return all;
+  return all.map((f) => {
+    if (f.isFolder) return f;
+    if (!synthFolderIds.has(String(f.folderId))) return f;
+    if (!Array.isArray(f.data) || f.data.length === 0) return f;
+    const { data: _d, file: _fb, csvText: _t, csvSnapshot: _s, ...rest } = f;
+    return rest;
+  });
+}
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -77,20 +102,21 @@ function App() {
   useEffect(() => {
     const loadFiles = async () => {
       try {
-        const savedFiles = await fileManager.getAllFiles();
+        const rawSaved = await fileManager.getAllFiles();
+        const savedFiles = workspaceFilesForReactState(rawSaved);
         if (savedFiles && savedFiles.length > 0) {
           setFiles(savedFiles);
         }
 
         // Restore Workspace Session mappings seamlessly
         const restoredStateStr = localStorage.getItem('noze_restored_state');
-        if (restoredStateStr && savedFiles) {
+        if (restoredStateStr && rawSaved) {
           try {
             const restoredState = JSON.parse(restoredStateStr);
             if (restoredState.activePage) setActivePage(restoredState.activePage);
 
             if (restoredState.selectedFileId) {
-              const mainFileObj = savedFiles.find(f => f.id === restoredState.selectedFileId);
+              const mainFileObj = rawSaved.find(f => f.id === restoredState.selectedFileId);
               console.log("Noze Match Main File:", mainFileObj);
               if (mainFileObj) {
                 setSelectedFileId(restoredState.selectedFileId);
@@ -109,6 +135,13 @@ function App() {
                     console.log("Successfully map Parsed Main File:", parsed);
                     setParsedData(parsed);
                   } catch (e) { console.error("Restore parse fail on main file", e); }
+                } else {
+                  try {
+                    const parsed = await parseFile(mainFileObj);
+                    setParsedData(parsed);
+                  } catch (e) {
+                    console.error("Restore parse fail on main file (IndexedDB)", e);
+                  }
                 }
               }
             }
@@ -117,7 +150,7 @@ function App() {
               setCompareFileIds(restoredState.compareFileIds);
               const restoredComparables = [];
               for (const cId of restoredState.compareFileIds) {
-                const cfile = savedFiles.find(f => f.id === cId);
+                const cfile = rawSaved.find(f => f.id === cId);
                 if (cfile) {
                   if (cfile.data) {
                     console.log("Using cached DB JSON for Comparison:", cfile.name);
@@ -140,6 +173,18 @@ function App() {
                       });
                     } catch (e) {
                       console.error("Restore parse fail on compare file", e);
+                    }
+                  } else {
+                    try {
+                      const parsed = await parseFile(cfile);
+                      restoredComparables.push({
+                        id: cfile.id,
+                        fileName: cfile.name,
+                        data: parsed.data,
+                        meta: parsed.meta || { fields: Object.keys(parsed.data[0] || {}) }
+                      });
+                    } catch (e) {
+                      console.error("Restore parse fail on compare file (IndexedDB)", e);
                     }
                   }
                 }
@@ -168,6 +213,25 @@ function App() {
     });
 
     if (validFiles.length === 0) return;
+
+    const totalUploadBytes = validFiles.reduce((sum, file) => sum + (typeof file.size === 'number' ? file.size : 0), 0);
+    try {
+      const est = await getBrowserStorageEstimate();
+      const hints = uploadWorkloadHints(totalUploadBytes, est);
+      if (hints.severity === 'severe' && hints.messages.length > 0) {
+        const ok = window.confirm(`${hints.messages.join('\n\n')}\n\nUpload these files anyway?`);
+        if (!ok) return;
+      } else if (
+        hints.severity === 'warn' &&
+        hints.messages.length > 0 &&
+        totalUploadBytes >= 50 * 1024 * 1024
+      ) {
+        const ok = window.confirm(`${hints.messages.join('\n\n')}\n\nContinue with upload?`);
+        if (!ok) return;
+      }
+    } catch {
+      /* ignore capacity probe failures */
+    }
 
     const formattedFiles = validFiles.map(file => ({
       id: Math.random().toString(36).substr(2, 9),
@@ -232,9 +296,10 @@ function App() {
       savingAtMs != null ? new Date(savingAtMs) : new Date()
     );
     const sampleN = Math.min(data.length, 40);
+    const sampleBlob = new Blob([JSON.stringify(data.slice(0, sampleN))]);
     const approxSize = Math.max(
       1,
-      Math.round((new Blob([JSON.stringify(data.slice(0, sampleN))]).length / sampleN) * data.length)
+      Math.round((sampleBlob.size / sampleN) * data.length)
     );
     let folderId;
     try {
@@ -280,7 +345,7 @@ function App() {
     if (conc.length < 1) {
       throw new Error('Add at least one concentration (ppb), e.g. 0,10,25,50.');
     }
-    const reps = Math.max(1, Math.min(50, Math.floor(Number(opts.replicates) || 2)));
+    const reps = Math.max(1, Math.min(200, Math.floor(Number(opts.replicates) || 2)));
     const baseSeed = Math.floor(Number(opts.seed) || 0);
     // NB: Number(undefined) is NaN, and NaN ?? fallback stays NaN — use finite fallbacks so row counts are never NaN.
     const finiteOr = (v, fallback) => {
@@ -337,22 +402,23 @@ function App() {
     }
 
     const byDevice = groupFenoseCalibrationFilesByDevice(parsedForCal);
-    let deviceJobs =
-      byDevice.size === 0
-        ? [{ key: FENOSE_SYNTH_UNKNOWN_KEY, files: [] }]
-        : [...byDevice.entries()]
-            .map(([key, files]) => ({ key, files }))
-            .sort((a, b) => a.key.localeCompare(b.key));
-
+    // When the user picks AUs in ML Studio, options come from filenames. Parsed calibration
+    // may omit some of those files (parse errors or strict phase checks). Still emit synthetic
+    // files per selected key using pooled or fallback calibration instead of failing.
+    let deviceJobs;
     const dk = opts.deviceKeys;
     if (Array.isArray(dk) && dk.length > 0) {
-      const want = new Set(dk.map((x) => String(x)));
-      deviceJobs = deviceJobs.filter((j) => want.has(j.key));
-      if (deviceJobs.length === 0) {
-        throw new Error(
-          'None of the selected Aroma Units match labelled workspace files right now. Reload data or change which units are checked.'
-        );
-      }
+      const want = dk.map((x) => String(x));
+      deviceJobs = want.map((key) => ({
+        key,
+        files: byDevice.get(key) || [],
+      }));
+    } else if (byDevice.size === 0) {
+      deviceJobs = [{ key: FENOSE_SYNTH_UNKNOWN_KEY, files: [] }];
+    } else {
+      deviceJobs = [...byDevice.entries()]
+        .map(([key, files]) => ({ key, files }))
+        .sort((a, b) => a.key.localeCompare(b.key));
     }
 
     console.info(
@@ -361,6 +427,7 @@ function App() {
     );
 
     let folderId;
+    let syntheticFolderCreatedAt = null;
     const existing = await fileManager.getAllFiles();
     const folderMatch = existing.find(
       (f) => f.isFolder && String(f.name).toLowerCase() === FENOSE_SYNTHETIC_FOLDER_NAME.toLowerCase()
@@ -369,13 +436,26 @@ function App() {
       folderId = folderMatch.id;
     } else {
       folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+      syntheticFolderCreatedAt = Date.now();
       await fileManager.saveFile({
         id: folderId,
         name: FENOSE_SYNTHETIC_FOLDER_NAME,
         isFolder: true,
-        createdAt: Date.now(),
+        createdAt: syntheticFolderCreatedAt,
       });
     }
+
+    const totalPlanned = deviceJobs.length * conc.length * reps;
+    const MAX_SYNTHETIC_BATCH = 10000;
+    if (totalPlanned > MAX_SYNTHETIC_BATCH) {
+      throw new Error(
+        `Too many synthetic files at once (${totalPlanned}). Maximum is ${MAX_SYNTHETIC_BATCH} per run — lower replicates, devices, or concentrations, or run multiple times.`
+      );
+    }
+
+    /** Yield so the tab stays responsive and memory can be reclaimed between writes. */
+    const YIELD_EVERY = 20;
+    const leanForState = [];
 
     let written = 0;
     let k = 0;
@@ -392,34 +472,59 @@ function App() {
             nWindow,
             calibration,
           });
-          const safeData = JSON.parse(JSON.stringify(data));
           const name = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });
-          const csvText = Papa.unparse(safeData);
-          const csvFile = new File([csvText], name, { type: 'text/csv' });
-          const sampleN = Math.min(safeData.length, 40);
+          const sampleN = Math.min(data.length, 32);
           const approxSize = Math.max(
-            csvText.length,
-            Math.round((new Blob([JSON.stringify(safeData.slice(0, sampleN))]).length / sampleN) * safeData.length)
+            1024,
+            Math.round((JSON.stringify(data.slice(0, sampleN)).length / sampleN) * data.length)
           );
           const fileId = Math.random().toString(36).substr(2, 9);
+          const createdAt = Date.now();
           await fileManager.saveFile({
             id: fileId,
             name,
             folderId: String(folderId),
-            data: safeData,
-            file: csvFile,
-            csvText,
-            csvSnapshot: csvText,
+            data,
             size: approxSize,
-            createdAt: Date.now(),
+            createdAt,
+          });
+          leanForState.push({
+            id: fileId,
+            name,
+            folderId: String(folderId),
+            size: approxSize,
+            createdAt,
           });
           written++;
           k++;
+          if (written % YIELD_EVERY === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
         }
       }
     }
-    const refreshed = await fileManager.getAllFiles();
-    setFiles(refreshed);
+
+    setFiles((prev) => {
+      const ids = new Set(prev.map((f) => f.id));
+      const out = [...prev];
+      if (syntheticFolderCreatedAt != null && !ids.has(folderId)) {
+        out.push({
+          id: folderId,
+          name: FENOSE_SYNTHETIC_FOLDER_NAME,
+          isFolder: true,
+          createdAt: syntheticFolderCreatedAt,
+        });
+        ids.add(folderId);
+      }
+      for (const row of leanForState) {
+        if (!ids.has(row.id)) {
+          out.push(row);
+          ids.add(row.id);
+        }
+      }
+      return out;
+    });
+
     return { count: written, folderName: FENOSE_SYNTHETIC_FOLDER_NAME };
   }, []);
 
@@ -441,7 +546,7 @@ function App() {
         });
       }
       const fileId = Math.random().toString(36).substr(2, 9);
-      const approxSize = Math.max(1, new Blob([JSON.stringify(json)]).length);
+      const approxSize = Math.max(1, new Blob([JSON.stringify(json)]).size);
       await fileManager.saveFile({
         id: fileId,
         name: fileName,
@@ -651,6 +756,49 @@ function App() {
       return { ok: false, error: e?.message || 'Upload failed.' };
     }
   }, []);
+
+  const handleRenameFolder = async (e, folderId) => {
+    e.stopPropagation();
+    const folder = files.find((f) => f.id === folderId && f.isFolder);
+    if (!folder) return;
+    if (RESERVED_WORKSPACE_FOLDER_NAMES.has(String(folder.name).toLowerCase())) {
+      window.alert(
+        `The folder "${folder.name}" is used by ML Studio (models or synthetic data) and cannot be renamed.`
+      );
+      return;
+    }
+    const next = window.prompt('New folder name', folder.name);
+    if (next == null) return;
+    const trimmed = String(next).trim();
+    if (!trimmed) {
+      window.alert('Folder name cannot be empty.');
+      return;
+    }
+    if (/[\\/:*?"<>|]/.test(trimmed)) {
+      window.alert('Name cannot contain these characters: \\ / : * ? " < > |');
+      return;
+    }
+    if (RESERVED_WORKSPACE_FOLDER_NAMES.has(trimmed.toLowerCase())) {
+      window.alert(`The name "${trimmed}" is reserved for ML Studio. Choose a different name.`);
+      return;
+    }
+    if (trimmed === folder.name) return;
+    const duplicate = files.some(
+      (f) => f.isFolder && f.id !== folderId && String(f.name).toLowerCase() === trimmed.toLowerCase()
+    );
+    if (duplicate) {
+      window.alert('Another folder already uses that name. Choose a different name.');
+      return;
+    }
+    const updated = { ...folder, name: trimmed };
+    try {
+      await fileManager.saveFile(updated);
+      setFiles((prev) => prev.map((f) => (f.id === folderId ? { ...f, name: trimmed } : f)));
+    } catch (err) {
+      console.error('Failed to rename folder:', err);
+      window.alert('Could not rename folder. Please try again.');
+    }
+  };
 
   const handleDeleteFolder = async (e, folderId) => {
     e.stopPropagation();
@@ -912,6 +1060,7 @@ function App() {
           setIsCalculatorOpen={setIsCalculatorOpen}
           onCreateFolder={handleCreateFolder}
           onDeleteFolder={handleDeleteFolder}
+          onRenameFolder={handleRenameFolder}
         />
       )}
 

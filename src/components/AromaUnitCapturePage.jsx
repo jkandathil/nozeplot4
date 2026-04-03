@@ -20,6 +20,13 @@ import {
     openSerialPortForSiAc,
     readSiAcPortUtf8Until,
 } from '../utils/siacSerialProbe';
+import { writeSiac64RpcLine, clampTelemetryPeriodMs } from '../utils/siac64RpcSerial';
+import {
+    buildSiAc64SetPumpFlowPayload,
+    buildSiAc64PumpDisablePayload,
+    buildSiAc64PumpQueryPayload,
+    clampTargetFlowCcm,
+} from '../utils/siac64PumpRpc';
 import { buildAuCaptureFileName } from '../utils/auCaptureFilename.js';
 import './AromaUnitCapturePage.css';
 
@@ -44,6 +51,13 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const captureOpenExtra = useMemo(() => ({ useLargeRxBuffer: false }), []);
     /** String so the field can be cleared while editing; parsed when capture starts. */
     const [durationSecStr, setDurationSecStr] = useState('60');
+    /** SiAC64 RPC: TELEMETRY period in ms (device allows 10–1000; 0 = stop, used only on teardown). */
+    /** SiAC64: TELEMETRY.params.period — default 1000 ms (once per second). */
+    const [telemetryPeriodMsStr, setTelemetryPeriodMsStr] = useState('1000');
+    /** SiAC64 pump: SET_PIEZO_PUMP setFlow (CCM); max from profile.pumpControl.maxCcm. */
+    const [flowTargetCcm, setFlowTargetCcm] = useState(0);
+    const [pumpFlowMsg, setPumpFlowMsg] = useState('');
+    const [pumpFlowBusy, setPumpFlowBusy] = useState(false);
     const [portHint, setPortHint] = useState('');
     const [connected, setConnected] = useState(false);
     const [recording, setRecording] = useState(false);
@@ -76,6 +90,10 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         const valid = new Set(discovered.map((d) => d.key));
         setSelectedKeysForMulti((prev) => prev.filter((k) => valid.has(k)));
     }, [discovered]);
+
+    useEffect(() => {
+        if (!connected) setPumpFlowMsg('');
+    }, [connected]);
 
     useEffect(() => {
         if (!recording) {
@@ -145,6 +163,70 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         return `VID ${vid} · PID ${pid}`;
     };
 
+    const pumpMaxCcm = profile.pumpControl?.maxCcm ?? 500;
+    const pumpSliderStep = profile.pumpControl?.sliderStep ?? 1;
+
+    const applyPumpTargetFlow = async () => {
+        const port = portRef.current;
+        if (!port?.writable) {
+            setPumpFlowMsg('Connect a USB port first (select a device from the scan list).');
+            return;
+        }
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            await writeSiac64RpcLine(port, buildSiAc64SetPumpFlowPayload(flowTargetCcm, pumpMaxCcm));
+            const v = clampTargetFlowCcm(flowTargetCcm, pumpMaxCcm);
+            setFlowTargetCcm(v);
+            setPumpFlowMsg(
+                `Sent SET_PIEZO_PUMP setFlow=${v}, enable=1. Confirm in TELEMETRY (PZTFR0 / PZCFR0 / PZEN0).`
+            );
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
+    const applyPumpDisable = async () => {
+        const port = portRef.current;
+        if (!port?.writable) {
+            setPumpFlowMsg('Connect a USB port first.');
+            return;
+        }
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            await writeSiac64RpcLine(port, buildSiAc64PumpDisablePayload());
+            setPumpFlowMsg('Sent SET_PIEZO_PUMP enable=0 (pump off).');
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
+    const applyPumpQuery = async () => {
+        const port = portRef.current;
+        if (!port?.writable) {
+            setPumpFlowMsg('Connect a USB port first.');
+            return;
+        }
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            await writeSiac64RpcLine(port, buildSiAc64PumpQueryPayload());
+            setPumpFlowMsg('Sent SET_PIEZO_PUMP (no params). Check serial response / next TELEMETRY.');
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
     const runDeviceScan = async () => {
         setError('');
         setSavedOk('');
@@ -180,7 +262,13 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 const key = `${base}-${i}`;
                 const vidPid = fmtVidPid(port.getInfo?.() || {});
                 map.set(key, port);
-                const { sn, error: probeError } = await scanProbeSerialPort(port, serialOpenOpts);
+                const rpcProbe = profile.rpcShell?.probePayload ?? null;
+                const { sn, error: probeError } = await scanProbeSerialPort(
+                    port,
+                    serialOpenOpts,
+                    undefined,
+                    rpcProbe
+                );
                 rows.push({
                     key,
                     sn,
@@ -340,6 +428,11 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         await serialDelay(t.postCloseBeforeOpenMs);
                         await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
                         await primeSerialPortForSiAcRead(port);
+                        if (profile.rpcShell) {
+                            const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
+                            await writeSiac64RpcLine(port, profile.rpcShell.captureStartPayload(periodMs));
+                            await serialDelay(t.win ? 200 : 100);
+                        }
                         return { key, port, error: null };
                     } catch (e) {
                         try {
@@ -431,6 +524,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 } finally {
                     const t = getSerialPlatformTiming();
                     await serialDelay(t.afterReaderReleasedMs);
+                    if (profile.rpcShell?.captureStopPayload) {
+                        try {
+                            await writeSiac64RpcLine(port, profile.rpcShell.captureStopPayload);
+                        } catch {
+                            /* ignore */
+                        }
+                        await serialDelay(50);
+                    }
                     try {
                         await port.close();
                     } catch {
@@ -510,11 +611,11 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             const seen = rawPrev ? ` Unparsed tail: ${rawPrev}.` : '';
                             if (b <= 16) {
                                 failures.push(
-                                    `${who}: only ${b} raw byte(s) in the whole window — stream never delivered a full JSON object.${seen} Typical causes: another program using the same COM port, USB hub power, wrong baud (SiAC32-V2 uses ${profile.baudRate}), or capturing several AUs at once on Windows starving one port. Try one AU, close other serial tools, longer window, or a different USB socket.`
+                                    `${who}: only ${b} raw byte(s) in the whole window — stream never delivered a full JSON object.${seen} Typical causes: another program using the same COM port, USB hub power, wrong baud (${profile.label} uses ${profile.baudRate}), or capturing several AUs at once on Windows starving one port. Try one AU, close other serial tools, longer window, or a different USB socket.`
                                 );
                             } else {
                                 failures.push(
-                                    `${who}: ${b} byte(s) but no complete {"sn":…} row.${seen} SiAC frames can be large; the stream may have ended mid-object — use a longer collection window or one AU at a time.`
+                                    `${who}: ${b} byte(s) but no complete JSON row with channel data.${seen} SiAC frames can be large; the stream may have ended mid-object — use a longer collection window or one AU at a time. Pick the correct model (SiAC32-V2 vs SiAC64 RPC).`
                                 );
                             }
                         }
@@ -613,6 +714,12 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
             await primeSerialPortForSiAcRead(port);
 
+            if (profile.rpcShell) {
+                const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
+                await writeSiac64RpcLine(port, profile.rpcShell.captureStartPayload(periodMs));
+                await serialDelay(getSerialPlatformTiming().win ? 200 : 100);
+            }
+
             /** Full `sec` seconds of reading start only after USB is open + primed (not before). */
             const readEndAt = Date.now() + sec * 1000;
             captureProgressWindowRef.current = { startMs: Date.now(), endMs: readEndAt };
@@ -683,6 +790,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             await releaseReader();
             const t = getSerialPlatformTiming();
             await serialDelay(t.afterReaderReleasedMs);
+            if (profile.rpcShell?.captureStopPayload) {
+                try {
+                    await writeSiac64RpcLine(port, profile.rpcShell.captureStopPayload);
+                } catch {
+                    /* ignore */
+                }
+                await serialDelay(50);
+            }
             try {
                 await port.close();
             } catch {
@@ -703,14 +818,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     return `No data captured: 0 bytes in ${sec}s. Port is silent (device not streaming, wrong baud — use ${profile.baudRate} for ${profile.label}, bad cable, or wrong COM device).`;
                 }
                 if (captureParseErrors > 0) {
-                    return `No valid rows: ${bytesIn} byte(s) and ${captureParseErrors} parse error(s). Data may not be SiAC32-V2 JSON. Check the parse hint below or device firmware.`;
+                    return `No valid rows: ${bytesIn} byte(s) and ${captureParseErrors} parse error(s). Data may not match ${profile.label}. Check the parse hint below or device firmware.`;
                 }
                 const tail = describePartialSerialBuffer(orphanTail);
                 const seen = tail ? ` Unparsed tail: ${tail}.` : '';
                 if (bytesIn <= 16) {
                     return `No complete JSON: only ${bytesIn} raw byte(s) in ${sec}s.${seen} Often: another app on the same COM port, wrong baud (${profile.baudRate} for ${profile.label}), USB hub, or multi-AU capture starving a port on Windows — try one AU, close serial terminals, different USB port, longer window.`;
                 }
-                return `No complete JSON row: ${bytesIn} byte(s) received.${seen} SiAC frames can be large; if the tail shows "sn" mid-object, the frame was cut off — use a longer collection window (the app already waits a few extra seconds when it sees an unfinished object).`;
+                return `No complete JSON row with channel data: ${bytesIn} byte(s) received.${seen} SiAC frames can be large; if the tail shows "sn" or "method" mid-object, the frame was cut off — use a longer collection window (the app already waits a few extra seconds when it sees an unfinished object). Ensure the device model matches (SiAC32-V2 vs SiAC64 TELEMETRY RPC).`;
             });
             return;
         }
@@ -718,7 +833,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         const rowsForSave = rawRows.filter(captureRowHasSensorValues);
         if (rowsForSave.length === 0) {
             setError(
-                `Received ${rawRows.length} JSON object(s) in ${sec}s with timestamp/serial only — no channel readings (CHR/RRF). Those lines are not saved; check the device stream.`
+                `Received ${rawRows.length} JSON object(s) in ${sec}s with timestamp/serial only — no channel readings (A1–H8 / CHR/RRF). Those lines are not saved; check the device stream.`
             );
             return;
         }
@@ -772,6 +887,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             ))}
                         </select>
                         {profile.disabled && profile.hint ? <p className="au-hint">{profile.hint}</p> : null}
+                        {!profile.disabled ? (
+                            <p className="au-hint">
+                                <strong>SiAC64 v0.3 (TELEMETRY RPC)</strong> uses the same flow as SiAC32-V2: Link →
+                                Scan → connect → <strong>Start capture</strong> → CSV in workspace under the AU serial
+                                folder. Choose the profile that matches your firmware (JSON with <code>t[]</code> vs{' '}
+                                <code>method:&quot;TELEMETRY&quot;</code> + <code>result</code>).
+                            </p>
+                        ) : null}
                     </div>
                     <div className="au-field">
                         <label htmlFor="au-duration">Collection window (seconds)</label>
@@ -805,6 +928,156 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             than wall-clock seconds.
                         </p>
                     </div>
+                    {profile.rpcShell ? (
+                        <>
+                            <div className="au-field">
+                                <label htmlFor="au-telemetry-period">Telemetry interval (ms)</label>
+                                <input
+                                    id="au-telemetry-period"
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    autoComplete="off"
+                                    value={telemetryPeriodMsStr}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        if (v === '' || /^\d+$/.test(v)) {
+                                            setTelemetryPeriodMsStr(v);
+                                        }
+                                    }}
+                                    onBlur={() => {
+                                        const n = parseInt(telemetryPeriodMsStr, 10);
+                                        if (!Number.isFinite(n) || telemetryPeriodMsStr === '') {
+                                            setTelemetryPeriodMsStr('1000');
+                                            return;
+                                        }
+                                        const c = clampTelemetryPeriodMs(n);
+                                        setTelemetryPeriodMsStr(String(c));
+                                    }}
+                                    disabled={recording}
+                                />
+                                <div className="au-telemetry-presets" role="group" aria-label="Telemetry interval presets">
+                                    <span className="au-telemetry-presets-label">Quick</span>
+                                    {[1000, 500, 250, 100, 50, 10].map((ms) => (
+                                        <button
+                                            key={ms}
+                                            type="button"
+                                            className="au-telemetry-preset-btn"
+                                            disabled={recording}
+                                            onClick={() => setTelemetryPeriodMsStr(String(ms))}
+                                        >
+                                            {ms === 1000 ? '1 s' : `${ms} ms`}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="au-hint">
+                                    Default <strong>1000 ms</strong> (one sample per second). Sent as{' '}
+                                    <code>TELEMETRY.params.period</code>; device allows <strong>10–1000</strong> ms (
+                                    <code>Telemetry.md</code>). The app sends <code>period: 0</code> when capture ends.
+                                    Rows include <strong>A1–H8</strong> and pump/env keys (e.g. PZTFR0, PZCFR0).
+                                </p>
+                            </div>
+                            {profile.pumpControl ? (
+                                <div className="au-field">
+                                    <label htmlFor="au-flow-slider">Target flow (CCM)</label>
+                                    <div className="au-flow-slider-row">
+                                        <input
+                                            id="au-flow-slider"
+                                            type="range"
+                                            min={0}
+                                            max={pumpMaxCcm}
+                                            step={pumpSliderStep}
+                                            value={Math.min(flowTargetCcm, pumpMaxCcm)}
+                                            onChange={(e) =>
+                                                setFlowTargetCcm(
+                                                    clampTargetFlowCcm(Number(e.target.value), pumpMaxCcm)
+                                                )
+                                            }
+                                            disabled={
+                                                !connected || recording || pumpFlowBusy || profile.disabled
+                                            }
+                                            aria-valuemin={0}
+                                            aria-valuemax={pumpMaxCcm}
+                                            aria-valuenow={Math.min(flowTargetCcm, pumpMaxCcm)}
+                                        />
+                                        <div className="au-flow-value-wrap">
+                                            <input
+                                                id="au-flow-number"
+                                                type="number"
+                                                min={0}
+                                                max={pumpMaxCcm}
+                                                step={0.1}
+                                                value={flowTargetCcm}
+                                                onChange={(e) => {
+                                                    const n = parseFloat(e.target.value);
+                                                    if (Number.isFinite(n)) {
+                                                        setFlowTargetCcm(clampTargetFlowCcm(n, pumpMaxCcm));
+                                                    }
+                                                }}
+                                                disabled={
+                                                    !connected || recording || pumpFlowBusy || profile.disabled
+                                                }
+                                            />
+                                            <span className="au-flow-ccm-suffix">CCM</span>
+                                        </div>
+                                    </div>
+                                    <div className="au-btn-row au-pump-btn-row">
+                                        <button
+                                            type="button"
+                                            className="au-btn au-btn-primary"
+                                            onClick={() => applyPumpTargetFlow()}
+                                            disabled={
+                                                !connected ||
+                                                recording ||
+                                                pumpFlowBusy ||
+                                                profile.disabled
+                                            }
+                                        >
+                                            Apply flow (enable on)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="au-btn au-btn-secondary"
+                                            onClick={() => applyPumpDisable()}
+                                            disabled={
+                                                !connected ||
+                                                recording ||
+                                                pumpFlowBusy ||
+                                                profile.disabled
+                                            }
+                                        >
+                                            Pump off
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="au-btn au-btn-secondary"
+                                            onClick={() => applyPumpQuery()}
+                                            disabled={
+                                                !connected ||
+                                                recording ||
+                                                pumpFlowBusy ||
+                                                profile.disabled
+                                            }
+                                            title='Bare SET_PIEZO_PUMP (no params), same as firmware shell'
+                                        >
+                                            Query pump
+                                        </button>
+                                    </div>
+                                    {pumpFlowMsg ? (
+                                        <p className="au-hint au-pump-flow-msg">{pumpFlowMsg}</p>
+                                    ) : null}
+                                    <p className="au-hint">
+                                        Uses device RPC{' '}
+                                        <code>SET_PIEZO_PUMP</code>: <strong>Apply flow</strong> sends{' '}
+                                        <code>setFlow</code> (CCM) and <code>enable: 1</code>; <strong>Pump off</strong>{' '}
+                                        sends <code>enable: 0</code>; <strong>Query pump</strong> sends the bare method.
+                                        Slider <strong>0–{pumpMaxCcm} CCM</strong> (adjust{' '}
+                                        <code>profile.pumpControl.maxCcm</code> if needed). Disabled while recording.
+                                    </p>
+                                </div>
+                            ) : null}
+                        </>
+                    ) : null}
                 </div>
 
                 <div className="au-capture-card">

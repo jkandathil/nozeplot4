@@ -32,7 +32,7 @@ export function isSiacSerialCaptureFileName(fileName) {
     return /^.+_\d{4}-\d{2}-\d{2}_\d{6}\.csv$/i.test(b);
 }
 
-/** Heuristic: flattened SiAC JSON rows (CHR*, RRF*, sn, timestamp). */
+/** Heuristic: flattened SiAC32 JSON rows (CHR*, RRF*) or SiAC64 TELEMETRY rows (A1–H8 grid, ASELT, …). */
 export function looksLikeSiacCaptureData(data) {
     if (!Array.isArray(data) || data.length === 0) return false;
     const row = data[0];
@@ -40,7 +40,8 @@ export function looksLikeSiacCaptureData(data) {
     const keys = Object.keys(row);
     const hasChr = keys.some((k) => /^chr\d+$/i.test(k));
     const hasRrf = keys.some((k) => /^rrf\d+$/i.test(k));
-    return hasChr || hasRrf;
+    const hasMuxGrid = keys.some((k) => /^[A-H][1-8]$/i.test(k));
+    return hasChr || hasRrf || hasMuxGrid;
 }
 
 /**
@@ -48,12 +49,25 @@ export function looksLikeSiacCaptureData(data) {
  */
 export function estimateWorkspaceFileBytes(file) {
     if (!file || file.isFolder) return 0;
-    if (file.file && typeof file.file.size === 'number') return file.file.size;
+    if (file.file && typeof file.file.size === 'number' && file.file.size > 0) return file.file.size;
     if (typeof file.size === 'number' && file.size > 0) return file.size;
+    const csvFallback =
+        (typeof file.csvText === 'string' && file.csvText.trim().length > 0 && file.csvText) ||
+        (typeof file.csvSnapshot === 'string' && file.csvSnapshot.trim().length > 0 && file.csvSnapshot) ||
+        null;
+    if (csvFallback) {
+        try {
+            return Math.max(1, new Blob([csvFallback]).size);
+        } catch {
+            /* fall through */
+        }
+    }
     if (Array.isArray(file.data) && file.data.length > 0) {
         try {
             const n = Math.min(file.data.length, 30);
-            const bytes = new Blob([JSON.stringify(file.data.slice(0, n))]).length;
+            const blob = new Blob([JSON.stringify(file.data.slice(0, n))]);
+            const bytes = blob.size;
+            if (!Number.isFinite(bytes) || bytes <= 0) return 0;
             return Math.max(1, Math.round((bytes / n) * file.data.length));
         } catch {
             return 0;
@@ -61,12 +75,36 @@ export function estimateWorkspaceFileBytes(file) {
     }
     if (file.data != null && typeof file.data === 'object' && !Array.isArray(file.data)) {
         try {
-            return Math.max(1, new Blob([JSON.stringify(file.data)]).length);
+            const blob = new Blob([JSON.stringify(file.data)]);
+            const sz = blob.size;
+            return Number.isFinite(sz) && sz > 0 ? Math.max(1, sz) : 0;
         } catch {
             return typeof file.size === 'number' && file.size > 0 ? file.size : 0;
         }
     }
     return 0;
+}
+
+/** Human-readable size for sidebar / workspace labels (approximate stored data). */
+export function formatWorkspaceDataSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    if (n < 1024) return `${Math.round(n)} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 2 : 1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** Sum approximate bytes for non-folder workspace entries. */
+export function sumWorkspaceDataBytes(fileList) {
+    if (!Array.isArray(fileList)) return 0;
+    let s = 0;
+    for (const f of fileList) {
+        if (!f || f.isFolder) continue;
+        const b = estimateWorkspaceFileBytes(f);
+        if (Number.isFinite(b) && b > 0) s += b;
+    }
+    return s;
 }
 
 /**

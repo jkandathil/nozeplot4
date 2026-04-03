@@ -104,10 +104,23 @@ export function parseFenosePpbFromFilename(name) {
     return m ? parseFloat(m[1]) : null;
 }
 
+/**
+ * Extract an Aroma Unit (or device) id from a workspace filename.
+ * Matches any NZ pipeline token `##########-####-<role>-nz` (e.g. asu-nz, oms-nz).
+ * When several tokens appear, prefers `-asu-nz` (typical AU serial in captures).
+ */
 export function parseFenoseDeviceIdFromFilename(name) {
     const b = String(name || '').split(/[/\\]/).pop() || '';
-    const m = b.match(/(\d{10}-\d{4}-asu-nz)/i);
-    return m ? m[1].toUpperCase() : 'UNKNOWN';
+    // Avoid \b: underscores count as “word” in JS, so tokens like …_0000000063-0926-asu-nz_… would not match.
+    const re = /(?<![0-9])(\d{10}-\d{4}-[a-z0-9]+-nz)(?![A-Za-z0-9])/gi;
+    const found = [];
+    let m;
+    while ((m = re.exec(b)) !== null) {
+        found.push(m[1]);
+    }
+    if (found.length === 0) return 'UNKNOWN';
+    const asu = found.find((x) => /-asu-nz$/i.test(x));
+    return (asu || found[0]).toUpperCase();
 }
 
 function trainingSampleLabel(row) {

@@ -4,6 +4,8 @@
  * use drainJsonObjectsFromBuffer instead of splitting on \n only.
  */
 
+import { DEFAULT_TELEMETRY_PERIOD_MS } from './siac64RpcSerial.js';
+
 /**
  * Extract complete top-level `{...}` JSON substrings (string-aware brace matching).
  * @param {string} buffer
@@ -14,6 +16,29 @@ export function describePartialSerialBuffer(s, maxLen = 100) {
     if (s == null || s === '') return '';
     const slice = String(s).slice(0, maxLen);
     return JSON.stringify(slice) + (String(s).length > maxLen ? '…' : '');
+}
+
+/**
+ * Serial / scan: pull AU id from a parsed JSON object (SiAC32 `sn`, SiAC64 TELEMETRY envelope, etc.).
+ * @param {unknown} obj
+ * @returns {string} trimmed serial or ""
+ */
+export function extractAuSerialNumberFromParsedJson(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
+    const top = obj.sn ?? obj.SN ?? obj.serial;
+    if (top != null) {
+        const s = String(top).trim();
+        if (s) return s;
+    }
+    const meth = obj.method != null ? String(obj.method).toUpperCase() : '';
+    if (meth === 'TELEMETRY' && obj.result && typeof obj.result === 'object' && !Array.isArray(obj.result)) {
+        const r = obj.result.sn ?? obj.result.SN;
+        if (r != null) {
+            const s = String(r).trim();
+            if (s) return s;
+        }
+    }
+    return '';
 }
 
 /**
@@ -106,8 +131,64 @@ export function drainJsonObjectsFromBuffer(buffer) {
     return { chunks, rest: buffer.slice(i) };
 }
 
-/** @param {string} line raw JSON object from serial */
-/** @param {string} timestampIso ISO-8601 receive time */
+/**
+ * SiAC64 TELEMETRY RPC JSON → one CSV row (Telemetry.md “Telemetry Example Output”, ~lines 104–214).
+ *
+ * Envelope: `code`, `message`, `sn`, `method`, `format`, `version`, `frequency`, `result` (Telemetry.md § example).
+ * `result` is a flat map: `A1`…`H8`, `ASELT`, `BT1`, pump keys (`PZTFR0`, …), `DPP0`, `AQ*`, `SYS*`, etc.
+ * Firmware may emit unquoted `nan` in JSON; we sanitize before parse.
+ */
+export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
+    const raw = String(line).replace(/^\r+|\r+$/g, '').trim();
+    if (!raw) return null;
+    let obj;
+    try {
+        const s = raw
+            .replace(/\bNaN\b/g, 'null')
+            .replace(/\bnan\b/g, 'null')
+            .replace(/\bInfinity\b/g, 'null')
+            .replace(/\b-Infinity\b/g, 'null');
+        obj = JSON.parse(s);
+    } catch {
+        return null;
+    }
+    if (!obj || typeof obj !== 'object') return null;
+    const meth = obj.method != null ? String(obj.method).toUpperCase() : '';
+    if (meth !== 'TELEMETRY') return null;
+    const res = obj.result;
+    if (!res || typeof res !== 'object' || Array.isArray(res)) return null;
+
+    const snRaw = obj.sn ?? obj.SN ?? res.sn;
+    const row = {
+        timestamp: timestampIso,
+        sn: snRaw != null ? String(snRaw) : '',
+    };
+
+    for (const [k, v] of Object.entries(res)) {
+        if (v === null || v === undefined) {
+            row[k] = '';
+            continue;
+        }
+        if (typeof v === 'number' && !Number.isFinite(v)) {
+            row[k] = '';
+            continue;
+        }
+        row[k] = v;
+    }
+
+    if (obj.code !== undefined && obj.code !== null) row.telemetry_code = obj.code;
+    if (obj.message != null) row.telemetry_message = String(obj.message);
+    if (obj.method != null) row.telemetry_method = String(obj.method);
+    if (obj.format != null) row.telemetry_format = String(obj.format);
+    if (obj.version !== undefined && obj.version !== null) row.telemetry_version = obj.version;
+    if (obj.frequency != null) {
+        const f = Number(obj.frequency);
+        if (Number.isFinite(f)) row.telemetry_frequency_hz = f;
+    }
+
+    return row;
+}
+
 export function parseSiac32V2Line(line, timestampIso) {
     const s = String(line).replace(/^\r+|\r+$/g, '').trim();
     if (!s) return null;
@@ -139,13 +220,15 @@ export function firstNonEmptySnInRows(rows) {
 }
 
 /**
- * True if the row has at least one value beyond `timestamp` / `sn` (e.g. CHR*, RRF* from SiAC `t`[]).
- * Rows with only id + time (empty `t` or partial JSON) should not be saved.
+ * True if the row has at least one value beyond `timestamp` / `sn` (e.g. CHR*, RRF* from SiAC `t`[], or
+ * A1–H8 / pump keys from SiAC64 `result`). Skips `telemetry_*` envelope fields so SiAC64 rows with only
+ * metadata and an empty `result` are not treated as captured data.
  */
 export function captureRowHasSensorValues(row) {
     if (!row || typeof row !== 'object') return false;
     for (const k of Object.keys(row)) {
         if (k === 'timestamp' || k === 'sn') continue;
+        if (k.startsWith('telemetry_')) continue;
         const v = row[k];
         if (v === '' || v === null || v === undefined) continue;
         return true;
@@ -242,6 +325,41 @@ export const AU_DEVICE_PROFILES = {
         disabled: true,
         hint: 'Different frame format — support coming later.',
         parseLine: null,
+    },
+    /** SiAC64 v0.3.x mux-dev: USB shell `rpc send` + TELEMETRY JSON (A1–H8, pump, env). See Telemetry.md */
+    SIAC64_V03_RPC: {
+        id: 'SiAC64-v0.3-RPC',
+        label: 'SiAC64 v0.3 (TELEMETRY RPC)',
+        baudRate: 115200,
+        parseLine: parseSiAc64RpcTelemetryLine,
+        rpcShell: {
+            /**
+             * ASAU/SiAC64 rejects TELEMETRY without `params.period` ("period not provided"). Host stays JSON-only;
+             * no CBOR on the app side. See scripts/probeSiAc64Serial.py.
+             */
+            probePayload: {
+                method: 'TELEMETRY',
+                params: {
+                    period: DEFAULT_TELEMETRY_PERIOD_MS,
+                    includeRawValues: 0,
+                    outputFormat: 0,
+                },
+            },
+            captureStartPayload: (periodMs) => ({
+                method: 'TELEMETRY',
+                params: {
+                    period: periodMs,
+                    includeRawValues: 0,
+                    outputFormat: 0,
+                },
+            }),
+            captureStopPayload: { method: 'TELEMETRY', params: { period: 0 } },
+        },
+        /** Piezo pump: SET_PIEZO_PUMP (setFlow + enable) — see siac64PumpRpc.js */
+        pumpControl: {
+            maxCcm: 500,
+            sliderStep: 1,
+        },
     },
 };
 

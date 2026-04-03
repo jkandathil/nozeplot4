@@ -27,6 +27,12 @@ import {
 import { FENOSE_SYNTH_UNKNOWN_KEY, parseConcentrationsList } from '../utils/fenoseSyntheticDataset.js';
 import { parseFile } from '../utils/fileParser.js';
 import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace.js';
+import {
+    getBrowserStorageEstimate,
+    syntheticWorkloadHints,
+    formatBytes,
+    getDeviceMemoryGb,
+} from '../utils/browserCapacityHints.js';
 import './MLStudioPage.css';
 
 function looksLikeFenoseLabelledTabular(name) {
@@ -208,12 +214,28 @@ const MLStudioPage = ({
 
     const fenoseSynthPlannedFileCount = useMemo(() => {
         const nConc = fenoseSynthConcCount;
-        const r = Math.max(1, Math.min(50, Math.floor(Number(fenoseSynthReps) || 2)));
+        const r = Math.max(1, Math.min(200, Math.floor(Number(fenoseSynthReps) || 2)));
         if (nConc === 0) return 0;
         const nAu = fenoseSynthAuOptions.length > 0 ? fenoseSynthSelectedAuKeys.length : 1;
         if (fenoseSynthAuOptions.length > 0 && nAu === 0) return 0;
         return nAu * nConc * r;
     }, [fenoseSynthAuOptions.length, fenoseSynthSelectedAuKeys.length, fenoseSynthConcCount, fenoseSynthReps]);
+
+    const [browserStorageEst, setBrowserStorageEst] = useState(null);
+    useEffect(() => {
+        let cancelled = false;
+        getBrowserStorageEstimate().then((est) => {
+            if (!cancelled) setBrowserStorageEst(est);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const fenoseSyntheticCapacityHints = useMemo(
+        () => syntheticWorkloadHints(fenoseSynthPlannedFileCount, browserStorageEst),
+        [fenoseSynthPlannedFileCount, browserStorageEst]
+    );
 
     const [fenoseBatchResults, setFenoseBatchResults] = useState(null);
     const [fenoseBatchRunning, setFenoseBatchRunning] = useState(false);
@@ -571,6 +593,16 @@ const MLStudioPage = ({
         }
         setFenoseSynthBusy(true);
         try {
+            const freshEst = await getBrowserStorageEstimate();
+            if (freshEst) setBrowserStorageEst(freshEst);
+            const capHints = syntheticWorkloadHints(fenoseSynthPlannedFileCount, freshEst || browserStorageEst);
+            if (capHints.severity === 'severe' && capHints.messages.length > 0) {
+                const proceed = window.confirm(
+                    `${capHints.messages.join('\n\n')}\n\nContinue with synthetic generation anyway?`
+                );
+                if (!proceed) return;
+            }
+
             const { count, folderName } = await onAddSyntheticFenoseToWorkspace({
                 concentrationsText: fenoseSynthConc,
                 replicates: fenoseSynthReps,
@@ -1231,7 +1263,7 @@ const MLStudioPage = ({
                                     Synthetic demo dataset
                                 </div>
                                 <p className="ml-fenose-synthetic-desc">
-                                    Writes to <code>{FENOSE_SYNTHETIC_FOLDER_NAME}/</code> only. <strong>Select which Aroma Units</strong> below (detected from labelled workspace filenames). Each selected unit gets synthetic CSVs for every concentration, repeated <code>replicates</code> times. Calibration is per unit when possible (≥2 files for that id), else pooled, else built-in. Supplement real data — do not rely on synthetic alone.
+                                    Writes to <code>{FENOSE_SYNTHETIC_FOLDER_NAME}/</code> only. <strong>Select which Aroma Units</strong> below (detected from labelled workspace filenames). Each selected unit gets synthetic CSVs for every concentration, repeated <code>replicates</code> times. Calibration is per unit when possible (≥2 files for that id), else pooled, else built-in. Large jobs (many devices × ppb × replicates) may take a while; rows stay in the database and load when you open a file. Supplement real data — do not rely on synthetic alone.
                                 </p>
                                 {fenoseSynthAuOptions.length > 0 ? (
                                     <div className="ml-fenose-synth-au-block">
@@ -1259,7 +1291,7 @@ const MLStudioPage = ({
                                             </div>
                                         </div>
                                         <p className="ml-fenose-hint ml-fenose-synth-au-hint">
-                                            Device id must appear in the file name (<code>##########-####-asu-nz</code>). File count shown uses your selections × ppb list × replicates.
+                                            Device id in the file name should match <code>##########-####-…-nz</code> (e.g. <code>asu-nz</code>, <code>oms-nz</code>); if several appear, the AU token ending in <code>asu-nz</code> is preferred. File count = selected units × ppb list × replicates.
                                         </p>
                                         <div className="ml-fenose-synth-au-list">
                                             {fenoseSynthAuOptions.map((o) => (
@@ -1297,14 +1329,60 @@ const MLStudioPage = ({
                                         {fenoseSynthAuOptions.length > 0 ? `${fenoseSynthSelectedAuKeys.length} selected unit${fenoseSynthSelectedAuKeys.length === 1 ? '' : 's'}` : '1 default run'}
                                         {' × '}
                                         {fenoseSynthConcCount} ppb level{fenoseSynthConcCount === 1 ? '' : 's'} ×{' '}
-                                        {Math.max(1, Math.min(50, Math.floor(Number(fenoseSynthReps) || 2)))} replicate
-                                        {Math.max(1, Math.min(50, Math.floor(Number(fenoseSynthReps) || 2))) === 1 ? '' : 's'}
+                                        {Math.max(1, Math.min(200, Math.floor(Number(fenoseSynthReps) || 2)))} replicate
+                                        {Math.max(1, Math.min(200, Math.floor(Number(fenoseSynthReps) || 2))) === 1 ? '' : 's'}
                                         ).
                                     </p>
                                 ) : fenoseSynthAuOptions.length > 0 ? (
                                     <p className="ml-fenose-synth-plan-preview ml-fenose-synth-plan-preview--muted" role="status">
                                         Select at least one unit and one valid concentration to see the CSV count.
                                     </p>
+                                ) : null}
+                                {browserStorageEst && browserStorageEst.quota > 0 ? (
+                                    <p className="ml-fenose-hint ml-fenose-capacity-meter" role="status">
+                                        Browser storage for this site: ~{formatBytes(browserStorageEst.usage)} /{' '}
+                                        {formatBytes(browserStorageEst.quota)} (
+                                        {Math.round(browserStorageEst.fractionUsed * 100)}% used). This is separate from
+                                        total PC RAM; it limits how much the workspace can grow in this browser.
+                                    </p>
+                                ) : (
+                                    <p className="ml-fenose-hint ml-fenose-capacity-meter" role="status">
+                                        Storage quota for this site isn&apos;t available in this browser; large uploads or
+                                        synthetic batches may still fail if disk or browser limits are reached.
+                                    </p>
+                                )}
+                                {getDeviceMemoryGb() != null ? (
+                                    <p className="ml-fenose-hint" role="note">
+                                        Reported device memory hint: ~{getDeviceMemoryGb()} GB (Chrome-style estimate only;
+                                        not exact RAM).
+                                    </p>
+                                ) : null}
+                                {fenoseSynthPlannedFileCount > 0 &&
+                                fenoseSyntheticCapacityHints.messages.length > 0 ? (
+                                    <div
+                                        className={
+                                            fenoseSyntheticCapacityHints.severity === 'severe'
+                                                ? 'ml-fenose-capacity-banner ml-fenose-capacity-banner--severe'
+                                                : 'ml-fenose-capacity-banner ml-fenose-capacity-banner--warn'
+                                        }
+                                        role="alert"
+                                    >
+                                        <strong>
+                                            {fenoseSyntheticCapacityHints.severity === 'severe'
+                                                ? 'High load warning'
+                                                : 'Heads-up'}
+                                        </strong>
+                                        <ul className="ml-fenose-capacity-banner-list">
+                                            {fenoseSyntheticCapacityHints.messages.map((m, i) => (
+                                                <li key={i}>{m}</li>
+                                            ))}
+                                        </ul>
+                                        {fenoseSyntheticCapacityHints.severity === 'severe' ? (
+                                            <p className="ml-fenose-capacity-banner-foot">
+                                                You will be asked to confirm before generation starts.
+                                            </p>
+                                        ) : null}
+                                    </div>
                                 ) : null}
                                 <div className="ml-fenose-synthetic-controls">
                                     <label className="ml-fenose-label">
@@ -1323,7 +1401,7 @@ const MLStudioPage = ({
                                             className="text-input ml-fenose-input-full"
                                             type="number"
                                             min={1}
-                                            max={50}
+                                            max={200}
                                             value={fenoseSynthReps}
                                             onChange={(e) => setFenoseSynthReps(Number(e.target.value))}
                                             disabled={fenoseSynthBusy || fenoseTrainBusy}

@@ -84,6 +84,18 @@ class FileManager {
             request.onerror = (e) => reject(e.target.error);
         });
     }
+
+    /** Single record (used when workspace state holds a lean stub without `data`). */
+    async getFile(id) {
+        await this.init();
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([STORE_NAME], 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const request = store.get(id);
+            request.onsuccess = () => resolve(request.result ?? null);
+            request.onerror = (e) => reject(e.target.error);
+        });
+    }
 }
 
 export const fileManager = new FileManager();

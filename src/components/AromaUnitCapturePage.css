@@ -82,11 +82,102 @@
     cursor: not-allowed;
 }
 
+.au-flow-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 420px;
+    margin-top: 4px;
+}
+
+.au-flow-slider-row input[type='range'] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--accent-primary, #00de93);
+}
+
+.au-flow-slider-row input[type='range']:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.au-flow-value-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.au-flow-value-wrap input[type='number'] {
+    width: 4.75rem;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #475569);
+    background: rgba(15, 23, 42, 0.8);
+    color: var(--text-primary, #e2e8f0);
+    font-size: 0.85rem;
+}
+
+.au-flow-ccm-suffix {
+    font-size: 0.72rem;
+    color: var(--text-muted, #94a3b8);
+    font-weight: 500;
+}
+
+.au-pump-flow-msg {
+    margin-top: 8px !important;
+    color: #94d4b8;
+}
+
+.au-telemetry-presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    margin-top: 8px;
+    max-width: 420px;
+}
+
+.au-telemetry-presets-label {
+    font-size: 0.72rem;
+    color: var(--text-muted, #94a3b8);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 2px;
+}
+
+.au-telemetry-preset-btn {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #475569);
+    background: rgba(15, 23, 42, 0.65);
+    color: var(--text-secondary, #cbd5e1);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.au-telemetry-preset-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+    color: var(--text-primary, #e2e8f0);
+}
+
+.au-telemetry-preset-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 .au-btn-row {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 8px;
+}
+
+.au-pump-btn-row {
+    max-width: 520px;
 }
 
 .au-btn {
