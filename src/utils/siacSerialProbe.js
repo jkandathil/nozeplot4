@@ -56,10 +56,10 @@ export function getSerialPlatformTiming() {
         readableWaitStepMs: win ? 50 : 40,
         afterReaderReleasedMs: win ? 150 : 40,
         afterPortCloseMs: win ? 120 : 40,
-        postWakeSignalsMs: win ? 180 : 20,
+        postWakeSignalsMs: win ? 350 : 20,
         writableWaitAttempts: win ? 36 : 8,
         writableWaitStepMs: win ? 50 : 40,
-        afterWritablePingMs: win ? 220 : 80,
+        afterWritablePingMs: win ? 450 : 80,
         scanSecondReadMs: win ? 10000 : 7000,
     };
 }
@@ -131,19 +131,27 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
         }
         if (!found) {
             buffer += decoder.decode();
-            const { chunks } = drainJsonObjectsFromBuffer(buffer);
-            for (const jsonStr of chunks) {
+            const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
+            if (chunks.length > 0) {
+                console.debug(`[Scan] Detected ${chunks.length} potential JSON fragments on ${port.getInfo?.()?.usbVendorId || 'port'}`);
+            }
+            for (const c of chunks) {
                 try {
-                    const obj = JSON.parse(sanitizeSiacFirmwareJsonText(jsonStr));
-                    const sn = extractAuSerialNumberFromParsedJson(obj);
+                    const clean = sanitizeSiacFirmwareJsonText(c);
+                    const parsed = JSON.parse(clean);
+                    const sn = extractAuSerialNumberFromParsedJson(parsed);
                     if (sn) {
+                        console.info(`[Scan] Verified Serial Number: "${sn}"`);
                         found = sn;
                         break;
+                    } else {
+                        console.debug(`[Scan] JSON chunk did not contain a recognized serial ID:`, parsed);
                     }
-                } catch {
-                    /* skip */
+                } catch (e) {
+                    console.warn(`[Scan] Fragment parse error:`, e.message, "Content:", c);
                 }
             }
+            buffer = rest;
         }
     } finally {
         clearTimeout(timer);
@@ -336,7 +344,8 @@ export async function openSerialPortForSiAc(port, baseOpenOpts, extra = {}) {
  */
 export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProbePayload = null) {
     const t = getSerialPlatformTiming();
-    const readMs = readTimeoutMs ?? t.scanReadTimeoutMs;
+    const maxWaitMs = 3000;
+    const readMs = Math.max(readTimeoutMs ?? t.scanReadTimeoutMs, maxWaitMs);
     const bustAfterMs = readMs + t.bustExtraMs;
     const openWithFlow = { ...openOpts, flowControl: openOpts.flowControl ?? 'none' };
     if (t.win) {

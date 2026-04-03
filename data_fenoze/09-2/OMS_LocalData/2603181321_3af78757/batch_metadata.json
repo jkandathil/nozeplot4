@@ -1,0 +1,63 @@
+{
+  "protocols": {
+    "ABGv5MUXOff-5ppb-3AH-75ccm-Maxwell-Q126": [
+      "8a7a5080-8e41-43fd-bb8e-db64df3f0580",
+      "9fbfeb5d-fe91-41b5-a248-363f9a179bc0",
+      "566f1c98-42aa-420d-8430-0ceb5d2faf23",
+      "a0a221e9-48b4-42b3-b076-cca1c48329f8",
+      "3394c004-831a-43dc-aca3-2fc9b3f327e0"
+    ],
+    "ABGv5MUXOff-0ppb-3AH-75ccm-Maxwell-Q126": [
+      "1e2aa2fc-da87-4901-893b-b8ce2d9377ff",
+      "83598a1f-37ee-4852-9830-91596852639a",
+      "0d279ac7-33e5-4573-aaf9-38ff939bb4ef",
+      "01668769-0cb5-4a0b-982e-2db5f96fc02f",
+      "31c44eb9-f5b6-4c2e-a5d0-30b638266bfa"
+    ],
+    "ABGv5MUXOff-20ppb-3AH-75ccm-Maxwell-Q126": [
+      "b169c57c-e15e-47e9-a9d2-dc3d06d081e3",
+      "36f6538b-e51f-4015-89db-3357dc611fa4",
+      "832c956f-2b25-4342-9488-5ab6ba5274dc",
+      "b70bd652-18e8-40ba-bf19-ab393d19d725",
+      "add6bfd7-35ef-4a93-931d-60d2b26feac4"
+    ],
+    "ABGv5MUXOff-50ppb-3AH-75ccm-Maxwell-Q126": [
+      "cacb2233-1828-4342-84b2-f4b04f4d9a61",
+      "c381074b-ec0b-4be6-b709-048e7e2c3074",
+      "b288dd6d-1f43-4fe6-b9f2-11a39c1bcff5",
+      "01161791-8579-489f-9f4a-95aec5ecfcdd",
+      "d572291b-def4-48e3-8446-1bc930602904"
+    ],
+    "ABGv5MUXOff-75ppb-3AH-75ccm-Maxwell-Q126": [
+      "c4d526a6-99b8-48e0-b3d9-21ca43a4ede4",
+      "eea7d3fd-2beb-4e22-86a1-bd997f39ce64",
+      "0f0e2cb6-a38d-408c-82be-58d82f9694dc",
+      "04981f93-cec0-405d-9d54-e81ad84259a4",
+      "553cee0b-c9a0-4520-881c-7ac4a661f973"
+    ],
+    "ABGv5MUXOff-100ppb-3AH-75ccm-Maxwell-Q126": [
+      "d5ae04ac-0e65-413c-9b21-ab4154644f97",
+      "d04901b6-3624-44db-bdfd-c5bea7b34ad7",
+      "5a5282ea-9958-445a-b166-032b4835fe53",
+      "28fc2c6e-df40-4a96-afb5-0338159d0ab9",
+      "60bd22cf-e114-47a1-a40f-68b346d27191"
+    ],
+    "ABGv5MUXOff-10ppb-3AH-75ccm-Maxwell-Q126": [
+      "9de500a5-437b-4754-b186-9e65afeeee79",
+      "f274af77-1c02-4e8c-836c-9614961817b8",
+      "9d86d35d-243a-4e3e-8eec-c154a2f6bbdd",
+      "6de35ba8-68e6-4556-b628-e9b8e57e57e7",
+      "3af78757-61a0-4018-bb77-0f06c099581b"
+    ],
+    "ABGv5MUXOff-0CLN-3AH-75ccm-Anthony-Q126": [
+      "a8ab1e8a-8b6e-402c-89e4-1f7ae45a95cf",
+      "fef87997-392e-4cd4-aa9a-14b88d81d4cc",
+      "43f1faca-2f54-449c-abd9-1030e78217db",
+      "4b398e23-ded2-4ae1-8f45-2c89167f0d00"
+    ]
+  },
+  "data": {
+    "computer": "DA9",
+    "batchId": "yvHCX"
+  }
+}

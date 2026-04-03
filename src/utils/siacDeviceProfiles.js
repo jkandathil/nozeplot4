@@ -25,14 +25,14 @@ export function describePartialSerialBuffer(s, maxLen = 100) {
  */
 export function extractAuSerialNumberFromParsedJson(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
-    const top = obj.sn ?? obj.SN ?? obj.serial;
+    const top = obj.sn ?? obj.SN ?? obj.serial ?? obj.id ?? obj.ID ?? obj.AU_ID ?? obj.device_id;
     if (top != null) {
         const s = String(top).trim();
         if (s) return s;
     }
     const meth = obj.method != null ? String(obj.method).toUpperCase() : '';
     if (meth === 'TELEMETRY' && obj.result && typeof obj.result === 'object' && !Array.isArray(obj.result)) {
-        const r = obj.result.sn ?? obj.result.SN;
+        const r = obj.result.sn ?? obj.result.SN ?? obj.result.id ?? obj.result.ID ?? obj.result.AU_ID;
         if (r != null) {
             const s = String(r).trim();
             if (s) return s;
@@ -169,11 +169,12 @@ export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
             row[k] = '';
             continue;
         }
-        if (typeof v === 'number' && !Number.isFinite(v)) {
-            row[k] = '';
-            continue;
+        if (typeof v === 'string') {
+            const n = parseFloat(v);
+            row[k] = isNaN(n) ? v : n;
+        } else {
+            row[k] = v;
         }
-        row[k] = v;
     }
 
     if (obj.code !== undefined && obj.code !== null) row.telemetry_code = obj.code;
@@ -345,15 +346,9 @@ export const AU_DEVICE_PROFILES = {
                     outputFormat: 0,
                 },
             },
-            captureStartPayload: (periodMs) => ({
-                method: 'TELEMETRY',
-                params: {
-                    period: periodMs,
-                    includeRawValues: 0,
-                    outputFormat: 0,
-                },
-            }),
-            captureStopPayload: { method: 'TELEMETRY', params: { period: 0 } },
+            probePayload: () => ({ method: 'TELEMETRY', params: { period: 1000, outputFormat: 0 } }),
+            captureStartPayload: (ms) => ({ method: 'TELEMETRY', params: { period: ms, outputFormat: 0 } }),
+            captureStopPayload: () => ({ method: 'TELEMETRY', params: { period: 0 } }),
         },
         /** Piezo pump: SET_PIEZO_PUMP (setFlow + enable) — see siac64PumpRpc.js */
         pumpControl: {

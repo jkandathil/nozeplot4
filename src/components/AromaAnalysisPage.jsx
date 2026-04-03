@@ -1452,7 +1452,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                                         return `${parseFloat(val.toFixed(3))}${suffix}`;
                                                     }} />
                                                     <RechartsTooltip content={<CustomTooltip referenceLines={plot.referenceLines} />} cursor={false} />
-                                                    {((plot.lines?.length || 0) + (plot.areas?.length || 0)) <= 20 && (
+                                                    {((plot.lines?.length || 0) + (plot.areas?.length || 0)) <= 100 && (
                                                         <Legend content={<CustomAromaLegend targetPlot={plot} />} wrapperStyle={{ paddingTop: '0px', marginTop: '-10px', paddingBottom: '0px' }} />
                                                     )}
                                                     {plot.referenceLines && plot.referenceLines.map((rl, rIdx) => (
@@ -1480,7 +1480,7 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                                         return `${parseFloat(val.toFixed(3))}${suffix}`;
                                                     }} />
                                                     <RechartsTooltip content={<CustomTooltip referenceLines={plot.referenceLines} />} cursor={false} />
-                                                    {(plot.lines?.length || 0) <= 20 && (
+                                                    {(plot.lines?.length || 0) <= 100 && (
                                                         <Legend content={<CustomAromaLegend targetPlot={plot} />} wrapperStyle={{ paddingTop: '0px', marginTop: '-10px', paddingBottom: '0px' }} />
                                                     )}
                                                     {(plot.lines || []).map((line, lIdx) => (

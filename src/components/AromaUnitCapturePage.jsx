@@ -286,6 +286,17 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         }
     };
 
+    // Auto-scan any unverified or linked ports when the user switches model profile
+    useEffect(() => {
+        if (recording || scanning || discovered.length === 0) return;
+
+        // Use a small timeout to avoid double-firing if the profile was set during a scan
+        const id = setTimeout(() => {
+            runDeviceScan().catch(() => {});
+        }, 500);
+        return () => clearTimeout(id);
+    }, [profileKey]);
+
     const linkNewUsbDevice = async () => {
         setError('');
         setSavedOk('');
@@ -467,11 +478,17 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 if (row && captureRowHasSensorValues(row)) {
                                     rows.push(row);
                                     bumpLines();
+                                    if (rows.length === 1) {
+                                        console.info(`[Multi-AU Capture] First valid JSON row from ${key}:`, row);
+                                    }
                                     if (rows.length % 5 === 0) {
                                         setLastPreview(JSON.stringify(rows[rows.length - 1]).slice(0, 280));
                                     }
+                                } else {
+                                    console.debug(`[Multi-AU Capture] JSON ignored (no sensors): ${jsonStr}`);
                                 }
                             } catch (e) {
+                                console.warn(`[Multi-AU Capture] Parse error for ${key}:`, e.message, "Raw chunk:", jsonStr);
                                 localParseErrors += 1;
                                 setParseErrors((x) => x + 1);
                                 const msg = e?.message || 'parse error';
@@ -733,13 +750,19 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         if (row && captureRowHasSensorValues(row)) {
                             rowsRef.current.push(row);
                             const n = rowsRef.current.length;
+                            if (n === 1) {
+                                console.info(`[Capture] First valid JSON row:`, row);
+                            }
                             if (n % 10 === 0) setLineCount(n);
                             if (n % 5 === 0) {
                                 const last = rowsRef.current[n - 1];
                                 setLastPreview(JSON.stringify(last).slice(0, 280));
                             }
+                        } else {
+                            console.debug(`[Capture] JSON ignored (no sensors): ${jsonStr}`);
                         }
                     } catch (e) {
+                        console.warn(`[Capture] Parse error:`, e.message, "Raw chunk:", jsonStr);
                         captureParseErrors += 1;
                         setParseErrors((x) => x + 1);
                         const msg = e?.message || 'parse error';
@@ -815,17 +838,17 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             setError((prev) => {
                 if (prev) return prev;
                 if (bytesIn === 0) {
-                    return `No data captured: 0 bytes in ${sec}s. Port is silent (device not streaming, wrong baud — use ${profile.baudRate} for ${profile.label}, bad cable, or wrong COM device).`;
+                    return `No data captured: 0 bytes in ${sec}s. Port is silent (device not streaming, wrong baud — use ${profile.baudRate} or 921600 for ${profile.label}, bad cable, or wrong COM device).`;
                 }
                 if (captureParseErrors > 0) {
-                    return `No valid rows: ${bytesIn} byte(s) and ${captureParseErrors} parse error(s). Data may not match ${profile.label}. Check the parse hint below or device firmware.`;
+                    return `No valid rows: ${bytesIn} byte(s) and ${captureParseErrors} parse error(s). Data may not match ${profile.label}. Check the browser console (Ctrl+Shift+J) for raw chunks or firmware issues.`;
                 }
                 const tail = describePartialSerialBuffer(orphanTail);
                 const seen = tail ? ` Unparsed tail: ${tail}.` : '';
                 if (bytesIn <= 16) {
-                    return `No complete JSON: only ${bytesIn} raw byte(s) in ${sec}s.${seen} Often: another app on the same COM port, wrong baud (${profile.baudRate} for ${profile.label}), USB hub, or multi-AU capture starving a port on Windows — try one AU, close serial terminals, different USB port, longer window.`;
+                    return `No complete JSON: only ${bytesIn} raw byte(s) in ${sec}s.${seen} Often: another app on the same COM port, wrong baud (${profile.label} usually uses ${profile.baudRate} or 921600), USB hub, or multi-AU capture starving a port on Windows.`;
                 }
-                return `No complete JSON row with channel data: ${bytesIn} byte(s) received.${seen} SiAC frames can be large; if the tail shows "sn" or "method" mid-object, the frame was cut off — use a longer collection window (the app already waits a few extra seconds when it sees an unfinished object). Ensure the device model matches (SiAC32-V2 vs SiAC64 TELEMETRY RPC).`;
+                return `No complete JSON row with channel data: ${bytesIn} byte(s) received.${seen} SiAC frames can be large; if the tail shows "sn" or "method" mid-object, the frame was cut off — use a longer collection window (30s+). Check console for raw buffers. Ensure the device model matches (SiAC32-V2 vs SiAC64 TELEMETRY RPC).`;
             });
             return;
         }

@@ -1,0 +1,8 @@
+{
+  "n_samples": 35,
+  "n_features_total": 265,
+  "v1_topk": 80,
+  "v2_pca": 50,
+  "y_max_ppb": 100.0,
+  "out_dir": "data_fenoze/_trained_out"
+}

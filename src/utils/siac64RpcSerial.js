@@ -44,42 +44,32 @@ export function buildSiac64RawJsonRpcLine(payloadObj, lineEnding = '\n') {
 /**
  * @param {SerialPort} port opened Web Serial port with writable
  * @param {Record<string, unknown>} payloadObj RPC body, e.g. { method: 'TELEMETRY', params: { period: 100 } }
- * @param {{ lineEnding?: string; alsoSendRawJson?: boolean }} [options] lineEnding default `\r\n` after the command (set `\n` if the device expects LF-only)
+ * @param {{ lineEnding?: string; alsoSendRawJson?: boolean; preWriteDelayMs?: number; postWriteDelayMs?: number }} [options]
  */
 export async function writeSiac64RpcLine(port, payloadObj, options = {}) {
     if (!port?.writable) return;
-    const lineEnding = options.lineEnding ?? '\r\n';
-    const line = `${buildSiac64RpcSendCommandLine(payloadObj)}${lineEnding}`;
-    let writer;
+    const writer = port.writable.getWriter();
     try {
-        writer = port.writable.getWriter();
-        if (writer.ready) await writer.ready;
-        await writer.write(encoder.encode(line));
-        if (writer.ready) await writer.ready;
+        // Send a precursor newline to exit any partial command or silence the shell prompt if needed
+        await writer.write(encoder.encode('\n'));
+        await delay(options.preWriteDelayMs || 15);
+
+        const ending = options.lineEnding ?? '\r\n';
+        const cmdLine = `${buildSiac64RpcSendCommandLine(payloadObj)}${ending}`;
+        await writer.write(encoder.encode(cmdLine));
+        await delay(options.postWriteDelayMs || 35);
+
+        if (options.alsoSendRawJson) {
+            const raw = buildSiac64RawJsonRpcLine(payloadObj, ending);
+            await writer.write(encoder.encode(raw));
+            await delay(options.postWriteDelayMs || 35);
+        }
     } finally {
         try {
-            writer?.releaseLock();
+            writer.releaseLock();
         } catch {
             /* ignore */
         }
-    }
-    await delay(options.postWriteDelayMs ?? 35);
-
-    if (options.alsoSendRawJson) {
-        const raw = buildSiac64RawJsonRpcLine(payloadObj, lineEnding);
-        try {
-            writer = port.writable.getWriter();
-            if (writer.ready) await writer.ready;
-            await writer.write(encoder.encode(raw));
-            if (writer.ready) await writer.ready;
-        } finally {
-            try {
-                writer?.releaseLock();
-            } catch {
-                /* ignore */
-            }
-        }
-        await delay(40);
     }
 }
 

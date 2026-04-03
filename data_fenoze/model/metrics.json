@@ -1,0 +1,49 @@
+{
+  "model": "MLP (64\u219232\u21921, ReLU, log-ppb target, numpy)",
+  "cv_strategy": "Leave-One-Device-Out (LODO)",
+  "cv_average_MLP": {
+    "MAE_ppb": 2.02,
+    "RMSE_ppb": 3.23
+  },
+  "cv_average_Ridge": {
+    "MAE_ppb": 36.96,
+    "RMSE_ppb": 51.38
+  },
+  "per_device_MLP": {
+    "9": {
+      "MAE": 1.58,
+      "RMSE": 2.66
+    },
+    "18": {
+      "MAE": 1.03,
+      "RMSE": 1.67
+    },
+    "27": {
+      "MAE": 1.67,
+      "RMSE": 2.87
+    },
+    "36": {
+      "MAE": 1.15,
+      "RMSE": 1.62
+    },
+    "45": {
+      "MAE": 1.52,
+      "RMSE": 2.48
+    },
+    "54": {
+      "MAE": 5.16,
+      "RMSE": 8.07
+    }
+  },
+  "training_data": {
+    "real_samples": 278,
+    "synthetic_samples": 1010,
+    "total": 1288,
+    "features_used": 80,
+    "augmentation": [
+      "gaussian_jitter",
+      "concentration_interpolation",
+      "cross_device_mixing"
+    ]
+  }
+}

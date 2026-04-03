@@ -1,0 +1,60 @@
+{
+  "protocols": {
+    "ABGv5MUXOff-10ppb-3AH-75ccm-Maxwell-Q126": [
+      "eb6a807e-80c7-46cd-891f-e1c47858b90b",
+      "2adbd880-7d6e-4be2-abed-1dec001465f8",
+      "2d71799d-43e8-450a-9d6d-f93deaa550da",
+      "c3b51129-2d75-4098-b5c0-53f7881bd6ad",
+      "29b4b60d-4427-4657-ac9e-d5648ca97fdf"
+    ],
+    "ABGv5MUXOff-5ppb-3AH-75ccm-Maxwell-Q126": [
+      "ede2c01b-2e5c-4ae4-9918-d797f1842ca4",
+      "906826d7-4f89-41ce-9cae-595ad2441c1d",
+      "25e7ceb9-62a0-4bea-9cec-821e2f2e6a39",
+      "16f5b37c-2094-4d70-aca1-244aeff89582"
+    ],
+    "ABGv5MUXOff-75ppb-3AH-75ccm-Maxwell-Q126": [
+      "475d77ea-2be4-4fa0-8572-aff0feefa3b7",
+      "2f1b1bc9-f2a9-4a07-b593-5f42d2114133",
+      "aaeeef47-7130-4367-b0cb-1c3878a68a34",
+      "bc141d45-df46-404b-8348-00286c34af61"
+    ],
+    "ABGv5MUXOff-20ppb-3AH-75ccm-Maxwell-Q126": [
+      "80eb9761-8ccb-4090-95d1-ffa5175017d9",
+      "64f5138c-0a3f-40cf-a22e-481a382e3007",
+      "9f9c5e1b-3c1d-4723-8c37-22b8a4596a2a",
+      "5c7c08a9-6861-4693-b033-8f9a9dc626f2",
+      "b38db21d-7def-48a3-b6d7-2e40b4812794"
+    ],
+    "ABGv5MUXOff-100ppb-3AH-75ccm-Maxwell-Q126": [
+      "848b3382-a877-496c-a698-206b571d376a",
+      "12d47af0-6a8c-4a22-a1df-e0940fcf5743",
+      "0c50a912-13ca-47d3-a933-948f26646a74",
+      "6fca3ac4-8214-41ad-b438-5b3b06c37fcc",
+      "85420c7d-98f6-4037-8bf6-7e1535fa3d05"
+    ],
+    "ABGv5MUXOff-0ppb-3AH-75ccm-Maxwell-Q126": [
+      "9b5eda34-bc4a-4683-98fe-dd9500168dd3",
+      "ba8bb815-c998-421c-b4f0-3e8f3e6758c7",
+      "cf3c10c1-f9cb-4681-b202-969208fe59f4",
+      "0b9ee815-753a-4c64-a6db-9a0d83c1d4a4",
+      "3ac4b19d-5c48-498d-9b1c-b69c52377cb1"
+    ],
+    "ABGv5MUXOff-50ppb-3AH-75ccm-Maxwell-Q126": [
+      "7b881d77-98aa-4738-b603-1c7d248cdedd",
+      "321c0ed5-fe5a-4eb0-88e9-434e98cdbc00",
+      "20356471-e3d3-4329-99d0-e2721274ee7a",
+      "3df4c0fd-0ef9-4afe-9454-5b44d057b824"
+    ],
+    "ABGv5MUXOff-0CLN-3AH-75ccm-Anthony-Q126": [
+      "91a40103-ff2f-4d9d-8b10-41ff4421fa4a",
+      "b9672f55-03e2-4b83-81c3-b457e6655449",
+      "6d4c6b34-b065-47a0-844a-f3fecda8a063",
+      "a34c400b-f6bc-4588-9b4a-283ba68274aa"
+    ]
+  },
+  "data": {
+    "computer": "DA4",
+    "batchId": "plL2Q"
+  }
+}

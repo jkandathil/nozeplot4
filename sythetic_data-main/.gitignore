@@ -1,0 +1,16 @@
+# Ignore data folders and large CSV files
+45/
+54/
+Synth-45/
+Synth-54/
+SynthAug-45/
+SynthAug-54/
+*.csv
+
+# Ignore images
+*.png
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/
