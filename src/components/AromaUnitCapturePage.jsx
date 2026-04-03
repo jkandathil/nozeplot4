@@ -262,7 +262,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 const key = `${base}-${i}`;
                 const vidPid = fmtVidPid(port.getInfo?.() || {});
                 map.set(key, port);
-                const rpcProbe = profile.rpcShell?.probePayload ?? null;
+                const rpcProbeRaw = profile.rpcShell?.probePayload;
+                const rpcProbe = typeof rpcProbeRaw === 'function' ? rpcProbeRaw() : (rpcProbeRaw ?? null);
                 const { sn, error: probeError } = await scanProbeSerialPort(
                     port,
                     serialOpenOpts,
@@ -441,7 +442,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         await primeSerialPortForSiAcRead(port);
                         if (profile.rpcShell) {
                             const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
-                            await writeSiac64RpcLine(port, profile.rpcShell.captureStartPayload(periodMs));
+                            const startPayloadRaw = profile.rpcShell.captureStartPayload;
+                            const startPayload = typeof startPayloadRaw === 'function' ? startPayloadRaw(periodMs) : startPayloadRaw;
+                            await writeSiac64RpcLine(port, startPayload);
                             await serialDelay(t.win ? 200 : 100);
                         }
                         return { key, port, error: null };
@@ -815,7 +818,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             await serialDelay(t.afterReaderReleasedMs);
             if (profile.rpcShell?.captureStopPayload) {
                 try {
-                    await writeSiac64RpcLine(port, profile.rpcShell.captureStopPayload);
+                    const stopPayloadRaw = profile.rpcShell.captureStopPayload;
+                    const stopPayload = typeof stopPayloadRaw === 'function' ? stopPayloadRaw() : stopPayloadRaw;
+                    await writeSiac64RpcLine(port, stopPayload);
                 } catch {
                     /* ignore */
                 }

@@ -334,18 +334,6 @@ export const AU_DEVICE_PROFILES = {
         baudRate: 115200,
         parseLine: parseSiAc64RpcTelemetryLine,
         rpcShell: {
-            /**
-             * ASAU/SiAC64 rejects TELEMETRY without `params.period` ("period not provided"). Host stays JSON-only;
-             * no CBOR on the app side. See scripts/probeSiAc64Serial.py.
-             */
-            probePayload: {
-                method: 'TELEMETRY',
-                params: {
-                    period: DEFAULT_TELEMETRY_PERIOD_MS,
-                    includeRawValues: 0,
-                    outputFormat: 0,
-                },
-            },
             probePayload: () => ({ method: 'TELEMETRY', params: { period: 1000, outputFormat: 0 } }),
             captureStartPayload: (ms) => ({ method: 'TELEMETRY', params: { period: ms, outputFormat: 0 } }),
             captureStopPayload: () => ({ method: 'TELEMETRY', params: { period: 0 } }),
