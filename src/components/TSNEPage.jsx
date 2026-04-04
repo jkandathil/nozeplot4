@@ -20,7 +20,7 @@ import {
   Play, Settings2, AlertTriangle, Sparkles,
   Loader2, CheckCircle, Info, ZoomIn, ZoomOut,
   Maximize2, Eye, EyeOff, GitBranch, X,
-  Atom, Box, Square, Plus, Minus, RotateCcw
+  Atom, Box, Square, RotateCcw, ChevronRight, ChevronLeft, ChevronsRight
 } from 'lucide-react';
 import {
   extractFenoseFeaturesFromRows,
@@ -77,6 +77,42 @@ function ppbToColor(ppb) {
     }
   }
   return CONC_RAMP[CONC_RAMP.length - 1].hex;
+}
+
+function hsl(h, s, l) {
+  return `hsl(${h % 360}, ${s}%, ${l}%)`;
+}
+
+/** Stable key for coloring: one hue per physical AU; synthetic is distinct. */
+function auKeyForPoint(p) {
+  if (!p) return 'UNKNOWN';
+  if (p.isSynthetic) return 'SYNTHETIC';
+  return p.deviceId || 'UNKNOWN';
+}
+
+/**
+ * Deterministic distinct colors per device id (sorted for stability across runs).
+ * Synthetic = purple; UNKNOWN = slate.
+ */
+function buildAuColorMapFromPoints(points) {
+  const ids = new Set();
+  for (const p of points || []) {
+    ids.add(auKeyForPoint(p));
+  }
+  const map = { UNKNOWN: '#64748b', SYNTHETIC: '#c084fc' };
+  const sorted = [...ids].filter((id) => id && id !== 'UNKNOWN' && id !== 'SYNTHETIC').sort();
+  sorted.forEach((id, i) => {
+    map[id] = hsl(37.5 * i + (id.charCodeAt(0) || 0) * 3, 72, 58);
+  });
+  return map;
+}
+
+/** Radius scale: larger ppb → larger dot (sqrt for readable spread). */
+function concRadiusFactor(ppb, minP, maxP) {
+  if (!Number.isFinite(ppb)) return 0.75;
+  if (!Number.isFinite(minP) || !Number.isFinite(maxP) || maxP <= minP) return 1.15;
+  const t = Math.max(0, Math.min(1, (ppb - minP) / (maxP - minP)));
+  return 0.5 + Math.sqrt(t) * 1.05;
 }
 function shortAuLabel(deviceId) {
   if (!deviceId || deviceId === 'UNKNOWN') return 'Unknown AU';
@@ -150,7 +186,7 @@ async function runTSNEAsync(featureMatrix, { perplexity = 30, epsilon = 10, nIte
 //  2-D Interactive SVG Scatter Plot
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
+function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs, auColorMap = {} }) {
   const svgRef = useRef(null);
   const [transform, setTransform] = useState({ tx: 0, ty: 0, s: 1 });
   const [tooltip, setTooltip] = useState(null);
@@ -162,6 +198,19 @@ function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
   const plotH = height - MARGIN.top - MARGIN.bottom;
 
   const visible = useMemo(() => points.filter(p => !(hiddenConcs?.has(p.ppb))), [points, hiddenConcs]);
+
+  const { concMin, concMax } = useMemo(() => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const p of visible) {
+      const v = p.ppb;
+      if (!Number.isFinite(v)) continue;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    if (!Number.isFinite(mn)) return { concMin: 0, concMax: 1 };
+    return { concMin: mn, concMax: mx };
+  }, [visible]);
 
   const { xMin, xMax, yMin, yMax } = useMemo(() => {
     if (!visible.length) return { xMin: -1, xMax: 1, yMin: -1, yMax: 1 };
@@ -251,7 +300,7 @@ function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
   const { tx, ty, s } = transform;
   const ptX = (p) => ((p.x - xMin) / xRange) * plotW;
   const ptY = (p) => ((p.y - yMin) / yRange) * plotH;
-  const r = Math.max(2.5, 5 / s);
+  const baseR = Math.max(2.2, 4.2 / s);
 
   return (
     <div style={{ position: 'relative', userSelect: 'none' }}>
@@ -284,15 +333,26 @@ function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
         <rect width={width} height={height} fill="url(#tsne-grid-2d)" />
         <g transform={`translate(${tx},${ty}) scale(${s})`}>
           {visible.map((p, i) => {
-            const cx = ptX(p), cy = ptY(p);
-            const col = ppbToColor(p.ppb);
+            const cx = ptX(p);
+            const cy = ptY(p);
+            const col = auColorMap[auKeyForPoint(p)] || '#94a3b8';
+            const rf = concRadiusFactor(p.ppb, concMin, concMax);
+            const r = baseR * rf;
             return (
               <g key={i}>
-                {!p.isSynthetic && <circle cx={cx} cy={cy} r={r * 2.2} fill={col} opacity={0.12} />}
-                <circle cx={cx} cy={cy} r={r} fill={col}
-                  stroke={p.isSynthetic ? 'rgba(255,255,255,0.15)' : col}
-                  strokeWidth={p.isSynthetic ? 0.8 / s : 0}
-                  opacity={p.isSynthetic ? 0.65 : 0.92} />
+                {!p.isSynthetic && (
+                  <circle cx={cx} cy={cy} r={r * 2.1} fill={col} opacity={0.1} />
+                )}
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={r}
+                  fill={col}
+                  stroke={p.isSynthetic ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.35)'}
+                  strokeWidth={p.isSynthetic ? 1.1 / s : 0.45 / s}
+                  strokeDasharray={p.isSynthetic ? `${4 / s} ${2.5 / s}` : undefined}
+                  opacity={p.isSynthetic ? 0.72 : 0.9}
+                />
               </g>
             );
           })}
@@ -302,7 +362,7 @@ function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
           transform={`rotate(-90,8,${height / 2})`}>t-SNE 2</text>
       </svg>
       <AnimatePresence>
-        {tooltip && <PointTooltip tooltip={tooltip} width={width} />}
+        {tooltip && <PointTooltip tooltip={tooltip} width={width} auColorMap={auColorMap} />}
       </AnimatePresence>
     </div>
   );
@@ -331,7 +391,7 @@ function applyMat3(m, x, y, z) {
   return [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
 }
 
-function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs }) {
+function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs, auColorMap = {} }) {
   const svgRef = useRef(null);
   const [rotation, setRotation] = useState({ rx: -0.4, ry: 0.6 });
   const [zoom, setZoom] = useState(1);
@@ -342,6 +402,19 @@ function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs }) {
   const [autoRotate, setAutoRotate] = useState(true);
 
   const visible = useMemo(() => points.filter(p => !(hiddenConcs?.has(p.ppb))), [points, hiddenConcs]);
+
+  const { concMin, concMax } = useMemo(() => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const p of visible) {
+      const v = p.ppb;
+      if (!Number.isFinite(v)) continue;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    if (!Number.isFinite(mn)) return { concMin: 0, concMax: 1 };
+    return { concMin: mn, concMax: mx };
+  }, [visible]);
 
   // Normalise to [-1, 1]³
   const normPts = useMemo(() => {
@@ -494,23 +567,32 @@ function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs }) {
         ))}
         {/* Points */}
         {projected.map((p, i) => {
-          const col = ppbToColor(p.ppb);
+          const col = auColorMap[auKeyForPoint(p)] || '#94a3b8';
           const depthFade = 0.4 + 0.6 * ((p.depth + 1) / 2);
-          const rr = Math.max(2, (4 + p.depth * 1.5) * zoom);
+          const concF = concRadiusFactor(p.ppb, concMin, concMax);
+          const rr = Math.max(2, (3.2 + p.depth * 1.4) * zoom * concF);
           return (
             <g key={i}>
-              {!p.isSynthetic && <circle cx={p.sx} cy={p.sy} r={rr * 2} fill={col} opacity={0.08 * depthFade} />}
-              <circle cx={p.sx} cy={p.sy} r={rr} fill={col}
-                stroke={p.isSynthetic ? 'rgba(255,255,255,0.12)' : 'none'}
-                strokeWidth={p.isSynthetic ? 0.6 : 0}
-                opacity={(p.isSynthetic ? 0.5 : 0.85) * depthFade} />
+              {!p.isSynthetic && (
+                <circle cx={p.sx} cy={p.sy} r={rr * 2} fill={col} opacity={0.07 * depthFade} />
+              )}
+              <circle
+                cx={p.sx}
+                cy={p.sy}
+                r={rr}
+                fill={col}
+                stroke={p.isSynthetic ? 'rgba(255,255,255,0.32)' : 'rgba(15,23,42,0.3)'}
+                strokeWidth={p.isSynthetic ? 0.75 : 0.35}
+                strokeDasharray={p.isSynthetic ? '4 2.5' : undefined}
+                opacity={(p.isSynthetic ? 0.55 : 0.82) * depthFade}
+              />
             </g>
           );
         })}
       </svg>
 
       <AnimatePresence>
-        {tooltip && <PointTooltip tooltip={tooltip} width={width} />}
+        {tooltip && <PointTooltip tooltip={tooltip} width={width} auColorMap={auColorMap} />}
       </AnimatePresence>
     </div>
   );
@@ -520,7 +602,8 @@ function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs }) {
 // Shared Tooltip
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function PointTooltip({ tooltip, width }) {
+function PointTooltip({ tooltip, width, auColorMap = {} }) {
+  const auCol = auColorMap[auKeyForPoint(tooltip.point)] || '#94a3b8';
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.9 }}
@@ -532,16 +615,19 @@ function PointTooltip({ tooltip, width }) {
         left: Math.min(tooltip.sx + 14, width - 210),
         top: Math.max(4, tooltip.sy - 60),
         background: 'rgba(15,23,42,0.97)',
-        border: `1px solid ${ppbToColor(tooltip.point.ppb)}55`,
+        border: `1px solid ${auCol}88`,
         borderRadius: 8, padding: '8px 12px',
         pointerEvents: 'none', zIndex: 20,
-        boxShadow: `0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px ${ppbToColor(tooltip.point.ppb)}33`,
+        boxShadow: `0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px ${auCol}44`,
         minWidth: 140,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <span style={{ width: 10, height: 10, borderRadius: '50%', background: ppbToColor(tooltip.point.ppb), display: 'inline-block', flexShrink: 0 }} />
-        <span style={{ color: '#f8fafc', fontSize: '0.8rem', fontWeight: 600 }}>{tooltip.point.ppb} ppb</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+        <span style={{ width: 10, height: 10, borderRadius: '50%', background: auCol, display: 'inline-block', flexShrink: 0 }} />
+        <span style={{ color: '#f8fafc', fontSize: '0.8rem', fontWeight: 600 }}>
+          {shortAuLabel(auKeyForPoint(tooltip.point))}
+        </span>
+        <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>{tooltip.point.ppb} ppb</span>
         {tooltip.point.isSynthetic && (
           <span style={{ fontSize: '0.65rem', color: '#c084fc', background: 'rgba(168,85,247,0.15)', borderRadius: 4, padding: '1px 5px' }}>synthetic</span>
         )}
@@ -549,9 +635,6 @@ function PointTooltip({ tooltip, width }) {
       <div style={{ color: '#64748b', fontSize: '0.7rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {tooltip.point.fileName?.split('/').pop()?.slice(0, 40) || 'unknown'}
       </div>
-      {tooltip.point.deviceId && tooltip.point.deviceId !== 'SYNTHETIC' && (
-        <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: 2 }}>{shortAuLabel(tooltip.point.deviceId)}</div>
-      )}
     </motion.div>
   );
 }
@@ -564,20 +647,40 @@ function ConcLegend({ concentrations, hiddenConcs, onToggle }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em',
-        textTransform: 'uppercase', marginBottom: 4 }}>Concentration (ppb)</div>
+        textTransform: 'uppercase', marginBottom: 4 }}>Hide by concentration</div>
+      <div style={{ fontSize: '0.65rem', color: '#475569', marginBottom: 2 }}>Dot size ∝ ppb · colors = AU</div>
       {concentrations.map(ppb => {
         const hidden = hiddenConcs.has(ppb);
         return (
           <button key={ppb} onClick={() => onToggle(ppb)}
             style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none',
               cursor: 'pointer', padding: '3px 0', borderRadius: 6, transition: 'opacity 0.15s', opacity: hidden ? 0.35 : 1 }}>
-            <span style={{ width: 12, height: 12, borderRadius: '50%', background: ppbToColor(ppb),
-              display: 'inline-block', flexShrink: 0, boxShadow: hidden ? 'none' : `0 0 6px ${ppbToColor(ppb)}66` }} />
+            <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#475569',
+              display: 'inline-block', flexShrink: 0, border: '1px solid #64748b' }} />
             <span style={{ color: hidden ? '#475569' : '#cbd5e1', fontSize: '0.78rem', fontWeight: 500 }}>{ppb} ppb</span>
             <span style={{ marginLeft: 'auto', color: '#475569' }}>{hidden ? <EyeOff size={11} /> : <Eye size={11} />}</span>
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function AuColorLegend({ auIdsOrdered, auColorMap }) {
+  if (!auIdsOrdered?.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em',
+        textTransform: 'uppercase', marginBottom: 4 }}>AU color</div>
+      {auIdsOrdered.map((id) => (
+        <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+          <span style={{
+            width: 12, height: 12, borderRadius: '50%', background: auColorMap[id] || '#94a3b8',
+            flexShrink: 0, boxShadow: `0 0 6px ${(auColorMap[id] || '#94a3b8')}55`,
+          }} />
+          <span style={{ color: '#cbd5e1', fontSize: '0.78rem', fontWeight: 500 }}>{shortAuLabel(id)}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -614,9 +717,11 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
   const [synthAdded, setSynthAdded] = useState(false);
   const [synthSaving, setSynthSaving] = useState(false);
 
-  /* ── Progressive AU builder ────────────────────────────────────────────── */
+  /* ── Progressive AU builder (first N AUs in sorted order + synthetic) ───── */
   const [progressiveMode, setProgressiveMode] = useState(false);
   const [selectedAUs, setSelectedAUs] = useState(new Set());
+  /** How many real AUs (sorted id order) are included in progressive combined embedding. */
+  const [progressiveAuCount, setProgressiveAuCount] = useState(1);
 
   const cancelRef = useRef(false);
 
@@ -647,6 +752,8 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     Object.keys(auGroups).filter(k => k !== 'SYNTHETIC').sort(),
     [auGroups]
   );
+
+  const auColorMapGlobal = useMemo(() => buildAuColorMapFromPoints(dataPoints), [dataPoints]);
 
   const tabs = useMemo(() => {
     const list = [{ key: 'combined', label: 'All AUs', count: dataPoints.length }];
@@ -846,7 +953,8 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
 
       const deviceKeys = [...new Set(real.map((p) => p.deviceId).filter(Boolean))].sort();
       let nextSel = selectedAUs;
-      if (progressiveMode && deviceKeys.length > 1 && selectedAUs.size === 0) {
+      if (progressiveMode && deviceKeys.length > 1) {
+        setProgressiveAuCount(1);
         nextSel = new Set([deviceKeys[0]]);
         setSelectedAUs(nextSel);
       }
@@ -892,7 +1000,8 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
       }
       const deviceKeys = [...new Set(real.map((p) => p.deviceId).filter(Boolean))].sort();
       let nextSel = selectedAUs;
-      if (progressiveMode && deviceKeys.length > 1 && selectedAUs.size === 0) {
+      if (progressiveMode && deviceKeys.length > 1) {
+        setProgressiveAuCount(1);
         nextSel = new Set([deviceKeys[0]]);
         setSelectedAUs(nextSel);
       }
@@ -917,21 +1026,36 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     selectedAUs,
   ]);
 
-  /* ── Progressive AU: add/remove one AU; recompute all t-SNE groups in 2D/3D ─ */
-  const toggleProgressiveAU = useCallback(
-    async (auKey) => {
-      const next = new Set(selectedAUs);
-      if (next.has(auKey)) {
-        if (next.size > 1) next.delete(auKey);
-      } else next.add(auKey);
-      const subset = dataPoints.filter((p) => p.isSynthetic || next.has(p.deviceId));
+  /** First `n` real AUs (sorted order) + synthetic; recompute all t-SNE groups. Does not read `progressiveMode` so it works the same tick as turning the feature on. */
+  const runProgressiveEmbedding = useCallback(
+    async (n) => {
+      if (allAUKeys.length <= 1) return;
+      const capped = Math.min(Math.max(1, Math.floor(n)), allAUKeys.length);
+      setProgressiveAuCount(capped);
+      const sel = new Set(allAUKeys.slice(0, capped));
+      setSelectedAUs(sel);
+      const subset = dataPoints.filter((p) => p.isSynthetic || sel.has(p.deviceId));
       if (subset.length < MIN_TSNE_SAMPLES) return;
-      setSelectedAUs(next);
       setSelectedTab('combined');
       await computeTSNE(subset, dim);
     },
-    [selectedAUs, dataPoints, computeTSNE, dim]
+    [allAUKeys, dataPoints, computeTSNE, dim]
   );
+
+  const applyProgressiveAuCount = useCallback(
+    async (n) => {
+      if (!progressiveMode) return;
+      await runProgressiveEmbedding(n);
+    },
+    [progressiveMode, runProgressiveEmbedding]
+  );
+
+  useEffect(() => {
+    if (allAUKeys.length < 1) return;
+    if (progressiveAuCount > allAUKeys.length) {
+      setProgressiveAuCount(allAUKeys.length);
+    }
+  }, [allAUKeys.length, progressiveAuCount]);
 
   /** After a successful run, switch 2D ↔ 3D without reloading files. */
   const handleDimChange = useCallback(
@@ -962,6 +1086,14 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
   const curResult = tsneResults[selectedTab] || null;
   const curProg = computeProg[selectedTab] || 0;
   const isComputing = stage === 'computing' || stage === 'loading';
+
+  const auIdsInCurrentPlot = useMemo(() => {
+    const keys = new Set();
+    for (const p of curResult?.points || []) {
+      keys.add(auKeyForPoint(p));
+    }
+    return [...keys].filter((k) => k && k !== 'UNKNOWN').sort();
+  }, [curResult?.points]);
 
   /* ── Render ────────────────────────────────────────────────────────────── */
   return (
@@ -1325,16 +1457,16 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
                   {dim === 2
                     ? <TSNEPlot2D points={curResult.points}
                         width={Math.min(640, window.innerWidth - 380)} height={460}
-                        hiddenConcs={hiddenConcs} />
+                        hiddenConcs={hiddenConcs} auColorMap={auColorMapGlobal} />
                     : <TSNEPlot3D points={curResult.points}
                         width={Math.min(640, window.innerWidth - 380)} height={460}
-                        hiddenConcs={hiddenConcs} />}
+                        hiddenConcs={hiddenConcs} auColorMap={auColorMapGlobal} />}
 
                   <div style={{ fontSize: '0.7rem', color: '#475569', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                     {dim === 2
                       ? <span>Scroll to zoom · Drag to pan · Double-click to reset</span>
                       : <span>Drag to rotate · Scroll to zoom · Auto-rotate toggleable</span>}
-                    <span>Dim points = synthetic</span>
+                    <span>Color = AU · Larger dot = higher ppb · dashed ring = synthetic</span>
                     <span>Perp {perplexity} · {nIter} iter · ε={epsilon}</span>
                   </div>
                 </div>
@@ -1367,52 +1499,95 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
                 </div>
               )}
 
-              {/* Progressive AU builder */}
-              {allAUKeys.length > 1 && (
+              {auIdsInCurrentPlot.length > 0 && (
+                <div style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid #334155', borderRadius: 10, padding: '12px 14px' }}>
+                  <AuColorLegend auIdsOrdered={auIdsInCurrentPlot} auColorMap={auColorMapGlobal} />
+                </div>
+              )}
+
+              {/* Progressive: add AUs one-by-one (sorted order) */}
+              {allAUKeys.length >= 1 && (
                 <div style={{ background: 'rgba(15,23,42,0.6)', border: progressiveMode ? '1px solid rgba(6,182,212,0.4)' : '1px solid #334155',
                   borderRadius: 10, padding: '12px 14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                      Progressive Builder
+                      Add AUs one-by-one
                     </div>
-                    <button onClick={() => setProgressiveMode(m => !m)}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (progressiveMode) {
+                          setProgressiveMode(false);
+                          return;
+                        }
+                        setProgressiveMode(true);
+                        if (allAUKeys.length > 1) {
+                          const sel = new Set([allAUKeys[0]]);
+                          const subset = dataPoints.filter((p) => p.isSynthetic || sel.has(p.deviceId));
+                          if (
+                            subset.length >= MIN_TSNE_SAMPLES &&
+                            (stage === 'done' || tsneResults.combined?.status === 'done')
+                          ) {
+                            void runProgressiveEmbedding(1);
+                          }
+                        }
+                      }}
+                      disabled={allAUKeys.length <= 1}
                       style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: 4, border: '1px solid #334155',
                         background: progressiveMode ? 'rgba(6,182,212,0.15)' : 'transparent',
-                        color: progressiveMode ? '#22d3ee' : '#475569', cursor: 'pointer', fontWeight: 600 }}>
+                        color: progressiveMode ? '#22d3ee' : '#475569', cursor: allAUKeys.length <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
                       {progressiveMode ? 'ON' : 'OFF'}
                     </button>
                   </div>
-                  {progressiveMode && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <div style={{ fontSize: '0.7rem', color: '#475569', marginBottom: 4, lineHeight: 1.5 }}>
-                        Toggle AUs to see how the combined embedding evolves.
-                      </div>
-                      {allAUKeys.map(auKey => {
-                        const isActive = selectedAUs.has(auKey);
-                        const auPts = (auGroups[auKey] || []).length;
-                        return (
-                          <button key={auKey} onClick={() => toggleProgressiveAU(auKey)}
-                            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6,
-                              padding: '5px 8px', borderRadius: 6, border: 'none',
-                              background: isActive ? 'rgba(0,222,147,0.1)' : 'transparent',
-                              cursor: 'pointer', color: isActive ? '#00DE93' : '#64748b',
-                              transition: 'all 0.15s', fontSize: '0.78rem' }}>
-                            {isActive ? <Minus size={11} /> : <Plus size={11} />}
-                            <span style={{ fontWeight: isActive ? 700 : 400 }}>{shortAuLabel(auKey)}</span>
-                            <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#475569' }}>{auPts}</span>
-                          </button>
-                        );
-                      })}
-                      {synthInMemoryCount > 0 && (
-                        <div style={{ fontSize: '0.68rem', color: '#a78bfa', marginTop: 4 }}>
-                          + {synthInMemoryCount} synthetic included in combined &amp; per-AU embeddings
-                        </div>
-                      )}
+                  {allAUKeys.length <= 1 && (
+                    <div style={{ fontSize: '0.7rem', color: '#475569', lineHeight: 1.5 }}>
+                      Upload PPB-labelled files from <strong>more than one</strong> aroma unit to build the combined embedding stepwise (order: sorted AU id).
                     </div>
                   )}
-                  {!progressiveMode && (
+                  {progressiveMode && allAUKeys.length > 1 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.45 }}>
+                        <strong>{progressiveAuCount}</strong> of <strong>{allAUKeys.length}</strong> real AUs in combined view
+                        {synthInMemoryCount > 0 ? ` · +${synthInMemoryCount} synthetic` : ''}.
+                        Order: {allAUKeys.slice(0, progressiveAuCount).map((k) => shortAuLabel(k)).join(' → ')}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        <button
+                          type="button"
+                          disabled={isComputing || progressiveAuCount <= 1}
+                          onClick={() => void applyProgressiveAuCount(progressiveAuCount - 1)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 6,
+                            border: '1px solid #334155', background: 'rgba(15,23,42,0.8)', color: '#cbd5e1',
+                            cursor: isComputing || progressiveAuCount <= 1 ? 'not-allowed' : 'pointer', fontSize: '0.72rem', fontWeight: 600 }}>
+                          <ChevronLeft size={14} /> Remove last AU
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isComputing || progressiveAuCount >= allAUKeys.length}
+                          onClick={() => void applyProgressiveAuCount(progressiveAuCount + 1)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 6,
+                            border: '1px solid #334155', background: 'rgba(15,23,42,0.8)', color: '#00DE93',
+                            cursor: isComputing || progressiveAuCount >= allAUKeys.length ? 'not-allowed' : 'pointer', fontSize: '0.72rem', fontWeight: 600 }}>
+                          Add next AU <ChevronRight size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isComputing || progressiveAuCount >= allAUKeys.length}
+                          onClick={() => void applyProgressiveAuCount(allAUKeys.length)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 6,
+                            border: '1px solid #334155', background: 'rgba(0,222,147,0.08)', color: '#94a3b8',
+                            cursor: isComputing || progressiveAuCount >= allAUKeys.length ? 'not-allowed' : 'pointer', fontSize: '0.72rem', fontWeight: 600 }}>
+                          <ChevronsRight size={14} /> All AUs
+                        </button>
+                      </div>
+                      <div style={{ fontSize: '0.65rem', color: '#475569' }}>
+                        Each step recomputes combined + per-AU tabs in {dim}D. Run t-SNE starts at 1 AU when this mode is on.
+                      </div>
+                    </div>
+                  )}
+                  {!progressiveMode && allAUKeys.length > 1 && (
                     <div style={{ fontSize: '0.7rem', color: '#475569', lineHeight: 1.5 }}>
-                      Enable to start from one AU, add others incrementally; combined + all tabs recompute in {dim}D.
+                      Turn on to embed <strong>one AU at a time</strong> (plus synthetic), then add the next unit and watch the layout update.
                     </div>
                   )}
                 </div>
