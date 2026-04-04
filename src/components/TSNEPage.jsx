@@ -1,7 +1,15 @@
 /**
- * TSNEPage.jsx
- * Concentration-dependent t-SNE visualization for each AU unit individually
- * and a combined t-SNE plot using data from all AU units.
+ * TSNEPage.jsx  –  Concentration-dependent t-SNE Explorer
+ *
+ * Features
+ * ────────
+ *  • 2-D  **and** 3-D t-SNE (user toggle)
+ *  • Per-AU individual plots + combined "All AUs" plot
+ *  • Synthetic data generation → saved to workspace FeNOse_synthetic/ folder
+ *  • Progressive AU builder: start with one AU, add more one-by-one,
+ *    watch the embedding evolve dynamically
+ *  • Interactive SVG scatter (2-D): zoom / pan / hover / concentration filter
+ *  • Interactive WebGL-free 3-D scatter: trackball rotation, hover, filter
  */
 
 /* eslint-disable react-hooks/set-state-in-effect */
@@ -12,7 +20,7 @@ import {
   Play, Settings2, AlertTriangle, Sparkles,
   Loader2, CheckCircle, Info, ZoomIn, ZoomOut,
   Maximize2, Eye, EyeOff, GitBranch, X,
-  Atom
+  Atom, Box, Square, Plus, Minus, RotateCcw
 } from 'lucide-react';
 import {
   extractFenoseFeaturesFromRows,
@@ -24,25 +32,32 @@ import {
   generateSyntheticFenoseRows,
   computeCalibrationFromFiles,
   resolveSyntheticCalibration,
+  SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
 } from '../utils/fenoseSyntheticDataset';
+
+/** Must match App.jsx handleAddSyntheticFenoseToWorkspace seed progression for identical synth rows. */
+const SYNTH_SEED_MULT = 9973;
+/** Default row counts per phase — same as ML Studio / App synthetic path. */
+const SYNTH_N_AMBIENT = 100;
+const SYNTH_N_FENO = 100;
+const SYNTH_N_WINDOW = 15;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Constants & Pure Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const MIN_TSNE_SAMPLES = 4;    // absolute minimum for t-SNE
-const WARN_REAL_SAMPLES = 8;   // below this → show synthetic option
+const MIN_TSNE_SAMPLES = 4;
+const WARN_REAL_SAMPLES = 8;
 
-// Concentration colour ramp (ppb → colour)
 const CONC_RAMP = [
-  { ppb: 0,   hex: '#64748b' }, // slate
-  { ppb: 5,   hex: '#06b6d4' }, // cyan
-  { ppb: 10,  hex: '#10b981' }, // emerald
-  { ppb: 25,  hex: '#f59e0b' }, // amber
-  { ppb: 50,  hex: '#ef4444' }, // red
-  { ppb: 100, hex: '#a855f7' }, // purple
-  { ppb: 200, hex: '#f472b6' }, // pink
-  { ppb: 500, hex: '#fb923c' }, // orange
+  { ppb: 0,   hex: '#64748b' },
+  { ppb: 5,   hex: '#06b6d4' },
+  { ppb: 10,  hex: '#10b981' },
+  { ppb: 25,  hex: '#f59e0b' },
+  { ppb: 50,  hex: '#ef4444' },
+  { ppb: 100, hex: '#a855f7' },
+  { ppb: 200, hex: '#f472b6' },
+  { ppb: 500, hex: '#fb923c' },
 ];
 
 function hexToRgb(h) {
@@ -63,7 +78,6 @@ function ppbToColor(ppb) {
   }
   return CONC_RAMP[CONC_RAMP.length - 1].hex;
 }
-
 function shortAuLabel(deviceId) {
   if (!deviceId || deviceId === 'UNKNOWN') return 'Unknown AU';
   if (deviceId === 'SYNTHETIC') return 'Synthetic';
@@ -76,15 +90,51 @@ function normalizeMatrix(mat) {
   const D = mat[0].length;
   const mu = new Array(D).fill(0);
   const sd = new Array(D).fill(0);
-  for (const v of mat) for (let d=0;d<D;d++) mu[d] += v[d] / mat.length;
-  for (const v of mat) for (let d=0;d<D;d++) sd[d] += (v[d]-mu[d])**2 / mat.length;
-  for (let d=0;d<D;d++) sd[d] = Math.sqrt(sd[d]) || 1;
-  return mat.map(v => v.map((x,d) => (x - mu[d]) / sd[d]));
+  for (const v of mat) for (let d = 0; d < D; d++) mu[d] += v[d] / mat.length;
+  for (const v of mat) for (let d = 0; d < D; d++) sd[d] += (v[d] - mu[d]) ** 2 / mat.length;
+  for (let d = 0; d < D; d++) sd[d] = Math.sqrt(sd[d]) || 1;
+  return mat.map(v => v.map((x, d) => (x - mu[d]) / sd[d]));
 }
 
-async function runTSNEAsync(featureMatrix, { perplexity=30, epsilon=10, nIter=500 }, onProgress) {
+/** Sorted keys + parallel vector; NaN → 0 so dimensions stay aligned across samples. */
+function featureKeysAndVectorFromFeats(feats) {
+  const featKeys = Object.keys(feats || {}).sort();
+  const featVec = featKeys.map((k) => {
+    const v = feats[k];
+    return Number.isFinite(v) ? v : 0;
+  });
+  return { featKeys, featVec };
+}
+
+/**
+ * Union of all feature keys across points, fixed column order — required for t-SNE when keys differ slightly.
+ */
+function buildNormalizedFeatureMatrix(pts) {
+  const keySet = new Set();
+  for (const p of pts) {
+    if (Array.isArray(p.featKeys)) p.featKeys.forEach((k) => keySet.add(k));
+  }
+  const canonical = [...keySet].sort();
+  if (!canonical.length) return { matrix: [], canonical: [] };
+  const raw = pts.map((p) => {
+    const map = {};
+    if (p.featKeys && p.feats && p.featKeys.length === p.feats.length) {
+      p.featKeys.forEach((k, i) => {
+        map[k] = p.feats[i];
+      });
+    }
+    return canonical.map((k) => {
+      const v = map[k];
+      return Number.isFinite(v) ? v : 0;
+    });
+  });
+  return { matrix: normalizeMatrix(raw), canonical };
+}
+
+/* ── t-SNE runner (supports dim = 2 or 3) ─────────────────────────────────── */
+async function runTSNEAsync(featureMatrix, { perplexity = 30, epsilon = 10, nIter = 500, dim = 2 }, onProgress) {
   const safePerp = Math.min(perplexity, Math.max(2, featureMatrix.length - 2));
-  const model = new tsnejs.tSNE({ perplexity: safePerp, dim: 2, epsilon });
+  const model = new tsnejs.tSNE({ perplexity: safePerp, dim, epsilon });
   model.initDataRaw(featureMatrix);
   const BATCH = 30;
   for (let i = 0; i < nIter; i += BATCH) {
@@ -97,10 +147,10 @@ async function runTSNEAsync(featureMatrix, { perplexity=30, epsilon=10, nIter=50
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Interactive SVG Scatter Plot
+//  2-D Interactive SVG Scatter Plot
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
+function TSNEPlot2D({ points = [], width = 560, height = 460, hiddenConcs }) {
   const svgRef = useRef(null);
   const [transform, setTransform] = useState({ tx: 0, ty: 0, s: 1 });
   const [tooltip, setTooltip] = useState(null);
@@ -111,34 +161,29 @@ function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
   const plotW = width - MARGIN.left - MARGIN.right;
   const plotH = height - MARGIN.top - MARGIN.bottom;
 
-  const visible = useMemo(
-    () => points.filter(p => !(hiddenConcs?.has(p.ppb))),
-    [points, hiddenConcs]
-  );
+  const visible = useMemo(() => points.filter(p => !(hiddenConcs?.has(p.ppb))), [points, hiddenConcs]);
 
   const { xMin, xMax, yMin, yMax } = useMemo(() => {
     if (!visible.length) return { xMin: -1, xMax: 1, yMin: -1, yMax: 1 };
-    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    let xMn = Infinity, xMx = -Infinity, yMn = Infinity, yMx = -Infinity;
     for (const p of visible) {
-      if (p.x < xMin) xMin = p.x; if (p.x > xMax) xMax = p.x;
-      if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y;
+      if (p.x < xMn) xMn = p.x; if (p.x > xMx) xMx = p.x;
+      if (p.y < yMn) yMn = p.y; if (p.y > yMx) yMx = p.y;
     }
-    const xPad = (xMax - xMin) * 0.08 || 1;
-    const yPad = (yMax - yMin) * 0.08 || 1;
-    return { xMin: xMin-xPad, xMax: xMax+xPad, yMin: yMin-yPad, yMax: yMax+yPad };
+    const xP = (xMx - xMn) * 0.08 || 1;
+    const yP = (yMx - yMn) * 0.08 || 1;
+    return { xMin: xMn - xP, xMax: xMx + xP, yMin: yMn - yP, yMax: yMx + yP };
   }, [visible]);
 
   const xRange = xMax - xMin || 1;
   const yRange = yMax - yMin || 1;
 
-  // Reset transform to fit-to-view
   const resetTransform = useCallback(() => {
     setTransform({ tx: MARGIN.left, ty: MARGIN.top, s: 1 });
   }, [MARGIN.left, MARGIN.top]);
 
   useEffect(() => { resetTransform(); }, [points, resetTransform]);
 
-  // Zoom
   const handleWheel = useCallback((e) => {
     e.preventDefault();
     const delta = e.deltaY < 0 ? 1.15 : 0.87;
@@ -148,9 +193,7 @@ function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
     const my = e.clientY - svgRect.top;
     setTransform(prev => {
       const newS = Math.max(0.2, Math.min(20, prev.s * delta));
-      const newTx = mx - (mx - prev.tx) * (newS / prev.s);
-      const newTy = my - (my - prev.ty) * (newS / prev.s);
-      return { tx: newTx, ty: newTy, s: newS };
+      return { tx: mx - (mx - prev.tx) * (newS / prev.s), ty: my - (my - prev.ty) * (newS / prev.s), s: newS };
     });
   }, []);
 
@@ -161,7 +204,6 @@ function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
-  // Pan
   const onMouseDown = useCallback((e) => {
     if (e.button !== 0) return;
     isPanning.current = true;
@@ -175,163 +217,342 @@ function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
       lastMouse.current = { x: e.clientX, y: e.clientY };
       setTransform(prev => ({ ...prev, tx: prev.tx + dx, ty: prev.ty + dy }));
     }
-    // Tooltip: find nearest visible point
     const svgRect = svgRef.current?.getBoundingClientRect();
     if (!svgRect || !visible.length) return;
     const mx = e.clientX - svgRect.left;
     const my = e.clientY - svgRect.top;
-    // convert mouse to data coords
     const { tx, ty, s } = transform;
     const dataX = xMin + ((mx - tx) / (s * plotW)) * xRange;
     const dataY = yMin + ((my - ty) / (s * plotH)) * yRange;
     let nearest = null, minDist2 = Infinity;
     for (const p of visible) {
-      const d2 = (p.x - dataX)**2 + (p.y - dataY)**2;
+      const d2 = (p.x - dataX) ** 2 + (p.y - dataY) ** 2;
       if (d2 < minDist2) { minDist2 = d2; nearest = p; }
     }
-    const pixelThresh = (15 / s) ** 2 * (xRange / plotW) ** 2;
+    const pixelThresh = (18 / s) ** 2 * ((xRange / plotW) ** 2);
     if (nearest && minDist2 < pixelThresh * xRange ** 2) {
       setTooltip({ point: nearest, sx: e.clientX - svgRect.left, sy: e.clientY - svgRect.top });
     } else {
       setTooltip(null);
     }
   }, [visible, transform, xMin, yMin, xRange, yRange, plotW, plotH]);
-  const onMouseUp = useCallback((e) => {
-    isPanning.current = false;
-    if (e.currentTarget) e.currentTarget.style.cursor = 'grab';
-  }, []);
-  const onMouseLeave = useCallback(() => {
-    isPanning.current = false;
-    setTooltip(null);
-  }, []);
+  const onMouseUp = useCallback((e) => { isPanning.current = false; if (e.currentTarget) e.currentTarget.style.cursor = 'grab'; }, []);
+  const onMouseLeave = useCallback(() => { isPanning.current = false; setTooltip(null); }, []);
 
   if (!points.length) {
     return (
-      <div style={{ width, height, display:'flex', alignItems:'center', justifyContent:'center',
-        background:'rgba(15,23,42,0.6)', borderRadius:12, border:'1px solid #334155', color:'#64748b', fontSize:'0.85rem' }}>
+      <div style={{ width, height, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(15,23,42,0.6)', borderRadius: 12, border: '1px solid #334155', color: '#64748b', fontSize: '0.85rem' }}>
         No t-SNE data — click Run to compute.
       </div>
     );
   }
 
   const { tx, ty, s } = transform;
-  const groupTransform = `translate(${tx},${ty}) scale(${s})`;
-
   const ptX = (p) => ((p.x - xMin) / xRange) * plotW;
   const ptY = (p) => ((p.y - yMin) / yRange) * plotH;
   const r = Math.max(2.5, 5 / s);
 
   return (
-    <div style={{ position:'relative', userSelect:'none' }}>
-      {/* Zoom controls */}
-      <div style={{ position:'absolute', top:8, right:8, zIndex:10, display:'flex', flexDirection:'column', gap:4 }}>
+    <div style={{ position: 'relative', userSelect: 'none' }}>
+      <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {[
-          { icon: <ZoomIn size={13}/>, action: () => setTransform(p=>({...p, s:Math.min(20,p.s*1.3), tx:p.tx-(plotW/2)*0.3, ty:p.ty-(plotH/2)*0.3})), title:'Zoom in' },
-          { icon: <ZoomOut size={13}/>, action: () => setTransform(p=>({...p, s:Math.max(0.2,p.s/1.3), tx:p.tx+(plotW/2)*0.23, ty:p.ty+(plotH/2)*0.23})), title:'Zoom out' },
-          { icon: <Maximize2 size={13}/>, action: resetTransform, title:'Reset view' },
-        ].map(({icon, action, title}) => (
+          { icon: <ZoomIn size={13} />, action: () => setTransform(p => ({ ...p, s: Math.min(20, p.s * 1.3), tx: p.tx - (plotW / 2) * 0.3, ty: p.ty - (plotH / 2) * 0.3 })), title: 'Zoom in' },
+          { icon: <ZoomOut size={13} />, action: () => setTransform(p => ({ ...p, s: Math.max(0.2, p.s / 1.3), tx: p.tx + (plotW / 2) * 0.23, ty: p.ty + (plotH / 2) * 0.23 })), title: 'Zoom out' },
+          { icon: <Maximize2 size={13} />, action: resetTransform, title: 'Reset view' },
+        ].map(({ icon, action, title }) => (
           <button key={title} onClick={action} title={title}
-            style={{ background:'rgba(15,23,42,0.85)', border:'1px solid #334155', borderRadius:6,
-              width:26, height:26, display:'flex', alignItems:'center', justifyContent:'center',
-              cursor:'pointer', color:'#94a3b8', transition:'color 0.15s' }}
-            onMouseEnter={e=>e.currentTarget.style.color='#00DE93'}
-            onMouseLeave={e=>e.currentTarget.style.color='#94a3b8'}
+            style={{ background: 'rgba(15,23,42,0.85)', border: '1px solid #334155', borderRadius: 6,
+              width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: '#94a3b8', transition: 'color 0.15s' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#00DE93'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
           >{icon}</button>
         ))}
       </div>
-
-      <svg
-        ref={svgRef}
-        width={width} height={height}
-        style={{ display:'block', cursor:'grab', borderRadius:10,
-          background:'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,41,59,0.95))' }}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseLeave}
-        onDoubleClick={resetTransform}
-      >
-        {/* Subtle grid lines */}
+      <svg ref={svgRef} width={width} height={height}
+        style={{ display: 'block', cursor: 'grab', borderRadius: 10,
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,41,59,0.95))' }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
+        onDoubleClick={resetTransform}>
         <defs>
-          <pattern id="tsne-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(51,65,85,0.4)" strokeWidth="0.5"/>
+          <pattern id="tsne-grid-2d" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(51,65,85,0.4)" strokeWidth="0.5" />
           </pattern>
         </defs>
-        <rect width={width} height={height} fill="url(#tsne-grid)" />
-
-        {/* Data points */}
-        <g transform={groupTransform}>
+        <rect width={width} height={height} fill="url(#tsne-grid-2d)" />
+        <g transform={`translate(${tx},${ty}) scale(${s})`}>
           {visible.map((p, i) => {
             const cx = ptX(p), cy = ptY(p);
             const col = ppbToColor(p.ppb);
             return (
               <g key={i}>
-                {/* Glow ring for real data */}
-                {!p.isSynthetic && (
-                  <circle cx={cx} cy={cy} r={r * 2.2} fill={col} opacity={0.12} />
-                )}
-                <circle
-                  cx={cx} cy={cy} r={r}
-                  fill={col}
+                {!p.isSynthetic && <circle cx={cx} cy={cy} r={r * 2.2} fill={col} opacity={0.12} />}
+                <circle cx={cx} cy={cy} r={r} fill={col}
                   stroke={p.isSynthetic ? 'rgba(255,255,255,0.15)' : col}
                   strokeWidth={p.isSynthetic ? 0.8 / s : 0}
-                  opacity={p.isSynthetic ? 0.65 : 0.92}
-                  style={{ transition: 'r 0.1s' }}
-                />
+                  opacity={p.isSynthetic ? 0.65 : 0.92} />
               </g>
             );
           })}
         </g>
-
-        {/* Axis labels */}
-        <text x={width/2} y={height-4} textAnchor="middle"
-          fill="#475569" fontSize={10} fontFamily="Inter,sans-serif">t-SNE 1</text>
-        <text x={8} y={height/2} textAnchor="middle"
-          fill="#475569" fontSize={10} fontFamily="Inter,sans-serif"
-          transform={`rotate(-90,8,${height/2})`}>t-SNE 2</text>
+        <text x={width / 2} y={height - 4} textAnchor="middle" fill="#475569" fontSize={10} fontFamily="Inter,sans-serif">t-SNE 1</text>
+        <text x={8} y={height / 2} textAnchor="middle" fill="#475569" fontSize={10} fontFamily="Inter,sans-serif"
+          transform={`rotate(-90,8,${height / 2})`}>t-SNE 2</text>
       </svg>
-
-      {/* Tooltip */}
       <AnimatePresence>
-        {tooltip && (
-          <motion.div
-            initial={{ opacity:0, scale:0.9 }}
-            animate={{ opacity:1, scale:1 }}
-            exit={{ opacity:0, scale:0.9 }}
-            transition={{ duration:0.1 }}
-            style={{
-              position:'absolute',
-              left: Math.min(tooltip.sx + 14, width - 200),
-              top: Math.max(4, tooltip.sy - 60),
-              background:'rgba(15,23,42,0.97)',
-              border:`1px solid ${ppbToColor(tooltip.point.ppb)}55`,
-              borderRadius:8, padding:'8px 12px',
-              pointerEvents:'none', zIndex:20,
-              boxShadow:`0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px ${ppbToColor(tooltip.point.ppb)}33`,
-              minWidth:140,
-            }}
-          >
-            <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
-              <span style={{ width:10, height:10, borderRadius:'50%', background:ppbToColor(tooltip.point.ppb), display:'inline-block', flexShrink:0 }}/>
-              <span style={{ color:'#f8fafc', fontSize:'0.8rem', fontWeight:600 }}>
-                {tooltip.point.ppb} ppb
-              </span>
-              {tooltip.point.isSynthetic && (
-                <span style={{ fontSize:'0.65rem', color:'#94a3b8', background:'rgba(148,163,184,0.15)', borderRadius:4, padding:'1px 5px' }}>synthetic</span>
-              )}
-            </div>
-            <div style={{ color:'#64748b', fontSize:'0.7rem', maxWidth:170, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-              {tooltip.point.fileName?.split('/').pop()?.slice(0, 40) || 'unknown'}
-            </div>
-            {tooltip.point.deviceId !== 'SYNTHETIC' && (
-              <div style={{ color:'#475569', fontSize:'0.68rem', marginTop:2 }}>
-                {shortAuLabel(tooltip.point.deviceId)}
-              </div>
-            )}
-          </motion.div>
-        )}
+        {tooltip && <PointTooltip tooltip={tooltip} width={width} />}
       </AnimatePresence>
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  3-D Trackball Scatter Plot (pure SVG projected)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function mat3RotY(a) {
+  const c = Math.cos(a), sn = Math.sin(a);
+  return [c, 0, sn, 0, 1, 0, -sn, 0, c];
+}
+function mat3RotX(a) {
+  const c = Math.cos(a), sn = Math.sin(a);
+  return [1, 0, 0, 0, c, -sn, 0, sn, c];
+}
+function mat3Mul(a, b) {
+  const o = new Array(9);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+    o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+  }
+  return o;
+}
+function applyMat3(m, x, y, z) {
+  return [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
+}
+
+function TSNEPlot3D({ points = [], width = 560, height = 460, hiddenConcs }) {
+  const svgRef = useRef(null);
+  const [rotation, setRotation] = useState({ rx: -0.4, ry: 0.6 });
+  const [zoom, setZoom] = useState(1);
+  const [tooltip, setTooltip] = useState(null);
+  const isDragging = useRef(false);
+  const lastMouse = useRef({ x: 0, y: 0 });
+  const autoRotRef = useRef(null);
+  const [autoRotate, setAutoRotate] = useState(true);
+
+  const visible = useMemo(() => points.filter(p => !(hiddenConcs?.has(p.ppb))), [points, hiddenConcs]);
+
+  // Normalise to [-1, 1]³
+  const normPts = useMemo(() => {
+    if (!visible.length) return [];
+    let mx = -Infinity, my = -Infinity, mz = -Infinity, nx = Infinity, ny = Infinity, nz = Infinity;
+    for (const p of visible) {
+      if (p.x > mx) mx = p.x; if (p.x < nx) nx = p.x;
+      if (p.y > my) my = p.y; if (p.y < ny) ny = p.y;
+      if (p.z > mz) mz = p.z; if (p.z < nz) nz = p.z;
+    }
+    const rx = mx - nx || 1, ry = my - ny || 1, rz = mz - nz || 1;
+    const sc = Math.max(rx, ry, rz) / 2;
+    const cx = (mx + nx) / 2, cy = (my + ny) / 2, cz = (mz + nz) / 2;
+    return visible.map(p => ({
+      ...p,
+      nx: (p.x - cx) / sc, ny: (p.y - cy) / sc, nz: (p.z - cz) / sc,
+    }));
+  }, [visible]);
+
+  // Auto-rotation
+  useEffect(() => {
+    if (!autoRotate) { if (autoRotRef.current) cancelAnimationFrame(autoRotRef.current); return; }
+    let frame;
+    const spin = () => {
+      setRotation(prev => ({ ...prev, ry: prev.ry + 0.005 }));
+      frame = requestAnimationFrame(spin);
+      autoRotRef.current = frame;
+    };
+    frame = requestAnimationFrame(spin);
+    autoRotRef.current = frame;
+    return () => cancelAnimationFrame(frame);
+  }, [autoRotate]);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    setZoom(z => Math.max(0.3, Math.min(5, z * (e.deltaY < 0 ? 1.1 : 0.9))));
+  }, []);
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
+  const onMouseDown = useCallback((e) => {
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    lastMouse.current = { x: e.clientX, y: e.clientY };
+    setAutoRotate(false);
+  }, []);
+  const onMouseMove = useCallback((e) => {
+    if (isDragging.current) {
+      const dx = e.clientX - lastMouse.current.x;
+      const dy = e.clientY - lastMouse.current.y;
+      lastMouse.current = { x: e.clientX, y: e.clientY };
+      setRotation(prev => ({ rx: prev.rx + dy * 0.008, ry: prev.ry + dx * 0.008 }));
+    }
+    // hover
+    const svgRect = svgRef.current?.getBoundingClientRect();
+    if (!svgRect || !normPts.length) return;
+    const mx = e.clientX - svgRect.left;
+    const my = e.clientY - svgRect.top;
+    const rot = mat3Mul(mat3RotX(rotation.rx), mat3RotY(rotation.ry));
+    const sc = Math.min(width, height) * 0.38 * zoom;
+    const cx = width / 2, cy = height / 2;
+    let nearest = null, minD2 = Infinity;
+    for (const p of normPts) {
+      const [px, py] = applyMat3(rot, p.nx, p.ny, p.nz);
+      const sx = cx + px * sc, sy = cy + py * sc;
+      const d2 = (sx - mx) ** 2 + (sy - my) ** 2;
+      if (d2 < minD2) { minD2 = d2; nearest = p; }
+    }
+    if (nearest && minD2 < 400) {
+      setTooltip({ point: nearest, sx: mx, sy: my });
+    } else {
+      setTooltip(null);
+    }
+  }, [normPts, rotation, zoom, width, height]);
+  const onMouseUp = useCallback(() => { isDragging.current = false; }, []);
+  const onMouseLeave = useCallback(() => { isDragging.current = false; setTooltip(null); }, []);
+
+  if (!points.length) {
+    return (
+      <div style={{ width, height, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(15,23,42,0.6)', borderRadius: 12, border: '1px solid #334155', color: '#64748b', fontSize: '0.85rem' }}>
+        No 3-D t-SNE data — click Run to compute.
+      </div>
+    );
+  }
+
+  const rot = mat3Mul(mat3RotX(rotation.rx), mat3RotY(rotation.ry));
+  const sc = Math.min(width, height) * 0.38 * zoom;
+  const cx = width / 2, cy = height / 2;
+
+  // Sort by depth (far first) for painter's algorithm
+  const projected = normPts.map(p => {
+    const [px, py, pz] = applyMat3(rot, p.nx, p.ny, p.nz);
+    return { ...p, sx: cx + px * sc, sy: cy + py * sc, depth: pz };
+  }).sort((a, b) => a.depth - b.depth);
+
+  // Draw axes
+  const axisLen = 0.6;
+  const axes = [
+    { label: 'X', vec: [axisLen, 0, 0], col: '#ef4444' },
+    { label: 'Y', vec: [0, axisLen, 0], col: '#22c55e' },
+    { label: 'Z', vec: [0, 0, axisLen], col: '#3b82f6' },
+  ].map(a => {
+    const [ex, ey] = applyMat3(rot, ...a.vec);
+    return { ...a, ex: cx + ex * sc, ey: cy + ey * sc };
+  });
+
+  return (
+    <div style={{ position: 'relative', userSelect: 'none' }}>
+      {/* Controls */}
+      <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {[
+          { icon: <ZoomIn size={13} />, action: () => setZoom(z => Math.min(5, z * 1.3)), title: 'Zoom in' },
+          { icon: <ZoomOut size={13} />, action: () => setZoom(z => Math.max(0.3, z / 1.3)), title: 'Zoom out' },
+          { icon: <RotateCcw size={13} />, action: () => { setRotation({ rx: -0.4, ry: 0.6 }); setZoom(1); setAutoRotate(true); }, title: 'Reset view' },
+        ].map(({ icon, action, title }) => (
+          <button key={title} onClick={action} title={title}
+            style={{ background: 'rgba(15,23,42,0.85)', border: '1px solid #334155', borderRadius: 6,
+              width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: '#94a3b8', transition: 'color 0.15s' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#00DE93'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+          >{icon}</button>
+        ))}
+        <button onClick={() => setAutoRotate(a => !a)} title={autoRotate ? 'Stop auto-rotate' : 'Auto-rotate'}
+          style={{ background: autoRotate ? 'rgba(0,222,147,0.15)' : 'rgba(15,23,42,0.85)',
+            border: '1px solid #334155', borderRadius: 6, width: 26, height: 26,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', color: autoRotate ? '#00DE93' : '#64748b', fontSize: '0.7rem', fontWeight: 700 }}>
+          3D
+        </button>
+      </div>
+
+      <svg ref={svgRef} width={width} height={height}
+        style={{ display: 'block', cursor: 'grab', borderRadius: 10,
+          background: 'linear-gradient(135deg, rgba(8,15,30,0.98), rgba(20,30,48,0.98))' }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}>
+        {/* Axes */}
+        {axes.map(a => (
+          <g key={a.label}>
+            <line x1={cx} y1={cy} x2={a.ex} y2={a.ey} stroke={a.col} strokeWidth={1} opacity={0.35} />
+            <text x={a.ex + 4} y={a.ey - 4} fill={a.col} fontSize={9} opacity={0.5} fontFamily="Inter,sans-serif">{a.label}</text>
+          </g>
+        ))}
+        {/* Points */}
+        {projected.map((p, i) => {
+          const col = ppbToColor(p.ppb);
+          const depthFade = 0.4 + 0.6 * ((p.depth + 1) / 2);
+          const rr = Math.max(2, (4 + p.depth * 1.5) * zoom);
+          return (
+            <g key={i}>
+              {!p.isSynthetic && <circle cx={p.sx} cy={p.sy} r={rr * 2} fill={col} opacity={0.08 * depthFade} />}
+              <circle cx={p.sx} cy={p.sy} r={rr} fill={col}
+                stroke={p.isSynthetic ? 'rgba(255,255,255,0.12)' : 'none'}
+                strokeWidth={p.isSynthetic ? 0.6 : 0}
+                opacity={(p.isSynthetic ? 0.5 : 0.85) * depthFade} />
+            </g>
+          );
+        })}
+      </svg>
+
+      <AnimatePresence>
+        {tooltip && <PointTooltip tooltip={tooltip} width={width} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Shared Tooltip
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function PointTooltip({ tooltip, width }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      transition={{ duration: 0.1 }}
+      style={{
+        position: 'absolute',
+        left: Math.min(tooltip.sx + 14, width - 210),
+        top: Math.max(4, tooltip.sy - 60),
+        background: 'rgba(15,23,42,0.97)',
+        border: `1px solid ${ppbToColor(tooltip.point.ppb)}55`,
+        borderRadius: 8, padding: '8px 12px',
+        pointerEvents: 'none', zIndex: 20,
+        boxShadow: `0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px ${ppbToColor(tooltip.point.ppb)}33`,
+        minWidth: 140,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{ width: 10, height: 10, borderRadius: '50%', background: ppbToColor(tooltip.point.ppb), display: 'inline-block', flexShrink: 0 }} />
+        <span style={{ color: '#f8fafc', fontSize: '0.8rem', fontWeight: 600 }}>{tooltip.point.ppb} ppb</span>
+        {tooltip.point.isSynthetic && (
+          <span style={{ fontSize: '0.65rem', color: '#c084fc', background: 'rgba(168,85,247,0.15)', borderRadius: 4, padding: '1px 5px' }}>synthetic</span>
+        )}
+      </div>
+      <div style={{ color: '#64748b', fontSize: '0.7rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {tooltip.point.fileName?.split('/').pop()?.slice(0, 40) || 'unknown'}
+      </div>
+      {tooltip.point.deviceId && tooltip.point.deviceId !== 'SYNTHETIC' && (
+        <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: 2 }}>{shortAuLabel(tooltip.point.deviceId)}</div>
+      )}
+    </motion.div>
   );
 }
 
@@ -341,25 +562,19 @@ function TSNEPlot({ points = [], width = 560, height = 460, hiddenConcs }) {
 
 function ConcLegend({ concentrations, hiddenConcs, onToggle }) {
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-      <div style={{ fontSize:'0.72rem', color:'#64748b', fontWeight:600, letterSpacing:'0.06em',
-        textTransform:'uppercase', marginBottom:4 }}>Concentration (ppb)</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em',
+        textTransform: 'uppercase', marginBottom: 4 }}>Concentration (ppb)</div>
       {concentrations.map(ppb => {
         const hidden = hiddenConcs.has(ppb);
         return (
           <button key={ppb} onClick={() => onToggle(ppb)}
-            style={{ display:'flex', alignItems:'center', gap:8, background:'transparent', border:'none',
-              cursor:'pointer', padding:'3px 0', borderRadius:6, transition:'opacity 0.15s',
-              opacity: hidden ? 0.35 : 1 }}
-          >
-            <span style={{ width:12, height:12, borderRadius:'50%', background:ppbToColor(ppb),
-              display:'inline-block', flexShrink:0, boxShadow: hidden ? 'none' : `0 0 6px ${ppbToColor(ppb)}66` }} />
-            <span style={{ color: hidden ? '#475569' : '#cbd5e1', fontSize:'0.78rem', fontWeight:500 }}>
-              {ppb} ppb
-            </span>
-            <span style={{ marginLeft:'auto', color:'#475569' }}>
-              {hidden ? <EyeOff size={11}/> : <Eye size={11}/>}
-            </span>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none',
+              cursor: 'pointer', padding: '3px 0', borderRadius: 6, transition: 'opacity 0.15s', opacity: hidden ? 0.35 : 1 }}>
+            <span style={{ width: 12, height: 12, borderRadius: '50%', background: ppbToColor(ppb),
+              display: 'inline-block', flexShrink: 0, boxShadow: hidden ? 'none' : `0 0 6px ${ppbToColor(ppb)}66` }} />
+            <span style={{ color: hidden ? '#475569' : '#cbd5e1', fontSize: '0.78rem', fontWeight: 500 }}>{ppb} ppb</span>
+            <span style={{ marginLeft: 'auto', color: '#475569' }}>{hidden ? <EyeOff size={11} /> : <Eye size={11} />}</span>
           </button>
         );
       })}
@@ -371,9 +586,9 @@ function ConcLegend({ concentrations, hiddenConcs, onToggle }) {
 // Main TSNEPage
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function TSNEPage({ workspaceFiles = [] }) {
-  // ── Core state ──────────────────────────────────────────────────────────────
-  const [stage, setStage] = useState('idle'); // idle | loading | computing | done | error
+export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWorkspace }) {
+  /* ── Core state ────────────────────────────────────────────────────────── */
+  const [stage, setStage] = useState('idle');
   const [loadProg, setLoadProg] = useState(0);
   const [computeProg, setComputeProg] = useState({});
   const [dataPoints, setDataPoints] = useState([]);
@@ -382,49 +597,66 @@ export default function TSNEPage({ workspaceFiles = [] }) {
   const [hiddenConcs, setHiddenConcs] = useState(new Set());
   const [errorMsg, setErrorMsg] = useState(null);
 
-  // ── Settings ────────────────────────────────────────────────────────────────
+  /* ── View mode ─────────────────────────────────────────────────────────── */
+  const [dim, setDim] = useState(2); // 2 | 3
+
+  /* ── Settings ──────────────────────────────────────────────────────────── */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [perplexity, setPerplexity] = useState(25);
   const [nIter, setNIter] = useState(500);
   const [epsilon, setEpsilon] = useState(10);
 
-  // ── Synthetic panel ─────────────────────────────────────────────────────────
+  /* ── Synthetic ─────────────────────────────────────────────────────────── */
   const [synthOpen, setSynthOpen] = useState(false);
   const [synthNPerConc, setSynthNPerConc] = useState(15);
   const [synthConcs, setSynthConcs] = useState([0, 5, 10, 25, 50, 100]);
   const [synthConcInput, setSynthConcInput] = useState('0,5,10,25,50,100');
   const [synthAdded, setSynthAdded] = useState(false);
+  const [synthSaving, setSynthSaving] = useState(false);
+
+  /* ── Progressive AU builder ────────────────────────────────────────────── */
+  const [progressiveMode, setProgressiveMode] = useState(false);
+  const [selectedAUs, setSelectedAUs] = useState(new Set());
+
   const cancelRef = useRef(false);
 
-  // ── Derived ─────────────────────────────────────────────────────────────────
+  /* ── Derived ───────────────────────────────────────────────────────────── */
   const eligibleFiles = useMemo(() =>
     workspaceFiles.filter(f => !f.isFolder && parseFenosePpbFromFilename(f.name) !== null),
     [workspaceFiles]
   );
 
   const realCount = useMemo(() => dataPoints.filter(p => !p.isSynthetic).length, [dataPoints]);
+  const synthInMemoryCount = useMemo(() => dataPoints.filter((p) => p.isSynthetic).length, [dataPoints]);
   const allConcs = useMemo(
-    () => [...new Set(dataPoints.map(p => p.ppb))].filter(Number.isFinite).sort((a,b) => a-b),
+    () => [...new Set(dataPoints.map(p => p.ppb))].filter(Number.isFinite).sort((a, b) => a - b),
     [dataPoints]
   );
 
+  // AU groups from REAL + SYNTHETIC data (synthetic included in combined and accessible per-AU)
   const auGroups = useMemo(() => {
     const g = {};
     for (const p of dataPoints) {
-      if (!p.isSynthetic) { (g[p.deviceId] = g[p.deviceId] || []).push(p); }
+      const key = p.isSynthetic ? 'SYNTHETIC' : p.deviceId;
+      (g[key] = g[key] || []).push(p);
     }
     return g;
   }, [dataPoints]);
 
+  const allAUKeys = useMemo(() =>
+    Object.keys(auGroups).filter(k => k !== 'SYNTHETIC').sort(),
+    [auGroups]
+  );
+
   const tabs = useMemo(() => {
-    const list = [{ key:'combined', label:'All AUs', count: dataPoints.length }];
+    const list = [{ key: 'combined', label: 'All AUs', count: dataPoints.length }];
     for (const [did, pts] of Object.entries(auGroups)) {
       list.push({ key: did, label: shortAuLabel(did), count: pts.length });
     }
     return list;
   }, [auGroups, dataPoints.length]);
 
-  // ── Feature extraction ───────────────────────────────────────────────────────
+  /* ── Feature extraction ────────────────────────────────────────────────── */
   const loadAndExtract = useCallback(async () => {
     const results = [];
     setLoadProg(0);
@@ -436,10 +668,10 @@ export default function TSNEPage({ workspaceFiles = [] }) {
         const parsed = await parseFile(f);
         if (!parsed?.data?.length) continue;
         const feats = extractFenoseFeaturesFromRows(parsed.data);
-        const featVec = Object.values(feats).filter(v => Number.isFinite(v));
+        const { featKeys, featVec } = featureKeysAndVectorFromFeats(feats);
         if (!featVec.length) continue;
         results.push({
-          feats: featVec,
+          feats: featVec, featKeys,
           ppb: parseFenosePpbFromFilename(f.name),
           deviceId: parseFenoseDeviceIdFromFilename(f.name),
           fileName: f.name,
@@ -453,21 +685,21 @@ export default function TSNEPage({ workspaceFiles = [] }) {
     return results;
   }, [eligibleFiles]);
 
-  // ── Synthetic generation (in-memory, no workspace save) ─────────────────────
-  const buildSynthetics = useCallback(async (nPerConc, concs) => {
-    // compute calibration from a subset of real files
+  /* ── Synthetic generation + persist to workspace (same rows as t-SNE) ───── */
+  const buildAndSaveSynthetics = useCallback(async (nPerConc, concs) => {
     const calFiles = [];
-    for (const f of eligibleFiles.slice(0, 25)) {
+    for (const f of eligibleFiles.slice(0, 30)) {
       try {
         const p = await parseFile(f);
         if (p?.data?.length) calFiles.push({ data: p.data, name: f.name });
-      } catch { /* skip unreadable files */ }
+      } catch { /* skip unreadable */ }
     }
     const pooledCal = computeCalibrationFromFiles(calFiles);
     const cal = resolveSyntheticCalibration([], pooledCal);
 
     const synthPts = [];
-    const baseSeed = (Date.now() & 0xFFFFFF) >>> 0;
+    const prebuiltRuns = [];
+    const baseSeed = (Date.now() & 0xffffff) >>> 0;
     let k = 0;
     for (const ppb of concs) {
       for (let r = 0; r < nPerConc; r++) {
@@ -475,99 +707,167 @@ export default function TSNEPage({ workspaceFiles = [] }) {
         try {
           const rows = generateSyntheticFenoseRows({
             ppb,
-            seed: (baseSeed + k * 7919) >>> 0,
+            seed: (baseSeed + k * SYNTH_SEED_MULT) >>> 0,
+            nAmbient: SYNTH_N_AMBIENT,
+            nFeno: SYNTH_N_FENO,
+            nWindow: SYNTH_N_WINDOW,
             calibration: cal,
           });
           const feats = extractFenoseFeaturesFromRows(rows);
-          const featVec = Object.values(feats).filter(v => Number.isFinite(v));
-          if (featVec.length) synthPts.push({
-            feats: featVec, ppb,
-            deviceId: 'SYNTHETIC',
-            fileName: `synthetic_${ppb}ppb_rep${r+1}`,
-            isSynthetic: true,
-          });
-        } catch { /* skip failed synthetic generation */ }
+          const { featKeys, featVec } = featureKeysAndVectorFromFeats(feats);
+          if (featVec.length) {
+            synthPts.push({
+              feats: featVec,
+              featKeys,
+              ppb,
+              deviceId: 'SYNTHETIC',
+              fileName: `fenose_synth_${SYNTHETIC_DEFAULT_DEVICE_SUFFIX}_r${r}_${ppb}ppb.csv`,
+              isSynthetic: true,
+            });
+            prebuiltRuns.push({
+              data: rows,
+              ppb,
+              replicateIndex: r,
+              deviceSuffix: SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
+            });
+          }
+        } catch (e) {
+          console.warn('Synthetic sample failed:', e?.message || e);
+        }
         k++;
-        if (k % 20 === 0) await new Promise(r2 => setTimeout(r2, 0));
+        if (k % 20 === 0) await new Promise((r2) => setTimeout(r2, 0));
       }
     }
-    return synthPts;
-  }, [eligibleFiles]);
 
-  // ── t-SNE computation ────────────────────────────────────────────────────────
-  const computeTSNE = useCallback(async (allPoints) => {
+    if (onAddSyntheticFenoseToWorkspace && prebuiltRuns.length > 0) {
+      setSynthSaving(true);
+      try {
+        await onAddSyntheticFenoseToWorkspace({ prebuiltRuns });
+      } catch (e) {
+        console.warn('Could not save synthetics to workspace:', e?.message || e);
+      }
+      setSynthSaving(false);
+    }
+
+    return synthPts;
+  }, [eligibleFiles, onAddSyntheticFenoseToWorkspace]);
+
+  /* ── t-SNE computation ─────────────────────────────────────────────────── */
+  const computeTSNE = useCallback(async (allPoints, activeDim) => {
     setStage('computing');
+    setTsneResults({});
+    setComputeProg({});
     const results = {};
 
-    // Build groups: real AU groups + combined (all)
+    // Build groups: combined (all), per-real-AU (real for that AU + all synthetic), per-SYNTHETIC
+    const auMap = {};
+    for (const p of allPoints) {
+      const key = p.isSynthetic ? 'SYNTHETIC' : p.deviceId;
+      (auMap[key] = auMap[key] || []).push(p);
+    }
+    const syntheticPts = auMap['SYNTHETIC'] || [];
+
+    // Per-AU group: real for that AU + all synthetics
     const groupMap = { combined: allPoints };
-    for (const [did, pts] of Object.entries(
-      allPoints.reduce((acc, p) => {
-        if (!p.isSynthetic) (acc[p.deviceId] = acc[p.deviceId] || []).push(p);
-        return acc;
-      }, {})
-    )) {
-      if (pts.length >= MIN_TSNE_SAMPLES) groupMap[did] = pts;
-      else groupMap[did] = pts; // still track, will mark as skipped
+    for (const [did, pts] of Object.entries(auMap)) {
+      if (did === 'SYNTHETIC') {
+        if (pts.length >= MIN_TSNE_SAMPLES) groupMap[did] = pts;
+        else groupMap[did] = pts;
+      } else {
+        // Include synthetics with each AU for richer embedding
+        const merged = [...pts, ...syntheticPts];
+        groupMap[did] = merged;
+      }
     }
 
     for (const [key, pts] of Object.entries(groupMap)) {
       if (cancelRef.current) break;
       if (pts.length < MIN_TSNE_SAMPLES) {
-        results[key] = { status:'skipped', reason:`Only ${pts.length} samples`, points:[] };
-        setTsneResults({ ...results });
+        results[key] = { status: 'skipped', reason: `Only ${pts.length} samples`, points: [] };
+        setTsneResults(prev => ({ ...prev, ...results }));
         continue;
       }
-      results[key] = { status:'running', points:[] };
-      setTsneResults({ ...results });
+      results[key] = { status: 'running', points: [] };
+      setTsneResults(prev => ({ ...prev, ...results }));
       try {
-        const featureMatrix = normalizeMatrix(pts.map(p => p.feats));
+        const { matrix: featureMatrix } = buildNormalizedFeatureMatrix(pts);
+        if (!featureMatrix.length || !featureMatrix[0]?.length) {
+          results[key] = { status: 'skipped', reason: 'No usable features', points: [] };
+          setTsneResults((prev) => ({ ...prev, ...results }));
+          continue;
+        }
         const solution = await runTSNEAsync(
           featureMatrix,
-          { perplexity, epsilon, nIter },
-          (prog) => {
-            setComputeProg(prev => ({ ...prev, [key]: prog }));
-          }
+          { perplexity, epsilon, nIter, dim: activeDim },
+          (prog) => setComputeProg(prev => ({ ...prev, [key]: prog }))
         );
         results[key] = {
           status: 'done',
           points: pts.map((p, i) => ({
-            x: solution[i][0], y: solution[i][1],
-            ppb: p.ppb, deviceId: p.deviceId,
-            fileName: p.fileName, isSynthetic: p.isSynthetic,
+            x: solution[i][0],
+            y: solution[i][1],
+            z: activeDim === 3 ? solution[i][2] : 0,
+            ppb: p.ppb,
+            deviceId: p.deviceId,
+            fileName: p.fileName,
+            isSynthetic: p.isSynthetic,
           })),
         };
       } catch (err) {
-        results[key] = { status:'error', error: err.message, points:[] };
+        results[key] = { status: 'error', error: err.message, points: [] };
       }
-      setTsneResults({ ...results });
+      setTsneResults(prev => ({ ...prev, ...results }));
     }
     setStage('done');
   }, [perplexity, epsilon, nIter]);
 
-  // ── Handle Run ───────────────────────────────────────────────────────────────
+  const getWorkingPoints = useCallback(() => {
+    const realDevices = [
+      ...new Set(dataPoints.filter((p) => !p.isSynthetic).map((p) => p.deviceId).filter(Boolean)),
+    ].sort();
+    if (progressiveMode && realDevices.length > 1) {
+      return dataPoints.filter((p) => p.isSynthetic || selectedAUs.has(p.deviceId));
+    }
+    return dataPoints;
+  }, [dataPoints, progressiveMode, selectedAUs]);
+
+  /* ── Handle Run ────────────────────────────────────────────────────────── */
   const handleRun = useCallback(async () => {
     cancelRef.current = false;
     setStage('loading');
     setErrorMsg(null);
     setComputeProg({});
-    setSynthAdded(false);
+    setTsneResults({});
     try {
       const real = await loadAndExtract();
-      setDataPoints(real);
-      if (real.length < MIN_TSNE_SAMPLES) {
+      const existingSynth = dataPoints.filter((p) => p.isSynthetic);
+      const allPts = [...real, ...existingSynth];
+      setDataPoints(allPts);
+
+      const deviceKeys = [...new Set(real.map((p) => p.deviceId).filter(Boolean))].sort();
+      let nextSel = selectedAUs;
+      if (progressiveMode && deviceKeys.length > 1 && selectedAUs.size === 0) {
+        nextSel = new Set([deviceKeys[0]]);
+        setSelectedAUs(nextSel);
+      }
+      const working =
+        progressiveMode && deviceKeys.length > 1
+          ? allPts.filter((p) => p.isSynthetic || nextSel.has(p.deviceId))
+          : allPts;
+
+      if (working.length < MIN_TSNE_SAMPLES) {
         setStage('idle');
         setSynthOpen(true);
         return;
       }
-      await computeTSNE(real);
+      await computeTSNE(working, dim);
     } catch (e) {
       setErrorMsg(e.message);
       setStage('error');
     }
-  }, [loadAndExtract, computeTSNE]);
+  }, [loadAndExtract, computeTSNE, dim, dataPoints, progressiveMode, selectedAUs]);
 
-  // ── Handle Add Synthetics + Recompute ───────────────────────────────────────
+  /* ── Handle Add Synthetics ─────────────────────────────────────────────── */
   const handleAddSynthAndRun = useCallback(async () => {
     cancelRef.current = false;
     const parsedConcs = synthConcs.filter(c => Number.isFinite(c));
@@ -575,23 +875,78 @@ export default function TSNEPage({ workspaceFiles = [] }) {
     setStage('loading');
     setErrorMsg(null);
     setComputeProg({});
+    setTsneResults({});
     try {
-      // Load real data if not loaded yet
       let real = dataPoints.filter(p => !p.isSynthetic);
       if (real.length === 0) {
         real = await loadAndExtract();
       }
-      const synths = await buildSynthetics(synthNPerConc, parsedConcs);
+      const synths = await buildAndSaveSynthetics(synthNPerConc, parsedConcs);
       const allPts = [...real, ...synths];
       setDataPoints(allPts);
       setSynthAdded(true);
       setSynthOpen(false);
-      await computeTSNE(allPts);
+      if (allPts.length < MIN_TSNE_SAMPLES) {
+        setStage('idle');
+        return;
+      }
+      const deviceKeys = [...new Set(real.map((p) => p.deviceId).filter(Boolean))].sort();
+      let nextSel = selectedAUs;
+      if (progressiveMode && deviceKeys.length > 1 && selectedAUs.size === 0) {
+        nextSel = new Set([deviceKeys[0]]);
+        setSelectedAUs(nextSel);
+      }
+      const working =
+        progressiveMode && deviceKeys.length > 1
+          ? allPts.filter((p) => p.isSynthetic || nextSel.has(p.deviceId))
+          : allPts;
+      await computeTSNE(working, dim);
     } catch (e) {
       setErrorMsg(e.message);
       setStage('error');
     }
-  }, [dataPoints, synthConcs, synthNPerConc, loadAndExtract, buildSynthetics, computeTSNE]);
+  }, [
+    dataPoints,
+    synthConcs,
+    synthNPerConc,
+    loadAndExtract,
+    buildAndSaveSynthetics,
+    computeTSNE,
+    dim,
+    progressiveMode,
+    selectedAUs,
+  ]);
+
+  /* ── Progressive AU: add/remove one AU; recompute all t-SNE groups in 2D/3D ─ */
+  const toggleProgressiveAU = useCallback(
+    async (auKey) => {
+      const next = new Set(selectedAUs);
+      if (next.has(auKey)) {
+        if (next.size > 1) next.delete(auKey);
+      } else next.add(auKey);
+      const subset = dataPoints.filter((p) => p.isSynthetic || next.has(p.deviceId));
+      if (subset.length < MIN_TSNE_SAMPLES) return;
+      setSelectedAUs(next);
+      setSelectedTab('combined');
+      await computeTSNE(subset, dim);
+    },
+    [selectedAUs, dataPoints, computeTSNE, dim]
+  );
+
+  /** After a successful run, switch 2D ↔ 3D without reloading files. */
+  const handleDimChange = useCallback(
+    async (d) => {
+      if (d === dim) return;
+      setDim(d);
+      const pts = getWorkingPoints();
+      if (pts.length < MIN_TSNE_SAMPLES) return;
+      const hasDone =
+        stage === 'done' || Object.values(tsneResults).some((r) => r?.status === 'done');
+      if (!hasDone) return;
+      await computeTSNE(pts, d);
+    },
+    [dim, getWorkingPoints, stage, tsneResults, computeTSNE]
+  );
 
   const toggleConc = useCallback((ppb) => {
     setHiddenConcs(prev => {
@@ -601,261 +956,204 @@ export default function TSNEPage({ workspaceFiles = [] }) {
     });
   }, []);
 
-  const parseSynthConcs = (raw) => {
-    return raw.split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v >= 0);
-  };
+  const parseSynthConcsStr = (raw) => raw.split(/[\s,;]+/).map(Number).filter(v => Number.isFinite(v) && v >= 0);
 
-  // ── Current tab result ───────────────────────────────────────────────────────
+  /* ── Current tab result ────────────────────────────────────────────────── */
   const curResult = tsneResults[selectedTab] || null;
   const curProg = computeProg[selectedTab] || 0;
   const isComputing = stage === 'computing' || stage === 'loading';
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  /* ── Render ────────────────────────────────────────────────────────────── */
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -16 }}
       transition={{ duration: 0.3 }}
-      style={{
-        minHeight: '100%',
-        background: 'var(--bg-secondary)',
-        color: 'var(--text-primary)',
-        display: 'flex',
-        flexDirection: 'column',
-        fontFamily: 'var(--font-family)',
-      }}
-    >
+      style={{ minHeight: '100%', background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+        display: 'flex', flexDirection: 'column', fontFamily: 'var(--font-family)' }}>
 
-      {/* ── Header ─────────────────────────────────────────────────────────────── */}
-      <div style={{
-        padding: '20px 28px 16px',
-        borderBottom: '1px solid #334155',
-        background: 'rgba(15,23,42,0.5)',
-        display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap',
-      }}>
+      {/* ═══ Header ═══════════════════════════════════════════════════════════ */}
+      <div style={{ padding: '20px 28px 16px', borderBottom: '1px solid #334155', background: 'rgba(15,23,42,0.5)',
+        display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
-            <div style={{
-              width:32, height:32, borderRadius:8,
-              background:'linear-gradient(135deg,rgba(0,222,147,0.2),rgba(6,182,212,0.2))',
-              border:'1px solid rgba(0,222,147,0.3)',
-              display:'flex', alignItems:'center', justifyContent:'center',
-            }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8,
+              background: 'linear-gradient(135deg,rgba(0,222,147,0.2),rgba(6,182,212,0.2))',
+              border: '1px solid rgba(0,222,147,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Atom size={16} color="#00DE93" />
             </div>
-            <h1 style={{ margin:0, fontSize:'1.15rem', fontWeight:700, color:'#f8fafc', letterSpacing:'-0.02em' }}>
-              t-SNE Explorer
-            </h1>
-            <span style={{ fontSize:'0.7rem', color:'#00DE93', background:'rgba(0,222,147,0.1)',
-              border:'1px solid rgba(0,222,147,0.2)', borderRadius:20, padding:'2px 8px', fontWeight:600 }}>
-              BETA
-            </span>
+            <h1 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#f8fafc', letterSpacing: '-0.02em' }}>t-SNE Explorer</h1>
+            <span style={{ fontSize: '0.7rem', color: '#00DE93', background: 'rgba(0,222,147,0.1)',
+              border: '1px solid rgba(0,222,147,0.2)', borderRadius: 20, padding: '2px 8px', fontWeight: 600 }}>BETA</span>
           </div>
-          <p style={{ margin:0, fontSize:'0.8rem', color:'#64748b', lineHeight:1.5 }}>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b', lineHeight: 1.5 }}>
             Concentration-dependent dimensionality reduction for sensor array data.&nbsp;
             {eligibleFiles.length > 0
-              ? <span style={{color:'#94a3b8'}}>{eligibleFiles.length} file{eligibleFiles.length!==1?'s':''} with PPB labels found in workspace.</span>
-              : <span style={{color:'#ef4444'}}>No files with PPB labels found. Upload files with <code style={{fontSize:'0.75rem',color:'#f59e0b'}}>Xppb</code> in the filename.</span>}
+              ? <span style={{ color: '#94a3b8' }}>{eligibleFiles.length} file{eligibleFiles.length !== 1 ? 's' : ''} with PPB labels.</span>
+              : <span style={{ color: '#ef4444' }}>No PPB-labelled files. Upload files with <code style={{ fontSize: '0.75rem', color: '#f59e0b' }}>Xppb</code> in the name.</span>}
           </p>
         </div>
 
-        {/* Controls */}
-        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-          {/* Settings toggle */}
-          <button
-            onClick={() => setSettingsOpen(o => !o)}
-            style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'7px 12px', borderRadius:8, border:'1px solid #334155',
-              background: settingsOpen ? 'rgba(100,116,139,0.2)' : 'transparent',
-              cursor:'pointer', color: settingsOpen ? '#cbd5e1' : '#64748b',
-              fontSize:'0.78rem', fontWeight:600, transition:'all 0.15s',
-            }}
-          >
-            <Settings2 size={13}/> Settings
+        {/* Controls row */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 2D / 3D toggle */}
+          <div style={{ display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #334155' }}>
+            {[2, 3].map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => handleDimChange(d)}
+                disabled={isComputing}
+                title={isComputing ? 'Wait for current run' : `Use ${d}D embedding (recomputes after first run)`}
+                style={{
+                  padding: '6px 12px',
+                  border: 'none',
+                  cursor: isComputing ? 'not-allowed' : 'pointer',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  background: dim === d ? 'rgba(0,222,147,0.15)' : 'transparent',
+                  color: dim === d ? '#00DE93' : '#64748b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  transition: 'all 0.15s',
+                  opacity: isComputing ? 0.55 : 1,
+                }}
+              >
+                {d === 2 ? <Square size={12} /> : <Box size={12} />} {d}D
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => setSettingsOpen(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 8,
+              border: '1px solid #334155', background: settingsOpen ? 'rgba(100,116,139,0.2)' : 'transparent',
+              cursor: 'pointer', color: settingsOpen ? '#cbd5e1' : '#64748b', fontSize: '0.78rem', fontWeight: 600,
+              transition: 'all 0.15s' }}>
+            <Settings2 size={13} /> Settings
           </button>
 
-          {/* Synthetic data */}
-          <button
-            onClick={() => setSynthOpen(o => !o)}
-            style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'7px 12px', borderRadius:8,
+          <button onClick={() => setSynthOpen(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 8,
               border: synthAdded ? '1px solid rgba(168,85,247,0.4)' : '1px solid #334155',
               background: synthAdded ? 'rgba(168,85,247,0.1)' : (synthOpen ? 'rgba(168,85,247,0.08)' : 'transparent'),
-              cursor:'pointer', color: synthAdded ? '#c084fc' : (synthOpen ? '#a855f7' : '#64748b'),
-              fontSize:'0.78rem', fontWeight:600, transition:'all 0.15s',
-            }}
-          >
-            <Sparkles size={13}/> Synthetic
-            {synthAdded && <CheckCircle size={11} style={{marginLeft:2,color:'#a855f7'}}/>}
+              cursor: 'pointer', color: synthAdded ? '#c084fc' : (synthOpen ? '#a855f7' : '#64748b'),
+              fontSize: '0.78rem', fontWeight: 600, transition: 'all 0.15s' }}>
+            <Sparkles size={13} /> Synthetic
+            {synthAdded && <CheckCircle size={11} style={{ marginLeft: 2, color: '#a855f7' }} />}
           </button>
 
-          {/* Run button */}
-          <button
-            onClick={handleRun}
-            disabled={isComputing || eligibleFiles.length === 0}
-            style={{
-              display:'flex', alignItems:'center', gap:6,
-              padding:'8px 18px', borderRadius:8, border:'none',
+          <button onClick={handleRun} disabled={isComputing || eligibleFiles.length === 0}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 18px', borderRadius: 8, border: 'none',
               background: isComputing ? 'rgba(0,222,147,0.1)' :
-                (eligibleFiles.length === 0 ? 'rgba(51,65,85,0.5)' :
-                  'linear-gradient(135deg, #00DE93, #06b6d4)'),
+                (eligibleFiles.length === 0 ? 'rgba(51,65,85,0.5)' : 'linear-gradient(135deg, #00DE93, #06b6d4)'),
               cursor: (isComputing || eligibleFiles.length === 0) ? 'not-allowed' : 'pointer',
               color: isComputing ? '#00DE93' : (eligibleFiles.length === 0 ? '#475569' : '#0f172a'),
-              fontSize:'0.82rem', fontWeight:700,
+              fontSize: '0.82rem', fontWeight: 700,
               boxShadow: (!isComputing && eligibleFiles.length > 0) ? '0 0 20px rgba(0,222,147,0.3)' : 'none',
-              transition:'all 0.2s',
-            }}
-          >
-            {isComputing
-              ? <><Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> Running…</>
-              : <><Play size={13}/> Run t-SNE</>}
+              transition: 'all 0.2s' }}>
+            {isComputing ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Running…</> : <><Play size={13} /> Run t-SNE</>}
           </button>
         </div>
       </div>
 
-      {/* ── Settings Panel ──────────────────────────────────────────────────────── */}
+      {/* ═══ Settings Panel ═══════════════════════════════════════════════════ */}
       <AnimatePresence>
         {settingsOpen && (
-          <motion.div
-            initial={{ height:0, opacity:0 }}
-            animate={{ height:'auto', opacity:1 }}
-            exit={{ height:0, opacity:0 }}
-            style={{ overflow:'hidden', borderBottom:'1px solid #334155' }}
-          >
-            <div style={{ padding:'14px 28px', background:'rgba(15,23,42,0.4)',
-              display:'flex', gap:28, flexWrap:'wrap', alignItems:'flex-end' }}>
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden', borderBottom: '1px solid #334155' }}>
+            <div style={{ padding: '14px 28px', background: 'rgba(15,23,42,0.4)', display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               {[
-                { label:'Perplexity', value:perplexity, set:setPerplexity, min:5, max:100, step:5,
-                  hint:'Controls neighbourhood size (5–50)' },
-                { label:'Iterations', value:nIter, set:setNIter, min:100, max:2000, step:100,
-                  hint:'More = better quality, slower' },
-                { label:'Learning rate ε', value:epsilon, set:setEpsilon, min:1, max:200, step:5,
-                  hint:'Step size for gradient descent' },
+                { label: 'Perplexity', value: perplexity, set: setPerplexity, min: 5, max: 100, step: 5, hint: 'Neighbourhood size (5–50)' },
+                { label: 'Iterations', value: nIter, set: setNIter, min: 100, max: 2000, step: 100, hint: 'More = better quality, slower' },
+                { label: 'Learning rate ε', value: epsilon, set: setEpsilon, min: 1, max: 200, step: 5, hint: 'Step size for gradient descent' },
               ].map(({ label, value, set, min, max, step, hint }) => (
-                <div key={label} style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                  <label style={{ fontSize:'0.72rem', color:'#94a3b8', fontWeight:600 }}>{label}</label>
-                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600 }}>{label}</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input type="range" min={min} max={max} step={step} value={value}
-                      onChange={e => set(Number(e.target.value))}
-                      style={{ width:120, accentColor:'#00DE93' }} />
-                    <span style={{ fontSize:'0.82rem', color:'#00DE93', fontWeight:700, minWidth:36 }}>{value}</span>
+                      onChange={e => set(Number(e.target.value))} style={{ width: 120, accentColor: '#00DE93' }} />
+                    <span style={{ fontSize: '0.82rem', color: '#00DE93', fontWeight: 700, minWidth: 36 }}>{value}</span>
                   </div>
-                  <span style={{ fontSize:'0.68rem', color:'#475569' }}>{hint}</span>
+                  <span style={{ fontSize: '0.68rem', color: '#475569' }}>{hint}</span>
                 </div>
               ))}
-              <div style={{ fontSize:'0.72rem', color:'#475569', maxWidth:220, lineHeight:1.6 }}>
-                <Info size={11} style={{marginRight:4,verticalAlign:'middle'}}/>
-                Settings apply on next run. Perplexity is auto-clamped to N−2 when data is limited.
+              <div style={{ fontSize: '0.72rem', color: '#475569', maxWidth: 220, lineHeight: 1.6 }}>
+                <Info size={11} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                Settings apply on next run. Dimension: {dim}D.
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── Synthetic Data Panel ─────────────────────────────────────────────────── */}
+      {/* ═══ Synthetic Data Panel ═════════════════════════════════════════════ */}
       <AnimatePresence>
         {synthOpen && (
-          <motion.div
-            initial={{ height:0, opacity:0 }}
-            animate={{ height:'auto', opacity:1 }}
-            exit={{ height:0, opacity:0 }}
-            style={{ overflow:'hidden', borderBottom:'1px solid #334155' }}
-          >
-            <div style={{
-              padding:'16px 28px',
-              background:'linear-gradient(135deg, rgba(168,85,247,0.05), rgba(15,23,42,0.3))',
-              borderBottom:'1px solid rgba(168,85,247,0.15)',
-            }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-                <Sparkles size={14} color="#a855f7"/>
-                <span style={{ fontSize:'0.85rem', fontWeight:700, color:'#c084fc' }}>
-                  Synthetic Data Generator
-                </span>
-                <span style={{ fontSize:'0.72rem', color:'#64748b', marginLeft:4 }}>
-                  — augments workspace data with calibration-aware simulated captures
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden', borderBottom: '1px solid #334155' }}>
+            <div style={{ padding: '16px 28px', background: 'linear-gradient(135deg, rgba(168,85,247,0.05), rgba(15,23,42,0.3))',
+              borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Sparkles size={14} color="#a855f7" />
+                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#c084fc' }}>Synthetic Data Generator</span>
+                <span style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 4 }}>
+                  — same row data as t-SNE points; CSVs go to <code style={{ color: '#a78bfa' }}>FeNOse_synthetic/</code>
                 </span>
               </div>
 
               {eligibleFiles.length < WARN_REAL_SAMPLES && (
-                <div style={{ display:'flex', alignItems:'flex-start', gap:8, padding:'8px 12px',
-                  background:'rgba(245,158,11,0.08)', border:'1px solid rgba(245,158,11,0.2)',
-                  borderRadius:8, marginBottom:12, fontSize:'0.78rem', color:'#d97706' }}>
-                  <AlertTriangle size={13} style={{marginTop:1,flexShrink:0}}/>
-                  <span>
-                    Only <b>{eligibleFiles.length}</b> PPB-labelled files found. t-SNE requires at least {MIN_TSNE_SAMPLES} samples
-                    and works best with 15+. Add synthetic data below, or upload more real captures.
-                  </span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px',
+                  background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+                  borderRadius: 8, marginBottom: 12, fontSize: '0.78rem', color: '#d97706' }}>
+                  <AlertTriangle size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+                  <span>Only <b>{eligibleFiles.length}</b> PPB-labelled files. t-SNE needs {MIN_TSNE_SAMPLES}+ samples and works best with 15+. Add synthetic data below.</span>
                 </div>
               )}
 
-              <div style={{ display:'flex', gap:24, flexWrap:'wrap', alignItems:'flex-end' }}>
-                <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                  <label style={{ fontSize:'0.72rem', color:'#94a3b8', fontWeight:600 }}>
-                    Samples per concentration
-                  </label>
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600 }}>Samples per concentration</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <input type="number" min={1} max={200} value={synthNPerConc}
                       onChange={e => setSynthNPerConc(Math.max(1, Math.min(200, Number(e.target.value))))}
-                      style={{
-                        width:80, padding:'5px 10px', background:'#1e293b',
-                        border:'1px solid #475569', borderRadius:6, color:'#f8fafc',
-                        fontSize:'0.82rem', outline:'none',
-                      }}
-                    />
-                    <span style={{ fontSize:'0.72rem', color:'#64748b' }}>samples</span>
+                      style={{ width: 80, padding: '5px 10px', background: '#1e293b', border: '1px solid #475569',
+                        borderRadius: 6, color: '#f8fafc', fontSize: '0.82rem', outline: 'none' }} />
+                    <span style={{ fontSize: '0.72rem', color: '#64748b' }}>samples</span>
                   </div>
                 </div>
 
-                <div style={{ display:'flex', flexDirection:'column', gap:4, flex:1, minWidth:200 }}>
-                  <label style={{ fontSize:'0.72rem', color:'#94a3b8', fontWeight:600 }}>
-                    Concentrations (ppb, comma-separated)
-                  </label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 200 }}>
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600 }}>Concentrations (ppb, comma-separated)</label>
                   <input type="text" value={synthConcInput}
-                    onChange={e => {
-                      setSynthConcInput(e.target.value);
-                      setSynthConcs(parseSynthConcs(e.target.value));
-                    }}
+                    onChange={e => { setSynthConcInput(e.target.value); setSynthConcs(parseSynthConcsStr(e.target.value)); }}
                     placeholder="0,5,10,25,50,100"
-                    style={{
-                      width:'100%', padding:'5px 10px', background:'#1e293b',
-                      border:'1px solid #475569', borderRadius:6, color:'#f8fafc',
-                      fontSize:'0.82rem', outline:'none',
-                    }}
-                  />
-                  <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:2 }}>
+                    style={{ width: '100%', padding: '5px 10px', background: '#1e293b', border: '1px solid #475569',
+                      borderRadius: 6, color: '#f8fafc', fontSize: '0.82rem', outline: 'none' }} />
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
                     {synthConcs.map(c => (
-                      <span key={c} style={{ fontSize:'0.68rem', padding:'2px 6px',
-                        borderRadius:20, background:`${ppbToColor(c)}22`, color: ppbToColor(c),
-                        border:`1px solid ${ppbToColor(c)}44` }}>
+                      <span key={c} style={{ fontSize: '0.68rem', padding: '2px 6px', borderRadius: 20,
+                        background: `${ppbToColor(c)}22`, color: ppbToColor(c), border: `1px solid ${ppbToColor(c)}44` }}>
                         {c} ppb
                       </span>
                     ))}
                   </div>
                 </div>
 
-                <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                  <div style={{ fontSize:'0.72rem', color:'#64748b' }}>
-                    Total: <b style={{color:'#c084fc'}}>{synthNPerConc * synthConcs.length}</b> synthetic samples
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                    Total: <b style={{ color: '#c084fc' }}>{synthNPerConc * synthConcs.length}</b> synthetic samples
                   </div>
-                  <button
-                    onClick={handleAddSynthAndRun}
-                    disabled={isComputing || synthConcs.length === 0}
-                    style={{
-                      display:'flex', alignItems:'center', gap:6,
-                      padding:'8px 16px', borderRadius:8,
-                      border:'1px solid rgba(168,85,247,0.4)',
+                  <button onClick={handleAddSynthAndRun} disabled={isComputing || synthConcs.length === 0 || synthSaving}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8,
+                      border: '1px solid rgba(168,85,247,0.4)',
                       background: isComputing ? 'rgba(168,85,247,0.05)' : 'rgba(168,85,247,0.15)',
                       cursor: (isComputing || !synthConcs.length) ? 'not-allowed' : 'pointer',
-                      color: '#c084fc', fontSize:'0.8rem', fontWeight:700,
-                      transition:'all 0.15s',
-                    }}
-                  >
-                    {isComputing
-                      ? <><Loader2 size={13} style={{animation:'spin 1s linear infinite'}}/> Generating…</>
-                      : <><Sparkles size={13}/> Generate & Run</>}
+                      color: '#c084fc', fontSize: '0.8rem', fontWeight: 700, transition: 'all 0.15s' }}>
+                    {isComputing || synthSaving
+                      ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> {synthSaving ? 'Saving…' : 'Generating…'}</>
+                      : <><Sparkles size={13} /> Generate & Run</>}
                   </button>
                 </div>
               </div>
@@ -864,251 +1162,280 @@ export default function TSNEPage({ workspaceFiles = [] }) {
         )}
       </AnimatePresence>
 
-      {/* ── Error Banner ─────────────────────────────────────────────────────────── */}
+      {/* ═══ Error ════════════════════════════════════════════════════════════ */}
       {errorMsg && (
-        <div style={{ margin:'12px 28px 0', padding:'10px 14px', background:'rgba(239,68,68,0.1)',
-          border:'1px solid rgba(239,68,68,0.3)', borderRadius:8,
-          display:'flex', gap:8, alignItems:'flex-start', fontSize:'0.8rem', color:'#fca5a5' }}>
-          <AlertTriangle size={14} style={{flexShrink:0,marginTop:1}}/>
+        <div style={{ margin: '12px 28px 0', padding: '10px 14px', background: 'rgba(239,68,68,0.1)',
+          border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, display: 'flex', gap: 8,
+          alignItems: 'flex-start', fontSize: '0.8rem', color: '#fca5a5' }}>
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>{errorMsg}</span>
-          <button onClick={() => setErrorMsg(null)} style={{ marginLeft:'auto', background:'transparent',
-            border:'none', cursor:'pointer', color:'#f87171', padding:0 }}><X size={13}/></button>
+          <button onClick={() => setErrorMsg(null)} style={{ marginLeft: 'auto', background: 'transparent',
+            border: 'none', cursor: 'pointer', color: '#f87171', padding: 0 }}><X size={13} /></button>
         </div>
       )}
 
-      {/* ── Loading Progress ─────────────────────────────────────────────────────── */}
+      {/* ═══ Loading Progress ═════════════════════════════════════════════════ */}
       <AnimatePresence>
         {stage === 'loading' && (
-          <motion.div
-            initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
-            style={{ padding:'10px 28px', display:'flex', alignItems:'center', gap:10,
-              fontSize:'0.78rem', color:'#94a3b8', borderBottom:'1px solid #334155',
-              background:'rgba(0,222,147,0.04)' }}
-          >
-            <Loader2 size={13} style={{animation:'spin 1s linear infinite', color:'#00DE93'}}/>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ padding: '10px 28px', display: 'flex', alignItems: 'center', gap: 10,
+              fontSize: '0.78rem', color: '#94a3b8', borderBottom: '1px solid #334155', background: 'rgba(0,222,147,0.04)' }}>
+            <Loader2 size={13} style={{ animation: 'spin 1s linear infinite', color: '#00DE93' }} />
             <span>Loading & extracting features…</span>
-            <div style={{ flex:1, height:3, borderRadius:3, background:'#1e293b', overflow:'hidden' }}>
-              <motion.div
-                style={{ height:'100%', background:'linear-gradient(90deg,#00DE93,#06b6d4)', borderRadius:3 }}
-                animate={{ width:`${Math.round(loadProg * 100)}%` }}
-                transition={{ duration:0.2 }}
-              />
+            <div style={{ flex: 1, height: 3, borderRadius: 3, background: '#1e293b', overflow: 'hidden' }}>
+              <motion.div style={{ height: '100%', background: 'linear-gradient(90deg,#00DE93,#06b6d4)', borderRadius: 3 }}
+                animate={{ width: `${Math.round(loadProg * 100)}%` }} transition={{ duration: 0.2 }} />
             </div>
-            <span style={{ color:'#00DE93', fontWeight:600 }}>{Math.round(loadProg*100)}%</span>
+            <span style={{ color: '#00DE93', fontWeight: 600 }}>{Math.round(loadProg * 100)}%</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── Tab bar ─────────────────────────────────────────────────────────────── */}
+      {/* ═══ Tab bar ══════════════════════════════════════════════════════════ */}
       {(stage === 'computing' || stage === 'done') && tabs.length > 0 && (
-        <div style={{ padding:'0 28px', borderBottom:'1px solid #334155',
-          display:'flex', gap:0, overflowX:'auto', background:'rgba(15,23,42,0.3)', flexShrink:0 }}>
+        <div style={{ padding: '0 28px', borderBottom: '1px solid #334155', display: 'flex', gap: 0,
+          overflowX: 'auto', background: 'rgba(15,23,42,0.3)', flexShrink: 0 }}>
           {tabs.map(tab => {
             const res = tsneResults[tab.key];
             const active = selectedTab === tab.key;
             const isRunning = res?.status === 'running';
             return (
               <button key={tab.key} onClick={() => setSelectedTab(tab.key)}
-                style={{
-                  padding:'10px 16px', border:'none', borderBottom: active ? '2px solid #00DE93' : '2px solid transparent',
-                  background:'transparent', cursor:'pointer',
+                style={{ padding: '10px 16px', border: 'none',
+                  borderBottom: active ? '2px solid #00DE93' : '2px solid transparent',
+                  background: 'transparent', cursor: 'pointer',
                   color: active ? '#00DE93' : '#64748b',
-                  fontSize:'0.78rem', fontWeight: active ? 700 : 500,
-                  display:'flex', alignItems:'center', gap:6,
-                  transition:'all 0.15s', whiteSpace:'nowrap',
-                }}
-              >
-                {isRunning && <Loader2 size={11} style={{animation:'spin 1s linear infinite'}}/>}
-                {res?.status === 'done' && <CheckCircle size={11} style={{color:'#00DE93'}}/>}
-                {res?.status === 'error' && <AlertTriangle size={11} style={{color:'#ef4444'}}/>}
-                {res?.status === 'skipped' && <Info size={11} style={{color:'#f59e0b'}}/>}
+                  fontSize: '0.78rem', fontWeight: active ? 700 : 500,
+                  display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
+                {isRunning && <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />}
+                {res?.status === 'done' && <CheckCircle size={11} style={{ color: '#00DE93' }} />}
+                {res?.status === 'error' && <AlertTriangle size={11} style={{ color: '#ef4444' }} />}
+                {res?.status === 'skipped' && <Info size={11} style={{ color: '#f59e0b' }} />}
                 {tab.label}
-                <span style={{ fontSize:'0.68rem', color: active ? '#00DE93' : '#475569',
+                <span style={{ fontSize: '0.68rem', color: active ? '#00DE93' : '#475569',
                   background: active ? 'rgba(0,222,147,0.1)' : 'rgba(51,65,85,0.5)',
-                  borderRadius:20, padding:'1px 6px', fontWeight:700 }}>
-                  {tab.count}
-                </span>
+                  borderRadius: 20, padding: '1px 6px', fontWeight: 700 }}>{tab.count}</span>
               </button>
             );
           })}
         </div>
       )}
 
-      {/* ── Main content area ────────────────────────────────────────────────────── */}
-      <div style={{ flex:1, overflow:'auto', padding:'20px 28px', display:'flex', gap:20, flexWrap:'wrap', minHeight:0 }}>
+      {/* ═══ Main content ═════════════════════════════════════════════════════ */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', gap: 20, flexWrap: 'wrap', minHeight: 0 }}>
 
-        {/* ── Idle / empty state ─────────────────────────────────────────────────── */}
+        {/* ── Idle states ────────────────────────────────────────────────────── */}
         {stage === 'idle' && eligibleFiles.length === 0 && (
-          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center',
-            flexDirection:'column', gap:16, padding:40, color:'#475569' }}>
-            <div style={{ width:56, height:56, borderRadius:16, border:'1px solid #334155',
-              display:'flex', alignItems:'center', justifyContent:'center',
-              background:'rgba(15,23,42,0.6)' }}>
-              <Atom size={26} color="#334155"/>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 16, padding: 40, color: '#475569' }}>
+            <div style={{ width: 56, height: 56, borderRadius: 16, border: '1px solid #334155',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)' }}>
+              <Atom size={26} color="#334155" />
             </div>
-            <div style={{ textAlign:'center' }}>
-              <div style={{ fontSize:'1rem', fontWeight:600, color:'#64748b', marginBottom:6 }}>
-                No PPB-labelled data
-              </div>
-              <div style={{ fontSize:'0.8rem', color:'#475569', maxWidth:340, lineHeight:1.6 }}>
-                Upload CSV files with <code style={{color:'#f59e0b'}}>Xppb</code> in the filename
-                (e.g. <code style={{color:'#94a3b8'}}>capture_10ppb_rep1.csv</code>), or use Synthetic
-                Data to generate example data.
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1rem', fontWeight: 600, color: '#64748b', marginBottom: 6 }}>No PPB-labelled data</div>
+              <div style={{ fontSize: '0.8rem', color: '#475569', maxWidth: 340, lineHeight: 1.6 }}>
+                Upload CSV files with <code style={{ color: '#f59e0b' }}>Xppb</code> in the filename,
+                or use Synthetic Data to generate example data.
               </div>
             </div>
             <button onClick={() => setSynthOpen(true)}
-              style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 16px',
-                borderRadius:8, border:'1px solid rgba(168,85,247,0.3)',
-                background:'rgba(168,85,247,0.08)', cursor:'pointer',
-                color:'#c084fc', fontSize:'0.8rem', fontWeight:600 }}>
-              <Sparkles size={13}/> Generate synthetic data to explore
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8,
+                border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.08)',
+                cursor: 'pointer', color: '#c084fc', fontSize: '0.8rem', fontWeight: 600 }}>
+              <Sparkles size={13} /> Generate synthetic data to explore
             </button>
           </div>
         )}
 
         {stage === 'idle' && eligibleFiles.length > 0 && (
-          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center',
-            flexDirection:'column', gap:12, color:'#475569', padding:40 }}>
-            <GitBranch size={32} color="#334155"/>
-            <div style={{ textAlign:'center' }}>
-              <div style={{ fontSize:'1rem', fontWeight:600, color:'#64748b', marginBottom:6 }}>
-                Ready to compute
-              </div>
-              <div style={{ fontSize:'0.8rem', color:'#475569', maxWidth:320, lineHeight:1.6 }}>
-                {eligibleFiles.length} file{eligibleFiles.length!==1?'s':''} available.
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 12, color: '#475569', padding: 40 }}>
+            <GitBranch size={32} color="#334155" />
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1rem', fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Ready to compute</div>
+              <div style={{ fontSize: '0.8rem', color: '#475569', maxWidth: 320, lineHeight: 1.6 }}>
+                {eligibleFiles.length} file{eligibleFiles.length !== 1 ? 's' : ''} available.
                 {eligibleFiles.length < WARN_REAL_SAMPLES
-                  ? ` Consider adding synthetic data (${WARN_REAL_SAMPLES}+ samples recommended for meaningful clusters).`
+                  ? ` Consider adding synthetic data (${WARN_REAL_SAMPLES}+ recommended).`
                   : ' Click Run t-SNE to start.'}
               </div>
             </div>
             {eligibleFiles.length < WARN_REAL_SAMPLES && (
               <button onClick={() => setSynthOpen(true)}
-                style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px',
-                  borderRadius:8, border:'1px solid rgba(168,85,247,0.3)',
-                  background:'rgba(168,85,247,0.08)', cursor:'pointer',
-                  color:'#c084fc', fontSize:'0.78rem', fontWeight:600 }}>
-                <Sparkles size={12}/> Add synthetic data
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8,
+                  border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.08)',
+                  cursor: 'pointer', color: '#c084fc', fontSize: '0.78rem', fontWeight: 600 }}>
+                <Sparkles size={12} /> Add synthetic data
               </button>
             )}
           </div>
         )}
 
-        {/* ── Computing — per-tab progress ─────────────────────────────────────── */}
+        {/* ── Computing progress ──────────────────────────────────────────── */}
         {stage === 'computing' && curResult?.status === 'running' && (
-          <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center',
-            flexDirection:'column', gap:16, padding:40 }}>
-            <div style={{ position:'relative', width:80, height:80 }}>
-              <svg width={80} height={80} style={{ position:'absolute', top:0, left:0 }}>
-                <circle cx={40} cy={40} r={34} fill="none" stroke="#1e293b" strokeWidth={5}/>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 16, padding: 40 }}>
+            <div style={{ position: 'relative', width: 80, height: 80 }}>
+              <svg width={80} height={80}>
+                <circle cx={40} cy={40} r={34} fill="none" stroke="#1e293b" strokeWidth={5} />
                 <circle cx={40} cy={40} r={34} fill="none" stroke="#00DE93" strokeWidth={5}
-                  strokeLinecap="round"
-                  strokeDasharray={`${2*Math.PI*34}`}
-                  strokeDashoffset={`${2*Math.PI*34*(1-curProg)}`}
-                  transform="rotate(-90 40 40)"
-                  style={{ transition:'stroke-dashoffset 0.3s ease' }}/>
+                  strokeLinecap="round" strokeDasharray={`${2 * Math.PI * 34}`}
+                  strokeDashoffset={`${2 * Math.PI * 34 * (1 - curProg)}`}
+                  transform="rotate(-90 40 40)" style={{ transition: 'stroke-dashoffset 0.3s ease' }} />
               </svg>
-              <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center',
-                justifyContent:'center', fontSize:'0.9rem', fontWeight:700, color:'#00DE93' }}>
-                {Math.round(curProg*100)}%
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', fontSize: '0.9rem', fontWeight: 700, color: '#00DE93' }}>
+                {Math.round(curProg * 100)}%
               </div>
             </div>
-            <div style={{ textAlign:'center' }}>
-              <div style={{ fontSize:'0.9rem', fontWeight:600, color:'#94a3b8', marginBottom:4 }}>
-                Computing t-SNE — {selectedTab === 'combined' ? 'All AUs' : shortAuLabel(selectedTab)}
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>
+                Computing {dim}D t-SNE — {selectedTab === 'combined' ? 'All AUs' : shortAuLabel(selectedTab)}
               </div>
-              <div style={{ fontSize:'0.78rem', color:'#475569' }}>
-                Iteration {Math.round(curProg * nIter)} / {nIter}
-              </div>
+              <div style={{ fontSize: '0.78rem', color: '#475569' }}>Iteration {Math.round(curProg * nIter)} / {nIter}</div>
             </div>
           </div>
         )}
 
-        {/* ── Done — scatter plot ────────────────────────────────────────────────── */}
+        {/* ── Done — plot ─────────────────────────────────────────────────── */}
         {(stage === 'done' || (stage === 'computing' && curResult?.status === 'done')) && curResult && (
-          <div style={{ flex:1, display:'flex', gap:20, flexWrap:'wrap', minWidth:0 }}>
-            {/* Plot area */}
-            <div style={{ flex:1, minWidth:320, minHeight:400 }}>
+          <div style={{ flex: 1, display: 'flex', gap: 20, flexWrap: 'wrap', minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 320, minHeight: 400 }}>
               {curResult.status === 'done' ? (
-                <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {/* Stats bar */}
-                  <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     {[
-                      { label:'Points', value: curResult.points.length },
-                      { label:'Real', value: curResult.points.filter(p=>!p.isSynthetic).length, color:'#00DE93' },
-                      { label:'Synthetic', value: curResult.points.filter(p=>p.isSynthetic).length, color:'#c084fc' },
-                      { label:'Concentrations', value: [...new Set(curResult.points.map(p=>p.ppb))].length, color:'#f59e0b' },
+                      { label: 'Points', value: curResult.points.length },
+                      { label: 'Real', value: curResult.points.filter(p => !p.isSynthetic).length, color: '#00DE93' },
+                      { label: 'Synthetic', value: curResult.points.filter(p => p.isSynthetic).length, color: '#c084fc' },
+                      { label: 'Concentrations', value: [...new Set(curResult.points.map(p => p.ppb))].length, color: '#f59e0b' },
+                      { label: 'Dimension', value: `${dim}D`, color: '#3b82f6' },
                     ].map(s => (
-                      <div key={s.label} style={{ padding:'5px 12px', borderRadius:8,
-                        background:'rgba(15,23,42,0.6)', border:'1px solid #334155',
-                        display:'flex', flexDirection:'column', alignItems:'center' }}>
-                        <span style={{ fontSize:'1rem', fontWeight:700, color: s.color || '#f8fafc' }}>{s.value}</span>
-                        <span style={{ fontSize:'0.68rem', color:'#64748b' }}>{s.label}</span>
+                      <div key={s.label} style={{ padding: '5px 12px', borderRadius: 8,
+                        background: 'rgba(15,23,42,0.6)', border: '1px solid #334155',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                        <span style={{ fontSize: '1rem', fontWeight: 700, color: s.color || '#f8fafc' }}>{s.value}</span>
+                        <span style={{ fontSize: '0.68rem', color: '#64748b' }}>{s.label}</span>
                       </div>
                     ))}
                   </div>
-                  <TSNEPlot
-                    points={curResult.points}
-                    width={Math.min(640, window.innerWidth - 380)}
-                    height={460}
-                    hiddenConcs={hiddenConcs}
-                    title={selectedTab === 'combined' ? 'All AUs Combined' : shortAuLabel(selectedTab)}
-                  />
-                  <div style={{ fontSize:'0.7rem', color:'#475569', display:'flex', gap:14, flexWrap:'wrap' }}>
-                    <span>⟡ Scroll to zoom · Drag to pan · Double-click to reset</span>
-                    <span>⟡ Dim points = synthetic data</span>
-                    <span>⟡ Perplexity {perplexity} · {nIter} iterations · ε={epsilon}</span>
+
+                  {dim === 2
+                    ? <TSNEPlot2D points={curResult.points}
+                        width={Math.min(640, window.innerWidth - 380)} height={460}
+                        hiddenConcs={hiddenConcs} />
+                    : <TSNEPlot3D points={curResult.points}
+                        width={Math.min(640, window.innerWidth - 380)} height={460}
+                        hiddenConcs={hiddenConcs} />}
+
+                  <div style={{ fontSize: '0.7rem', color: '#475569', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                    {dim === 2
+                      ? <span>Scroll to zoom · Drag to pan · Double-click to reset</span>
+                      : <span>Drag to rotate · Scroll to zoom · Auto-rotate toggleable</span>}
+                    <span>Dim points = synthetic</span>
+                    <span>Perp {perplexity} · {nIter} iter · ε={epsilon}</span>
                   </div>
                 </div>
               ) : curResult.status === 'skipped' ? (
-                <div style={{ padding:20, background:'rgba(245,158,11,0.06)', border:'1px solid rgba(245,158,11,0.2)',
-                  borderRadius:10, fontSize:'0.82rem', color:'#d97706', display:'flex', gap:8 }}>
-                  <AlertTriangle size={14} style={{marginTop:1, flexShrink:0}}/>
-                  <span>{curResult.reason} — need at least {MIN_TSNE_SAMPLES} samples for t-SNE.</span>
+                <div style={{ padding: 20, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)',
+                  borderRadius: 10, fontSize: '0.82rem', color: '#d97706', display: 'flex', gap: 8 }}>
+                  <AlertTriangle size={14} style={{ marginTop: 1, flexShrink: 0 }} />
+                  <span>{curResult.reason} — need {MIN_TSNE_SAMPLES}+ samples for t-SNE.</span>
                 </div>
               ) : curResult.status === 'error' ? (
-                <div style={{ padding:20, background:'rgba(239,68,68,0.06)', border:'1px solid rgba(239,68,68,0.2)',
-                  borderRadius:10, fontSize:'0.82rem', color:'#fca5a5', display:'flex', gap:8 }}>
-                  <AlertTriangle size={14} style={{marginTop:1, flexShrink:0}}/>
+                <div style={{ padding: 20, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+                  borderRadius: 10, fontSize: '0.82rem', color: '#fca5a5', display: 'flex', gap: 8 }}>
+                  <AlertTriangle size={14} style={{ marginTop: 1, flexShrink: 0 }} />
                   <span>Error: {curResult.error}</span>
                 </div>
               ) : (
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:300,
-                  color:'#475569', fontSize:'0.85rem', gap:8 }}>
-                  <Loader2 size={14} style={{animation:'spin 1s linear infinite'}}/> Computing…
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300,
+                  color: '#475569', fontSize: '0.85rem', gap: 8 }}>
+                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Computing…
                 </div>
               )}
             </div>
 
-            {/* Legend + all-tab overview panel */}
-            <div style={{ width:200, flexShrink:0, display:'flex', flexDirection:'column', gap:16 }}>
-              {/* Concentration filter legend */}
+            {/* ── Right panel: Legend, Progressive AU builder, Data info ─── */}
+            <div style={{ width: 210, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Concentration filter */}
               {allConcs.length > 0 && (
-                <div style={{ background:'rgba(15,23,42,0.6)', border:'1px solid #334155',
-                  borderRadius:10, padding:'12px 14px' }}>
-                  <ConcLegend concentrations={allConcs} hiddenConcs={hiddenConcs} onToggle={toggleConc}/>
+                <div style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid #334155', borderRadius: 10, padding: '12px 14px' }}>
+                  <ConcLegend concentrations={allConcs} hiddenConcs={hiddenConcs} onToggle={toggleConc} />
                 </div>
               )}
 
-              {/* Per-AU summary cards */}
-              {Object.keys(auGroups).length > 1 && (
-                <div style={{ background:'rgba(15,23,42,0.6)', border:'1px solid #334155',
-                  borderRadius:10, padding:'12px 14px' }}>
-                  <div style={{ fontSize:'0.72rem', color:'#64748b', fontWeight:600,
-                    letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:8 }}>AU Breakdown</div>
+              {/* Progressive AU builder */}
+              {allAUKeys.length > 1 && (
+                <div style={{ background: 'rgba(15,23,42,0.6)', border: progressiveMode ? '1px solid rgba(6,182,212,0.4)' : '1px solid #334155',
+                  borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                      Progressive Builder
+                    </div>
+                    <button onClick={() => setProgressiveMode(m => !m)}
+                      style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: 4, border: '1px solid #334155',
+                        background: progressiveMode ? 'rgba(6,182,212,0.15)' : 'transparent',
+                        color: progressiveMode ? '#22d3ee' : '#475569', cursor: 'pointer', fontWeight: 600 }}>
+                      {progressiveMode ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+                  {progressiveMode && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <div style={{ fontSize: '0.7rem', color: '#475569', marginBottom: 4, lineHeight: 1.5 }}>
+                        Toggle AUs to see how the combined embedding evolves.
+                      </div>
+                      {allAUKeys.map(auKey => {
+                        const isActive = selectedAUs.has(auKey);
+                        const auPts = (auGroups[auKey] || []).length;
+                        return (
+                          <button key={auKey} onClick={() => toggleProgressiveAU(auKey)}
+                            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6,
+                              padding: '5px 8px', borderRadius: 6, border: 'none',
+                              background: isActive ? 'rgba(0,222,147,0.1)' : 'transparent',
+                              cursor: 'pointer', color: isActive ? '#00DE93' : '#64748b',
+                              transition: 'all 0.15s', fontSize: '0.78rem' }}>
+                            {isActive ? <Minus size={11} /> : <Plus size={11} />}
+                            <span style={{ fontWeight: isActive ? 700 : 400 }}>{shortAuLabel(auKey)}</span>
+                            <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#475569' }}>{auPts}</span>
+                          </button>
+                        );
+                      })}
+                      {synthInMemoryCount > 0 && (
+                        <div style={{ fontSize: '0.68rem', color: '#a78bfa', marginTop: 4 }}>
+                          + {synthInMemoryCount} synthetic included in combined &amp; per-AU embeddings
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!progressiveMode && (
+                    <div style={{ fontSize: '0.7rem', color: '#475569', lineHeight: 1.5 }}>
+                      Enable to start from one AU, add others incrementally; combined + all tabs recompute in {dim}D.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AU overview (non-progressive) */}
+              {!progressiveMode && Object.keys(auGroups).length > 1 && (
+                <div style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid #334155', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em',
+                    textTransform: 'uppercase', marginBottom: 8 }}>AU Breakdown</div>
                   {Object.entries(auGroups).map(([did, pts]) => {
                     const res = tsneResults[did];
                     return (
                       <button key={did} onClick={() => setSelectedTab(did)}
-                        style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'space-between',
-                          padding:'5px 6px', borderRadius:6, border:'none', background:'transparent',
-                          cursor:'pointer', marginBottom:2,
-                          color: selectedTab===did ? '#00DE93' : '#94a3b8',
-                          transition:'all 0.15s', fontSize:'0.78rem' }}>
-                        <span style={{ fontWeight: selectedTab===did ? 700 : 400 }}>{shortAuLabel(did)}</span>
-                        <span style={{ display:'flex', alignItems:'center', gap:4 }}>
-                          <span style={{ fontSize:'0.68rem', color:'#475569' }}>{pts.length}</span>
-                          {res?.status === 'done' && <CheckCircle size={10} style={{color:'#00DE93'}}/>}
-                          {res?.status === 'skipped' && <AlertTriangle size={10} style={{color:'#f59e0b'}}/>}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '5px 6px', borderRadius: 6, border: 'none', background: 'transparent',
+                          cursor: 'pointer', marginBottom: 2, color: selectedTab === did ? '#00DE93' : '#94a3b8',
+                          transition: 'all 0.15s', fontSize: '0.78rem' }}>
+                        <span style={{ fontWeight: selectedTab === did ? 700 : 400 }}>{shortAuLabel(did)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: '0.68rem', color: '#475569' }}>{pts.length}</span>
+                          {res?.status === 'done' && <CheckCircle size={10} style={{ color: '#00DE93' }} />}
+                          {res?.status === 'skipped' && <AlertTriangle size={10} style={{ color: '#f59e0b' }} />}
                         </span>
                       </button>
                     );
@@ -1117,30 +1444,37 @@ export default function TSNEPage({ workspaceFiles = [] }) {
               )}
 
               {/* Data info card */}
-              <div style={{ background:'rgba(15,23,42,0.6)', border:'1px solid #334155',
-                borderRadius:10, padding:'12px 14px', fontSize:'0.75rem' }}>
-                <div style={{ color:'#64748b', fontWeight:600, letterSpacing:'0.06em',
-                  textTransform:'uppercase', marginBottom:8 }}>Dataset</div>
-                <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between' }}>
-                    <span style={{color:'#475569'}}>Real files</span>
-                    <span style={{color:'#f8fafc',fontWeight:600}}>{realCount}</span>
+              <div style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid #334155', borderRadius: 10, padding: '12px 14px', fontSize: '0.75rem' }}>
+                <div style={{ color: '#64748b', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>Dataset</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#475569' }}>Real files</span>
+                    <span style={{ color: '#f8fafc', fontWeight: 600 }}>{realCount}</span>
                   </div>
-                  <div style={{ display:'flex', justifyContent:'space-between' }}>
-                    <span style={{color:'#475569'}}>Synthetic</span>
-                    <span style={{color: synthAdded ? '#c084fc' : '#475569', fontWeight:600}}>
-                      {dataPoints.length - realCount}
-                    </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#475569' }}>Synthetic</span>
+                    <span style={{ color: synthInMemoryCount ? '#c084fc' : '#475569', fontWeight: 600 }}>{synthInMemoryCount}</span>
                   </div>
-                  <div style={{ display:'flex', justifyContent:'space-between' }}>
-                    <span style={{color:'#475569'}}>AU units</span>
-                    <span style={{color:'#f8fafc',fontWeight:600}}>{Object.keys(auGroups).length}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#475569' }}>AU units</span>
+                    <span style={{ color: '#f8fafc', fontWeight: 600 }}>{allAUKeys.length}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#475569' }}>Dimension</span>
+                    <span style={{ color: '#3b82f6', fontWeight: 600 }}>{dim}D</span>
                   </div>
                 </div>
-                {!synthAdded && realCount < WARN_REAL_SAMPLES && (
-                  <div style={{ marginTop:8, padding:'6px 8px',
-                    background:'rgba(168,85,247,0.08)', border:'1px solid rgba(168,85,247,0.2)',
-                    borderRadius:6, fontSize:'0.7rem', color:'#a78bfa', lineHeight:1.5 }}>
+                {(synthAdded || synthInMemoryCount > 0) && (
+                  <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(168,85,247,0.08)',
+                    border: '1px solid rgba(168,85,247,0.2)', borderRadius: 6, fontSize: '0.7rem', color: '#a78bfa', lineHeight: 1.5 }}>
+                    {synthAdded
+                      ? <>Synthetic rows saved under <code>FeNOse_synthetic/</code> (delete that folder anytime).</>
+                      : <>Synthetic points are in this session only — use Generate &amp; Run to save CSVs to the workspace.</>}
+                  </div>
+                )}
+                {synthInMemoryCount === 0 && realCount < WARN_REAL_SAMPLES && (
+                  <div style={{ marginTop: 8, padding: '6px 8px', background: 'rgba(168,85,247,0.08)',
+                    border: '1px solid rgba(168,85,247,0.2)', borderRadius: 6, fontSize: '0.7rem', color: '#a78bfa', lineHeight: 1.5 }}>
                     Tip: add synthetic data for richer clusters.
                   </div>
                 )}
@@ -1150,10 +1484,7 @@ export default function TSNEPage({ workspaceFiles = [] }) {
         )}
       </div>
 
-      {/* Spinner keyframes */}
-      <style>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </motion.div>
   );
 }

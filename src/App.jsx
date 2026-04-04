@@ -47,6 +47,7 @@ import {
   resolveSyntheticCalibration,
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
+  SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
 } from './utils/fenoseSyntheticDataset.js';
 
 const RESERVED_WORKSPACE_FOLDER_NAMES = new Set(
@@ -335,6 +336,88 @@ function App() {
   // Save arbitrary JSON payloads into a workspace folder (used by ML Studio model saving)
   /** FeNOse ML Studio: add synthetic curated-style CSV rows into workspace folder FeNOse_synthetic/ (not mixed with real data). */
   const handleAddSyntheticFenoseToWorkspace = useCallback(async (opts = {}) => {
+    /**
+     * t-SNE / callers: save exact pre-generated rows so workspace CSVs match embedding inputs
+     * (same seeds and row counts as generateSyntheticFenoseRows in the caller).
+     */
+    if (Array.isArray(opts.prebuiltRuns) && opts.prebuiltRuns.length > 0) {
+      const runs = opts.prebuiltRuns;
+      const existing = await fileManager.getAllFiles();
+      let folderId;
+      let syntheticFolderCreatedAt = null;
+      const folderMatch = existing.find(
+        (f) => f.isFolder && String(f.name).toLowerCase() === FENOSE_SYNTHETIC_FOLDER_NAME.toLowerCase()
+      );
+      if (folderMatch) {
+        folderId = folderMatch.id;
+      } else {
+        folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+        syntheticFolderCreatedAt = Date.now();
+        await fileManager.saveFile({
+          id: folderId,
+          name: FENOSE_SYNTHETIC_FOLDER_NAME,
+          isFolder: true,
+          createdAt: syntheticFolderCreatedAt,
+        });
+      }
+      const leanForState = [];
+      const YIELD_EVERY = 20;
+      let written = 0;
+      for (let i = 0; i < runs.length; i++) {
+        const run = runs[i];
+        const data = run?.data;
+        if (!Array.isArray(data) || data.length === 0) continue;
+        const ppb = Number(run.ppb);
+        const replicateIndex = Math.max(0, Math.floor(Number(run.replicateIndex) || 0));
+        const devSuf = String(run.deviceSuffix || SYNTHETIC_DEFAULT_DEVICE_SUFFIX).replace(
+          /[^\d\-a-z]/gi,
+          ''
+        );
+        const name = buildSyntheticFenoseFileName({ ppb, replicateIndex, deviceSuffix: devSuf });
+        const sampleN = Math.min(data.length, 32);
+        const approxSize = Math.max(
+          1024,
+          Math.round((JSON.stringify(data.slice(0, sampleN)).length / sampleN) * data.length)
+        );
+        const fileId = Math.random().toString(36).substr(2, 9);
+        const createdAt = Date.now();
+        await fileManager.saveFile({
+          id: fileId,
+          name,
+          folderId: String(folderId),
+          data,
+          size: approxSize,
+          createdAt,
+        });
+        leanForState.push({ id: fileId, name, folderId: String(folderId), size: approxSize, createdAt });
+        written++;
+        if (written % YIELD_EVERY === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+      setFiles((prev) => {
+        const ids = new Set(prev.map((f) => f.id));
+        const out = [...prev];
+        if (syntheticFolderCreatedAt != null && !ids.has(folderId)) {
+          out.push({
+            id: folderId,
+            name: FENOSE_SYNTHETIC_FOLDER_NAME,
+            isFolder: true,
+            createdAt: syntheticFolderCreatedAt,
+          });
+          ids.add(folderId);
+        }
+        for (const row of leanForState) {
+          if (!ids.has(row.id)) {
+            out.push(row);
+            ids.add(row.id);
+          }
+        }
+        return out;
+      });
+      return { count: written, folderName: FENOSE_SYNTHETIC_FOLDER_NAME };
+    }
+
     const conc =
       opts.concentrationsText != null
         ? parseConcentrationsList(opts.concentrationsText)
@@ -1161,6 +1244,7 @@ function App() {
                   <TSNEPage
                     key="tsnePage"
                     workspaceFiles={files}
+                    onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
                   />
                 ) : !selectedFileId ? (
                   <EmptyState
