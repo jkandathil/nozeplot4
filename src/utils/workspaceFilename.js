@@ -41,7 +41,8 @@ export function looksLikeSiacCaptureData(data) {
     const hasChr = keys.some((k) => /^chr\d+$/i.test(k));
     const hasRrf = keys.some((k) => /^rrf\d+$/i.test(k));
     const hasMuxGrid = keys.some((k) => /^[A-H][1-8]$/i.test(k));
-    return hasChr || hasRrf || hasMuxGrid;
+    const hasAsuChrGrid = keys.some((k) => /^chr[a-h][1-8]$/i.test(String(k).replace(/\s/g, '')));
+    return hasChr || hasRrf || hasMuxGrid || hasAsuChrGrid;
 }
 
 /**

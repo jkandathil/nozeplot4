@@ -2,11 +2,12 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion'; // eslint-disable-line no-unused-vars
 import { LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, CartesianGrid, Scatter, ScatterChart, ZAxis, Brush } from 'recharts';
-import { Activity, Settings, Maximize2, X, Download, LineChart as LineChartIcon } from 'lucide-react';
+import { Activity, Settings, Maximize2, X, Download, LineChart as LineChartIcon, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { isKnownPlotFile, looksLikeSiacCaptureData, parseConcentrationMetaFromFile } from '../utils/workspaceFilename.js';
 import { parseFile } from '../utils/fileParser';
 import { extractChronoSortKey } from '../utils/recoveryChronoSort.js';
+import { findPlotEventColumn } from '../utils/normalizePlotRowFilter.js';
 import './AromaAnalysisPage.css'; // Reuse styles
 
 const SATURATION_VAPOR_PRESSURE_0C = 6.112;
@@ -18,15 +19,18 @@ const KELVIN_OFFSET = 273.15;
 /** SiAC32-V2 flattened JSON rows use CHR0…CHR31 (device `t` map); RH/T key names vary by firmware — include common substrings. */
 const SIAC32_V2_CHR_SENSORS = Array.from({ length: 32 }, (_, i) => `CHR${i}`).join(', ');
 const SIAC32_V2_HUM_COL_HINTS = 'AQH0, TRHH0, rh, hmd, humidity';
-const SIAC32_V2_TEMP_COL_HINTS = 'AQT0, TRHT0, temp, t';
+/** Avoid single-letter hints (e.g. "t") — they match unrelated columns like T0_452225 before AQT0. */
+const SIAC32_V2_TEMP_COL_HINTS = 'AQT0, TRHT0, TRHT, temp';
 
 /**
  * True if this event block should **start** a drift trial as the gas / challenge phase.
  * FeNOse curated data: `FeNOWindow` is post-breath idle — not a separate exposure (Help: measurement vs window).
  * Short keywords like `feno` match both measurement and window; window is excluded unless keyword contains `window`.
  */
-function isExposureBlockEvent(blockEventLower, exposureKeywordRaw, recoveryKeywordRaw) {
-    const e = String(blockEventLower || '').trim();
+function isExposureBlockEvent(blockEventNorm, exposureKeywordRaw, recoveryKeywordRaw) {
+    const e = String(blockEventNorm || '')
+        .toLowerCase()
+        .replace(/\s+/g, '');
     const expKey = String(exposureKeywordRaw || '')
         .trim()
         .toLowerCase()
@@ -46,8 +50,148 @@ function isExposureBlockEvent(blockEventLower, exposureKeywordRaw, recoveryKeywo
 
     if (e.includes('ambient') || e.includes('baseline') || e.includes('reference') || e.includes('flush')) return false;
     if (e.includes('fenowindow')) return false;
+    if (
+        e.includes('cleaning') ||
+        e.includes('systemclean') ||
+        e.includes('purge') ||
+        e.includes('purging') ||
+        e.includes('unknown')
+    ) {
+        return false;
+    }
     return true;
 }
+
+/** ASU RawData: columns CHRA1…CHRH8. SiAC32 uses CHR0…CHR31 linear indices. */
+function chrLinearIndexToAsuGridName(index) {
+    if (index < 0 || index > 63) return null;
+    const row = Math.floor(index / 8);
+    const col = (index % 8) + 1;
+    return `CHR${String.fromCharCode(65 + row)}${col}`;
+}
+
+function sampleKeysLookLikeAsuChrGrid(sampleKeys) {
+    return sampleKeys.some((k) => /^chr[a-h][1-8]$/i.test(String(k).replace(/\s/g, '')));
+}
+
+function sampleKeysHaveLinearChrNames(sampleKeys) {
+    return sampleKeys.some((k) => /^chr\d+$/i.test(String(k).replace(/\s/g, '')));
+}
+
+function stripBom(s) {
+    return String(s ?? '').replace(/^\ufeff/, '');
+}
+
+function headerNormKey(k) {
+    return stripBom(k).replace(/\s+/g, '').toLowerCase();
+}
+
+/**
+ * Map Target Sensors tokens to CSV columns (legacy Drift Map behavior + generalizations).
+ * Supports: exact names; A1–H8 → CHRA1–CHRH8; CHR0–CHR63 → ASU grid on CHRA-style files; CHRn → RRFn when present.
+ */
+function resolveDriftMapSensorColumn(prefixRaw, sampleKeys) {
+    const prefix = stripBom(String(prefixRaw ?? '').trim());
+    if (!prefix || !Array.isArray(sampleKeys) || sampleKeys.length === 0) return null;
+
+    const keys = sampleKeys;
+    const pNorm = headerNormKey(prefix);
+
+    for (const k of keys) {
+        if (headerNormKey(k) === pNorm) return k;
+    }
+
+    const pLow = prefix.toLowerCase();
+
+    let match = keys.find((k) => {
+        const kLow = stripBom(k).toLowerCase().replace(/\s+/g, '');
+        const p = pLow.replace(/\s+/g, '');
+        if (kLow === p) return true;
+        let idx = kLow.indexOf(p);
+        while (idx !== -1) {
+            const prev = idx > 0 ? kLow[idx - 1] : null;
+            const next = idx + p.length < kLow.length ? kLow[idx + p.length] : null;
+            const isPrevValid = prev === null || !/[a-z0-9]/.test(prev);
+            const isNextValid = next === null || !/[a-z0-9]/.test(next);
+            if (isPrevValid && isNextValid) return true;
+            idx = kLow.indexOf(p, idx + 1);
+        }
+        return false;
+    });
+
+    if (!match) {
+        match = keys.find((k) => stripBom(k).toLowerCase().includes(pLow));
+    }
+
+    const muxM = prefix.match(/^([A-H])\s*([1-8])$/i);
+    if (!match && muxM) {
+        const want = headerNormKey(`CHR${muxM[1].toUpperCase()}${muxM[2]}`);
+        for (const k of keys) {
+            if (headerNormKey(k) === want) {
+                match = k;
+                break;
+            }
+        }
+    }
+
+    if (!match && sampleKeysLookLikeAsuChrGrid(keys)) {
+        const idxMatch = prefix.match(/^chr(\d+)$/i);
+        if (idxMatch) {
+            const idx = parseInt(idxMatch[1], 10);
+            const asuName = chrLinearIndexToAsuGridName(idx);
+            if (asuName) {
+                const want = headerNormKey(asuName);
+                for (const k of keys) {
+                    if (headerNormKey(k) === want) {
+                        match = k;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!match) {
+        const mChr = prefix.match(/^chr(\d+)$/i);
+        if (mChr) {
+            const want = `rrf${mChr[1]}`;
+            for (const k of keys) {
+                if (headerNormKey(k) === want) {
+                    match = k;
+                    break;
+                }
+            }
+        }
+    }
+
+    return match || null;
+}
+
+function resolveDriftMapEventColumn(fileData) {
+    if (!fileData?.length) return null;
+    const sampleKeys = Object.keys(fileData[0]);
+    const lc = (c) => stripBom(String(c)).toLowerCase().trim();
+    const byName = (name) => sampleKeys.find((c) => lc(c) === name);
+    return (
+        byName('event_name') ||
+        byName('phase') ||
+        byName('stage') ||
+        findPlotEventColumn(fileData[0]) ||
+        sampleKeys.find((col) => {
+            const l = lc(col);
+            return (
+                l === 'mode' ||
+                l === 'state' ||
+                (l.includes('event') && !l.includes('reference'))
+            );
+        }) ||
+        null
+    );
+}
+
+/** Default AU mux targets when CSV uses CHRA1-style columns (not CHR0 linear). */
+const DEFAULT_ASU_MUX_SENSORS =
+    'A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8';
 
 const RecoveryAnalysisPage = ({
     data,
@@ -65,7 +209,7 @@ const RecoveryAnalysisPage = ({
     }, []);
 
     // Pipeline Config State
-    const [sensingElements, setSensingElements] = useState('A1, A2, A3, A4, A5, A6, A7, A8, B1, B2, B3, B4, B5, B6, B7, B8, C1, C2, C3, C4, C5, C6, C7, C8, D1, D2, D3, D4, D5, D6, D7, D8, E1, E2, E3, E4, E5, E6, E7, E8, F1, F2, F3, F4, F5, F6, F7, F8, G1, G2, G3, G4, G5, G6, G7, G8, H1, H2, H3, H4, H5, H6, H7, H8');
+    const [sensingElements, setSensingElements] = useState(DEFAULT_ASU_MUX_SENSORS);
     const [isProcessing, setIsProcessing] = useState(false);
     const [exposureKeyword, setExposureKeyword] = useState('');
     const [recoveryKeyword, setRecoveryKeyword] = useState('recovery');
@@ -90,7 +234,14 @@ const RecoveryAnalysisPage = ({
         }
         if (siacAutoAppliedForFileRef.current === fileName) return;
         siacAutoAppliedForFileRef.current = fileName;
-        setSensingElements(SIAC32_V2_CHR_SENSORS);
+        const keys = Object.keys(data[0] || {});
+        const asuGrid = sampleKeysLookLikeAsuChrGrid(keys);
+        const linearChr = sampleKeysHaveLinearChrNames(keys);
+        if (asuGrid && !linearChr) {
+            setSensingElements(DEFAULT_ASU_MUX_SENSORS);
+        } else {
+            setSensingElements(SIAC32_V2_CHR_SENSORS);
+        }
         setHumCols(SIAC32_V2_HUM_COL_HINTS);
         setTempCols(SIAC32_V2_TEMP_COL_HINTS);
     }, [fileName, data]);
@@ -110,6 +261,14 @@ const RecoveryAnalysisPage = ({
     const [chronoBrushStartIdx, setChronoBrushStartIdx] = useState(0);
     const [chronoBrushEndIdx, setChronoBrushEndIdx] = useState(null);
     const chronoChartWrapperRef = React.useRef(null);
+
+    useEffect(() => {
+        if (!recoveryResults?.length) return;
+        const plots = recoveryResults[0]?.sensorPlots || {};
+        const keysWithData = Object.keys(plots).filter((k) => plots[k]?.data?.length > 0);
+        if (!keysWithData.length) return;
+        setChronoSensor((prev) => (prev && plots[prev]?.data?.length ? prev : keysWithData[0]));
+    }, [recoveryResults]);
 
     const handleProcessRecovery = () => {
         setIsProcessing(true);
@@ -215,57 +374,36 @@ const RecoveryAnalysisPage = ({
                         if (!fileData || fileData.length === 0) return;
 
                         const sampleKeys = Object.keys(fileData[0]);
-                        const eventCol = sampleKeys.find(col => {
-                            const l = col.toLowerCase();
-                            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-                        });
+                        const eventCol = resolveDriftMapEventColumn(fileData);
 
                         if (!eventCol) return; // Need an event column to parse trials
 
-                        const humColMatch = sampleKeys.find(col => humKeysArr.some(h => col.toLowerCase().includes(h)));
-                        const tempColMatch = sampleKeys.find(col => tempKeysArr.some(t => col.toLowerCase().includes(t)));
+                        const humColMatch = sampleKeys.find((col) => {
+                            const cl = stripBom(col).toLowerCase();
+                            return humKeysArr.some((h) => h.length >= 2 && cl.includes(h));
+                        });
+                        const tempColMatch = sampleKeys.find((col) => {
+                            const cl = stripBom(col).toLowerCase();
+                            return tempKeysArr.some((t) => t.length >= 2 && cl.includes(t));
+                        });
 
                         const fileSensingKeysMap = {};
                         lastFileSensingKeysMap = fileSensingKeysMap;
-                        sElementsArr.forEach(prefix => {
-                            const pLow = prefix.toLowerCase();
-
-                            // Strict boundary match approach to prevent A1 from matching A10 or mA1 but guaranteeing it matches normalized_A1
-                            let match = sampleKeys.find(k => {
-                                const kLow = k.toLowerCase().trim();
-                                if (kLow === pLow) return true;
-
-                                let idx = kLow.indexOf(pLow);
-                                while (idx !== -1) {
-                                    const prev = idx > 0 ? kLow[idx - 1] : null;
-                                    const next = (idx + pLow.length) < kLow.length ? kLow[idx + pLow.length] : null;
-                                    const isPrevValid = prev === null || !(/[a-z0-9]/.test(prev));
-                                    const isNextValid = next === null || !(/[a-z0-9]/.test(next));
-
-                                    if (isPrevValid && isNextValid) return true;
-                                    idx = kLow.indexOf(pLow, idx + 1);
-                                }
-                                return false;
-                            });
-
-                            // Fallback attempt: if strictly not found, try a simple include as a last resort
-                            if (!match) {
-                                match = sampleKeys.find(k => k.toLowerCase().includes(pLow));
-                            }
-
+                        sElementsArr.forEach((prefix) => {
+                            const match = resolveDriftMapSensorColumn(prefix, sampleKeys);
                             if (match) {
                                 fileSensingKeysMap[prefix] = match;
                             }
                         });
-
-                        console.log("Mapped Sensing Keys:", fileSensingKeysMap);
 
                         // Map continuous events into a chronological block list
                         const blocks = [];
                         let currentBlock = null;
 
                         fileData.forEach((row, idx) => {
-                            const ev = String(row[eventCol] || '').toLowerCase().trim();
+                            const ev = String(row[eventCol] || '')
+                                .toLowerCase()
+                                .replace(/\s+/g, '');
                             if (currentBlock && currentBlock.event === ev) {
                                 currentBlock.endIdx = idx;
                                 currentBlock.endRow = row;
@@ -282,7 +420,7 @@ const RecoveryAnalysisPage = ({
 
                         for (let i = 0; i < blocks.length; i++) {
                             const b = blocks[i];
-                            const recKey = recoveryKeyword.trim().toLowerCase();
+                            const recKey = recoveryKeyword.trim().toLowerCase().replace(/\s+/g, '');
 
                             const isExposure = isExposureBlockEvent(b.event, exposureKeyword, recoveryKeyword);
 
@@ -349,10 +487,13 @@ const RecoveryAnalysisPage = ({
                                 finalSequenceEndIdx = Math.max(finalSequenceEndIdx, b.endIdx);
                                 const rawSequence = fileData.slice(sequenceStartIdx, finalSequenceEndIdx + 1);
 
+                                const exposureLabel =
+                                    String(b.startRow[eventCol] ?? b.event ?? '').trim() || b.event;
+
                                 if (ignoreHardwareRecovery) {
                                     if (prevBlock) {
                                         trials.push({
-                                            targetConcentration: b.event,
+                                            targetConcentration: exposureLabel,
                                             baseline: prevBlock,
                                             exposure: b,
                                             nextBaseline: nextBaseBlock,
@@ -362,7 +503,7 @@ const RecoveryAnalysisPage = ({
                                 } else {
                                     if (prevBlock && recoveryBlock) {
                                         trials.push({
-                                            targetConcentration: b.event,
+                                            targetConcentration: exposureLabel,
                                             baseline: prevBlock,
                                             exposure: b,
                                             recovery: recoveryBlock,
@@ -436,7 +577,6 @@ const RecoveryAnalysisPage = ({
                                     eventCol: eventCol,
                                     humCol: humColMatch,
                                     tempCol: tempColMatch,
-                                    recoveryValue: getColAvg(ignoreHardwareRecovery ? (t.nextBaseline ? t.nextBaseline.rows : null) : (t.recovery ? t.recovery.rows : null), exactCol)
                                 });
                             });
                         }); // End of trials.forEach
@@ -471,6 +611,15 @@ const RecoveryAnalysisPage = ({
 
                 setRecoveryResults(newRecoveryResults);
                 setDriftInputError(null);
+
+                const hasAnyPlotData = newRecoveryResults.some((b) =>
+                    Object.values(b.sensorPlots || {}).some(
+                        (sp) => Array.isArray(sp?.data) && sp.data.length > 0
+                    )
+                );
+                if (hasAnyPlotData) {
+                    setIsSidebarVisible(false);
+                }
 
             } catch (err) {
                 console.error("Error analyzing recovery:", err);
@@ -627,7 +776,7 @@ const RecoveryAnalysisPage = ({
 
         // Return the final data for plotting, the line keys, and the COMPLETE un-downsampled dataset for the CSV export.
         return [finalData, Array.from(lineKeys), stitched];
-    }, [recoveryResults, chronoSensor, includeRecoveryPlot]);
+    }, [recoveryResults, chronoSensor, includeRecoveryPlot, ignoreHardwareRecovery]);
 
     const chronoBrushRef = React.useRef({ start: 0, end: null });
 
@@ -640,9 +789,11 @@ const RecoveryAnalysisPage = ({
 
     const activeChronoData = React.useMemo(() => {
         if (!chronoData || chronoData.length === 0) return [];
-        const end = chronoBrushEndIdx !== null ? chronoBrushEndIdx : chronoData.length - 1;
-        // Native slicing removes the burden of tracking invisible nodes from the DOM heavily
-        let sliced = chronoData.slice(chronoBrushStartIdx, end + 1);
+        const maxIdx = chronoData.length - 1;
+        const start = Math.max(0, Math.min(chronoBrushStartIdx, maxIdx));
+        const endRaw = chronoBrushEndIdx !== null ? chronoBrushEndIdx : maxIdx;
+        const end = Math.max(start, Math.min(endRaw, maxIdx));
+        let sliced = chronoData.slice(start, end + 1);
 
         // Guarantee flawless 60fps interaction on standard screens
         const MAX_ACTIVE_NODES = 400;
@@ -761,6 +912,16 @@ const RecoveryAnalysisPage = ({
     };
 
     if (showChrono) {
+        const chronoLen = chronoData.length;
+        const chronoMaxIdx = chronoLen > 0 ? chronoLen - 1 : 0;
+        const brushStartIdxSafe = chronoLen ? Math.max(0, Math.min(chronoBrushStartIdx, chronoMaxIdx)) : 0;
+        const brushEndIdxSafe = chronoLen
+            ? Math.max(
+                  brushStartIdxSafe,
+                  Math.min(chronoBrushEndIdx !== null ? chronoBrushEndIdx : chronoMaxIdx, chronoMaxIdx)
+              )
+            : 0;
+
         let chronoDeltaR = 0;
         let chronoPctDrift = 0;
         let chronoDeltaRh = 0;
@@ -954,7 +1115,17 @@ const RecoveryAnalysisPage = ({
                             <ResponsiveContainer width="100%" height="15%">
                                 <LineChart data={chronoData}>
                                     <Line type="linear" dataKey="all" stroke="#ffffff" strokeWidth={1} strokeDasharray="3 3" opacity={0.4} dot={false} isAnimationActive={false} activeDot={false} connectNulls={true} />
-                                    <Brush dataKey="time" startIndex={chronoBrushStartIdx} endIndex={chronoBrushEndIdx} onChange={handleBrushChange} height={30} stroke="#38bdf8" fill="rgba(15, 23, 42, 0.8)" tickFormatter={() => ''} travellerWidth={10} />
+                                    <Brush
+                                        dataKey="time"
+                                        startIndex={brushStartIdxSafe}
+                                        endIndex={brushEndIdxSafe}
+                                        onChange={handleBrushChange}
+                                        height={30}
+                                        stroke="#38bdf8"
+                                        fill="rgba(15, 23, 42, 0.8)"
+                                        tickFormatter={() => ''}
+                                        travellerWidth={10}
+                                    />
                                 </LineChart>
                             </ResponsiveContainer>
                         </>
@@ -974,6 +1145,31 @@ const RecoveryAnalysisPage = ({
         <motion.div className="aroma-analysis-container" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
             <div className="aroma-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {recoveryResults !== null && (
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => setIsSidebarVisible((v) => !v)}
+                            title={
+                                isSidebarVisible
+                                    ? 'Hide analysis config for wider plots'
+                                    : 'Show analysis config'
+                            }
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                background: 'rgba(245, 158, 11, 0.08)',
+                                color: '#fbbf24',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            {isSidebarVisible ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
+                        </button>
+                    )}
                     <div className="icon-wrapper">
                         <Activity size={18} color="#f59e0b" />
                     </div>
@@ -1115,11 +1311,41 @@ const RecoveryAnalysisPage = ({
                         </div>
                     ) : (
                         <div className="results-wrapper" style={{ overflowY: 'auto', paddingRight: 10 }}>
-                            {recoveryResults.map((resultBatch, bIdx) => (
+                            {recoveryResults.map((resultBatch, bIdx) => {
+                                const plotEntries = Object.entries(resultBatch.sensorPlots || {}).filter(
+                                    ([, sp]) => sp?.data?.length > 0
+                                );
+                                const noPlotData =
+                                    plotEntries.length === 0 &&
+                                    (resultBatch.trialsCount ?? 0) > 0;
+
+                                return (
                                 <div key={bIdx} style={{ marginBottom: 40 }}>
                                     <h2 style={{ fontSize: '1rem', color: '#f8fafc', marginBottom: '16px', paddingBottom: '8px', borderBottom: '1px solid #334155' }}>
                                         File: <span style={{ color: '#38bdf8' }}>{resultBatch.fileName}</span> ({resultBatch.trialsCount} Trails found)
                                     </h2>
+
+                                    {noPlotData && (
+                                        <div
+                                            style={{
+                                                marginBottom: 16,
+                                                padding: 14,
+                                                borderRadius: 8,
+                                                background: 'rgba(245, 158, 11, 0.12)',
+                                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                                color: '#fde68a',
+                                                fontSize: '0.85rem',
+                                                lineHeight: 1.5,
+                                                maxWidth: 720,
+                                            }}
+                                        >
+                                            <strong style={{ color: '#fbbf24' }}>Trials were detected but no Target Sensor token matched a column in these files.</strong>{' '}
+                                            Supported tokens include <strong>A1–H8</strong> (maps to <code style={{ color: '#e2e8f0' }}>CHRA1</code>–<code style={{ color: '#e2e8f0' }}>CHRH8</code>),{' '}
+                                            <code style={{ color: '#e2e8f0' }}>CHRA1</code>-style names, <code style={{ color: '#e2e8f0' }}>CHR0</code>–<code style={{ color: '#e2e8f0' }}>CHR63</code> (linear index on ASU grids),{' '}
+                                            <code style={{ color: '#e2e8f0' }}>RRF0</code>+ when only RRF columns exist, and exact header matches (BOM / spacing ignored). Update Target Sensors and run{' '}
+                                            <strong>Analyze baseline drift</strong> again.
+                                        </div>
+                                    )}
 
                                     <div className="grid-plot-container">
                                         {Object.keys(resultBatch.sensorPlots).map((sensorName, sIdx) => {
@@ -1127,16 +1353,10 @@ const RecoveryAnalysisPage = ({
                                             if (sensorObj.data.length === 0) return null;
 
                                             const dataVals = sensorObj.data.map(d => d.baselineValue);
-                                            const recVals = sensorObj.data.map(d => d.recoveryValue).filter(v => v > 0);
                                             const minR = Math.min(...dataVals);
                                             const maxR = Math.max(...dataVals);
                                             const deltaR = maxR - minR;
                                             const pctDrift = Math.abs(minR) > 0 ? ((deltaR / Math.abs(minR)) * 100).toFixed(1) : 0;
-
-                                            const minRec = recVals.length > 0 ? Math.min(...recVals) : 0;
-                                            const maxRec = recVals.length > 0 ? Math.max(...recVals) : 0;
-                                            const deltaRec = maxRec - minRec;
-                                            const pctRecDrift = Math.abs(minRec) > 0 ? ((deltaRec / Math.abs(minRec)) * 100).toFixed(1) : 0;
 
                                             const maxRh = Math.max(...sensorObj.data.map(d => d.relHumidity));
                                             const minRh = Math.min(...sensorObj.data.map(d => d.relHumidity));
@@ -1153,10 +1373,10 @@ const RecoveryAnalysisPage = ({
                                                     <div className="grid-plot-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                                             <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                                {sensorName} <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>Drift & Recovery Map</span>
+                                                                {sensorName} <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>Baseline drift map</span>
                                                             </h4>
                                                             <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>
-                                                                ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}%) {deltaRec > 0 ? `| ΔR Rec: ${deltaRec.toFixed(3)} Ω (${pctRecDrift}%)` : ''} | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
+                                                                ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}%) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                                             </span>
                                                         </div>
                                                         <div style={{ display: 'flex', gap: 4 }}>
@@ -1210,7 +1430,6 @@ const RecoveryAnalysisPage = ({
 
                                                                 {/* Lines */}
                                                                 <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
-                                                                <Line yAxisId="left" type="monotone" dataKey="recoveryValue" name="Recovery Avg (Ohms)" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} isAnimationActive={true} />
                                                                 <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1} dot={{ r: 2 }} opacity={0.5} isAnimationActive={true} />
                                                             </LineChart>
                                                         </ResponsiveContainer>
@@ -1220,7 +1439,8 @@ const RecoveryAnalysisPage = ({
                                         })}
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>
@@ -1242,12 +1462,6 @@ const RecoveryAnalysisPage = ({
                 const minTc = Math.min(...selectedPlot.data.map(d => d.temperature));
                 const deltaTc = maxTc - minTc;
 
-                const recVals = selectedPlot.data.map(d => d.recoveryValue).filter(v => v > 0);
-                const minRec = recVals.length > 0 ? Math.min(...recVals) : 0;
-                const maxRec = recVals.length > 0 ? Math.max(...recVals) : 0;
-                const deltaRec = maxRec - minRec;
-                const pctRecDrift = Math.abs(minRec) > 0 ? ((deltaRec / Math.abs(minRec)) * 100).toFixed(1) : 0;
-
                 return (
                     <div className="modal-overlay" onClick={() => setSelectedPlot(null)} style={{ zIndex: 9999 }}>
                         <div
@@ -1266,7 +1480,7 @@ const RecoveryAnalysisPage = ({
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <h3 style={{ margin: 0 }}>{selectedPlot.title}</h3>
                                     <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: 600 }}>
-                                        ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}% Drift) {deltaRec > 0 ? `| ΔR Rec: ${deltaRec.toFixed(3)} Ω (${pctRecDrift}%)` : ''} | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
+                                        ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}% Drift) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                     </span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.2)', padding: '4px 10px', borderRadius: 6, marginRight: 20 }}>
@@ -1323,7 +1537,6 @@ const RecoveryAnalysisPage = ({
                                         <Line type="monotone" dataKey="concentration" name="concentration" stroke="none" activeDot={false} dot={false} isAnimationActive={false} />
 
                                         <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
-                                        <Line yAxisId="left" type="monotone" dataKey="recoveryValue" name="Recovery Avg (Ohms)" stroke="#10b981" strokeWidth={3} strokeDasharray="8 8" dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
                                         {maxPlotEnvMetric === 'absHumidity' && (
                                             <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1.5} dot={{ r: 3 }} activeDot={{ r: 6 }} opacity={0.6} isAnimationActive={false} />
                                         )}
