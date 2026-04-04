@@ -13,9 +13,13 @@ import {
     Brush
 } from 'recharts';
 import { AlertCircle, Activity, RotateCcw, Target, Layers, Copy, Image as ImageIcon, Droplets } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion } from 'framer-motion'; // eslint-disable-line no-unused-vars
 import { toPng } from 'html-to-image';
 import { isKnownPlotFile, parseConcentrationMetaFromFile } from '../utils/workspaceFilename';
+import {
+    filterRowsForNormalizeChart,
+    isCleaningOnlyOrUnknownPhaseFile,
+} from '../utils/normalizePlotRowFilter';
 import './NormalizePage.css';
 
 /* Extended Palette for multi-file comparison */
@@ -47,25 +51,6 @@ function detectXKey(row) {
 
 function shortName(fileName = '') {
     return fileName.replace(/\.[^/.]+$/, '').slice(0, 12);
-}
-
-/** Same ranking as Dashboard ChartArea — finds event/phase column for recovery filtering */
-function findEventColumn(sampleRow) {
-    if (!sampleRow || typeof sampleRow !== 'object') return null;
-    const keys = Object.keys(sampleRow);
-    const ranked = keys
-        .map((col) => {
-            const l = col.toLowerCase();
-            let score = 0;
-            if (l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state') score = 100;
-            else if (l === 'event' || l === 'events' || l.endsWith('_phase') || l.endsWith('_event')) score = 85;
-            else if (l.includes('event') && !l.includes('reference')) score = 70;
-            else if (l.includes('phase') && !l.includes('reference')) score = 55;
-            return { col, score };
-        })
-        .filter((x) => x.score > 0)
-        .sort((a, b) => b.score - a.score);
-    return ranked[0]?.col ?? null;
 }
 
 function parseConcentrationMeta(fileName, data = null) {
@@ -110,7 +95,14 @@ const NormalizeTooltip = ({ active, payload, label, isNormalized }) => {
         // Search columns commonly used for event labels
         const eventKey = Object.keys(row).find(k => {
             const str = k.toLowerCase();
-            return str === 'event' || str.includes('event_name') || str.includes('phase') || str.includes('mode') || str.includes('annotation');
+            return (
+                str === 'event' ||
+                str.includes('event_name') ||
+                str.includes('phase') ||
+                str.includes('stage') ||
+                str.includes('mode') ||
+                str.includes('annotation')
+            );
         });
 
         if (eventKey && row[eventKey] !== undefined && row[eventKey] !== null) {
@@ -257,6 +249,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         const pushIfOk = (fn, fileData) => {
             if (!fileData?.length || !fn) return;
             if (filterUnknown && !isKnownFile(fn, fileData)) return;
+            if (filterUnknown && isCleaningOnlyOrUnknownPhaseFile(fn, fileData)) return;
             if (!fileMatchesSelectedConcentrations(fn, fileData, selectedConcSet, concFilterActive)) return;
             out.push({ fileName: fn, data: fileData });
         };
@@ -291,16 +284,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
     const { xKey, seriesKeys, chartData } = useMemo(() => {
         if (!activeData || activeData.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
 
-        // Filter out recovery phase if checked
-        let processedData = activeData;
-        const keys = Object.keys(activeData[0]);
-        const eventCol = findEventColumn(activeData[0]);
-        if (removeRecoveryEvents && eventCol) {
-            processedData = activeData.filter((row) => {
-                const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
-                return !eNorm.includes('recovery');
-            });
-        }
+        const processedData = filterRowsForNormalizeChart(activeData, {
+            removeRecovery: removeRecoveryEvents,
+            stripNonMeasurementStages: filterUnknown,
+        });
 
         if (!processedData || processedData.length === 0) return { xKey: '', seriesKeys: [], chartData: [] };
 
@@ -312,7 +299,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         const series = Object.keys(processedData[0]).filter(k => k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
         const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { xKey: 'index', seriesKeys: series, chartData: chartDataWithIndex };
-    }, [activeData, removeRecoveryEvents]);
+    }, [activeData, removeRecoveryEvents, filterUnknown]);
 
     /* ── 2. Prepare Compare Data List ── */
     const cmpFiles = useMemo(() => {
@@ -320,15 +307,10 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         return activeCompareList.map((file, idx) => {
             if (!file?.data || file.data.length === 0) return null;
 
-            // Filter out recovery phase if checked
-            let processedData = file.data;
-            const eventCol = findEventColumn(file.data[0]);
-            if (removeRecoveryEvents && eventCol) {
-                processedData = file.data.filter((row) => {
-                    const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
-                    return !eNorm.includes('recovery');
-                });
-            }
+            const processedData = filterRowsForNormalizeChart(file.data, {
+                removeRecovery: removeRecoveryEvents,
+                stripNonMeasurementStages: filterUnknown,
+            });
 
             if (!processedData || processedData.length === 0) return null;
 
@@ -341,7 +323,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
             const dataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
             return { id: idx, fileName: file.fileName, shortName: shortName(file.fileName), xKey: 'index', seriesKeys: series, data: dataWithIndex };
         }).filter(Boolean);
-    }, [activeCompareList, removeRecoveryEvents]);
+    }, [activeCompareList, removeRecoveryEvents, filterUnknown]);
 
     const hasCompare = cmpFiles.length > 0;
 
@@ -469,7 +451,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                         baseNames.add(key);
                     } else {
                         Object.values(prefixedKeysMap).forEach(map => {
-                            const entry = Object.entries(map).find(([orig, prefixed]) => prefixed === key);
+                            const entry = Object.entries(map).find(([, prefixed]) => prefixed === key);
                             if (entry) baseNames.add(entry[0]);
                         });
                     }
@@ -497,7 +479,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         });
     }, [seriesKeys.join(','), cmpFiles.length, prefixedKeysMap]);
 
-    const toggleSeries = (key, isMulti = true) => {
+    const toggleSeries = (key) => {
         // 1. Identify the base column name
         let colName = key;
 
@@ -515,7 +497,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         } else {
             // Check comparison maps
             Object.values(prefixedKeysMap).forEach(map => {
-                const entry = Object.entries(map).find(([orig, prefixed]) => prefixed === key);
+                const entry = Object.entries(map).find(([, prefixed]) => prefixed === key);
                 if (entry) {
                     colName = entry[0];
                     found = true;
@@ -606,7 +588,6 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
                 const row = { ...mergedData[i] };
                 const start = Math.max(0, i - half);
                 const end = Math.min(len, i + half + 1);
-                const count = end - start;
 
                 keysToFilter.forEach(key => {
                     if (typeof row[key] !== 'number') return;
@@ -703,7 +684,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
         setDragRight('');
         setBrushStartIdx(0);
         setBrushEndIdx(null);
-    }, [fileName, xKey, removeRecoveryEvents]);
+    }, [fileName, xKey, removeRecoveryEvents, filterUnknown]);
 
     /** Drop baseline if x labels no longer exist (e.g. file swap); avoids bogus full-chart averaging */
     useEffect(() => {
@@ -1010,7 +991,7 @@ const NormalizePage = ({ data, fileName, compareDataList = [] }) => {
             <div className="series-chip-bar">
                 {/* Main */}
                 <span className="chip-group-label" title={plotMainFileName || fileName}>{shortName(plotMainFileName || fileName)}</span>
-                {seriesKeys.map((key, i) => {
+                {seriesKeys.map((key) => {
                     const active = visibleSeries.includes(key);
                     return (
                         <button key={key} onClick={() => toggleSeries(key)}

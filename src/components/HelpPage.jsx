@@ -21,6 +21,7 @@ import {
     Sigma,
     Blend,
     Usb,
+    Layers,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -830,7 +831,9 @@ function EquationsTheoryAppendix() {
 
             <ul className="help-list help-eq-list" style={{ marginTop: '24px' }}>
                 <li>
-                    <strong>Other pages:</strong> Separability, Aroma PCA, and t-SNE may use their own PCA or statistics — those are computed independently and are unrelated to ML Studio's model pipeline.
+                    <strong>Other pages:</strong> Separability and Aroma PCA use their own statistics independently of ML Studio training. The <strong>t-SNE Explorer</strong> uses the
+                    same <strong>per-file FeNOse feature vector</strong> as ML Studio (see the <strong>t-SNE Explorer</strong> section in this guide for the full file → features → point
+                    pipeline).
                 </li>
             </ul>
 
@@ -849,6 +852,106 @@ function EquationsTheoryAppendix() {
     );
 }
 
+/**
+ * t-SNE Explorer: end-to-end path from CSV file → feature vector → 2D/3D point.
+ * Aligns with extractFenoseFeaturesFromRows (fenoseModel.js) and TSNEPage.jsx behaviour.
+ */
+function TSNEExplorerHelpDeepDive() {
+    return (
+        <div className="ml-guide-wrapper">
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">What one dot on the plot represents</h3>
+            <p className="help-eq-para">
+                In the <strong>t-SNE Explorer</strong>, <strong>each point is exactly one workspace file</strong> — typically one FeNOse-style CSV capture (one measurement at one
+                nominal gas challenge). The horizontal/vertical (or 3-D) position is produced only by the t-SNE algorithm from that file&apos;s <strong>feature vector</strong>. The
+                plot does <strong>not</strong> place points by concentration or by AU id; those are shown visually as <strong>dot size</strong> (larger = higher parsed ppb) and{' '}
+                <strong>colour</strong> (one stable colour per aroma unit / synthetic), and in tooltips.
+            </p>
+
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">How concentration is tied to a file (before t-SNE)</h3>
+            <p className="help-eq-para">
+                Concentration is <strong>read from the filename</strong>, not inferred from sensor data. The app looks for a pattern such as <code>25ppb</code>,{' '}
+                <code>10 ppb</code>, or <code>0.5ppb</code> in the file basename (case-insensitive). That number is the <strong>label</strong> attached to the capture for colouring
+                by size, filtering, and legends. Files without a parsable <code>…ppb…</code> token are <strong>excluded</strong> from t-SNE in this view. If two different experiments
+                share the same nominal ppb in the name, they still produce <strong>two separate points</strong> (two files → two vectors → two embeddings).
+            </p>
+
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Feature extraction — every sensor element (A1–H8)</h3>
+            <p className="help-eq-para">
+                For each eligible CSV, the app parses rows and groups them by <code>event_name</code>, using the same phase model as ML Studio:{' '}
+                <strong>AmbientSamplingRFC</strong> (ambient baseline), <strong>FeNOMeasurement</strong> (breath / challenge phase), and optionally{' '}
+                <strong>FeNOWindow</strong> (short steady plateau). If ambient or FeNO phases are missing, that file is skipped.
+            </p>
+            <p className="help-eq-para">
+                For <strong>each</strong> of the 64 grid cells <code>A1</code> through <code>H8</code>:
+            </p>
+            <ul className="help-list help-eq-list">
+                <li>
+                    <strong>ambMean</strong> — mean resistance of that cell over all <em>ambient</em> rows.
+                </li>
+                <li>
+                    <strong>fenoMean</strong> — mean resistance over <em>FeNOMeasurement</em> rows for that cell.
+                </li>
+                <li>
+                    <strong>fenoStd</strong> — standard deviation of resistances in the FeNO phase (stability / noise during the challenge).
+                </li>
+                <li>
+                    <strong>windowMean</strong> — mean over <em>FeNOWindow</em> rows if present; otherwise 0 for window-derived features.
+                </li>
+            </ul>
+            <p className="help-eq-para">From those, four numbers per sensor are stored as features (names match ML Studio):</p>
+            <ul className="help-list help-eq-list">
+                <li>
+                    <code>d_A1</code> … <code>d_H8</code>: <strong>fenoMean − ambMean</strong> (raw ΔR for that element).
+                </li>
+                <li>
+                    <code>nd_A1</code> … <code>nd_H8</code>: <strong>(fenoMean − ambMean) / (|ambMean| + 10⁻⁶)</strong> — normalised fractional change from baseline.
+                </li>
+                <li>
+                    <code>fs_A1</code> … <code>fs_H8</code>: <strong>fenoStd</strong> for that element.
+                </li>
+                <li>
+                    <code>wd_A1</code> … <code>wd_H8</code>: <strong>windowMean − ambMean</strong> when a window exists; else 0.
+                </li>
+            </ul>
+            <p className="help-eq-para">
+                <strong>Cross-sensor summaries</strong> are added once per file: mean/max/min/std of all 64 deltas, and mean/std of all 64 <code>nd_*</code> values.{' '}
+                <strong>Environmental</strong> features are the file-wide means of <code>AQT0</code>, <code>AQH0</code>, and <code>AQP0</code> (temperature, humidity, pressure), when
+                those columns exist. Altogether this is the same high-dimensional description used for FeNOse ML features (on the order of <strong>~260+ numbers per file</strong>).
+            </p>
+
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Building the matrix and running t-SNE</h3>
+            <ol className="help-steps">
+                <li>
+                    <strong>Align dimensions:</strong> feature names from every file are unioned; keys are sorted. Each file becomes one row; missing keys are filled with 0 so every row
+                    has the same length.
+                </li>
+                <li>
+                    <strong>Standardise:</strong> each column is z-scored (subtract mean, divide by standard deviation) across the points included in that t-SNE run so no single
+                    feature dominates purely because of scale.
+                </li>
+                <li>
+                    <strong>t-SNE:</strong> the library maps each high-dimensional row to <strong>2 or 3 coordinates</strong> (your choice in the UI). Settings such as perplexity,
+                    iterations, and learning rate (ε) control how strongly local neighbourhoods are preserved. Nearby points in the plot mean “similar feature vectors,” not necessarily
+                    the same ppb or the same device.
+                </li>
+                <li>
+                    <strong>Multiple views:</strong> the app can compute a <em>combined</em> embedding (all included files) and separate embeddings per AU (each AU&apos;s real files plus
+                    optional synthetic points). Progressive “add one AU at a time” re-runs t-SNE on a growing subset so you can see how the joint layout changes.
+                </li>
+            </ol>
+
+            <div className="ml-callout ml-callout-tip">
+                <strong>Summary chain:</strong> one labelled CSV → phase-wise means/stds per <code>A1</code>–<code>H8</code> → fixed feature dictionary → sorted numeric vector →
+                column-wise normalisation → t-SNE → <strong>one (x,y)</strong> or <strong>(x,y,z)</strong> point. The <strong>ppb in the filename</strong> labels that point for size
+                and filters; it is <em>not</em> an input coordinate to t-SNE.
+            </div>
+        </div>
+    );
+}
 
 /**
  * User guide sections: id = anchor for table of contents
@@ -998,6 +1101,30 @@ const GUIDE_SECTIONS = [
         CustomContent: MLStudioDeepDive,
     },
     {
+        id: 'tsne-explorer',
+        icon: Layers,
+        title: 't-SNE Explorer',
+        subtitle: 'From each CSV to one point in the embedding',
+        intro:
+            'The t-SNE page visualises **similarity between whole captures**: each workspace file with a **ppb label in the filename** becomes one point. Position comes from **t-SNE of FeNOse-style features** (same per-sensor physics as ML Studio); **colour** identifies the aroma unit; **dot size** reflects the parsed **ppb** label.',
+        fundamentals: [
+            '**One file → one vector → one point:** phases (ambient / FeNO / window) are collapsed into ~260+ features per sensor grid and environment, then embedded in 2D or 3D.',
+            '**Concentration is a label, not a coordinate:** ppb is read from the name (e.g. `25ppb`); t-SNE only sees the numeric feature vector.',
+            '**Per element (A1–H8):** for each cell the app uses ambient mean, FeNO mean and std, window-vs-ambient delta, and normalised delta (`nd_*`) — the same family of features documented under ML Studio.',
+        ],
+        implemented: [
+            'Filename ppb parsing and AU id parsing for colour and progressive multi-AU builds',
+            'Optional synthetic captures (same feature pipeline) saved under FeNOse_synthetic/',
+            '2D/3D toggle with re-embedding; concentration hide/show; stepwise “add AU” recomputation',
+        ],
+        steps: [
+            'Add PPB-labelled FeNOse-style CSVs to the workspace (`Xppb` in the basename).',
+            'Open **t-SNE Explorer** from the sidebar, set options if needed, and run **Run t-SNE**.',
+            'Use the legend: AU colours, concentration filter, and (with several AUs) progressive controls to grow the combined plot one unit at a time.',
+        ],
+        CustomContent: TSNEExplorerHelpDeepDive,
+    },
+    {
         id: 'recovery',
         icon: TrendingUp,
         title: 'Recovery analysis',
@@ -1010,13 +1137,17 @@ const GUIDE_SECTIONS = [
             '**Kinetic Constants:** The shape of the recovery curve (exponential decay) can reveal the binding energy of the gas to the sensor surface.',
         ],
         implemented: [
-            'Exposure vs. Recovery phase identification using keywords',
+            'Exposure vs. recovery phase identification using optional keywords (defaults match FeNOse-style phases)',
+            '`FeNOWindow` is treated as post-breath idle, not a separate gas challenge; trials anchor on `FeNOMeasurement` (or your keyword)',
             'Chrono-plots showing return-to-base dynamics over multiple trials',
             'Environmental tracking to see if humidity spikes delay sensor recovery',
+            'Analysis uses the **main file + comparison picks** when set; otherwise all labelled workspace captures',
         ],
         steps: [
-            'Upload a long file containing multiple exposure/purge cycles.',
-            'Set keywords (e.g., "Ambient", "FeNO") to help the app slice the data.',
+            'Select a **main** CSV (and add **compare** files if you want a multi-trial batch). Or leave selection empty to scan all known workspace files.',
+            'Open **Drift Map** (Baseline Drift & Recovery). Leave **Exposure keyword** empty for auto-detect, or set a substring (e.g. `measurement` for FeNO breath only; use `window` if you need `FeNOWindow` explicitly).',
+            'Set **Recovery keyword** if your logs use a custom recovery phase name (default `recovery`).',
+            'Click **Analyze baseline drift**, then use **Chronological Plot** for time-resolved recovery.',
         ],
     },
     {
@@ -1119,6 +1250,7 @@ const GUIDE_SECTIONS = [
             'Aroma: moving average, absolute humidity, and median-based baselines',
             'Separability: detailed S-score formula with unbiased variance',
             'ML Studio: v1/v2 pipelines and PCA eigenvectors',
+            't-SNE Explorer: FeNOse feature extraction per A1–H8, matrix normalisation, and t-SNE embedding (see the t-SNE Explorer guide section)',
         ],
         steps: [],
         equationsAppendix: true,

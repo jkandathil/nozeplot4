@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
+import { motion } from 'framer-motion'; // eslint-disable-line no-unused-vars
 import { LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, CartesianGrid, Scatter, ScatterChart, ZAxis, Brush } from 'recharts';
 import { Activity, Settings, Maximize2, X, Download, LineChart as LineChartIcon } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { isKnownPlotFile, looksLikeSiacCaptureData, parseConcentrationMetaFromFile } from '../utils/workspaceFilename.js';
+import { parseFile } from '../utils/fileParser';
+import { extractChronoSortKey } from '../utils/recoveryChronoSort.js';
 import './AromaAnalysisPage.css'; // Reuse styles
 
 const SATURATION_VAPOR_PRESSURE_0C = 6.112;
@@ -18,7 +20,42 @@ const SIAC32_V2_CHR_SENSORS = Array.from({ length: 32 }, (_, i) => `CHR${i}`).jo
 const SIAC32_V2_HUM_COL_HINTS = 'AQH0, TRHH0, rh, hmd, humidity';
 const SIAC32_V2_TEMP_COL_HINTS = 'AQT0, TRHT0, temp, t';
 
-const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableFiles = [] }) => {
+/**
+ * True if this event block should **start** a drift trial as the gas / challenge phase.
+ * FeNOse curated data: `FeNOWindow` is post-breath idle — not a separate exposure (Help: measurement vs window).
+ * Short keywords like `feno` match both measurement and window; window is excluded unless keyword contains `window`.
+ */
+function isExposureBlockEvent(blockEventLower, exposureKeywordRaw, recoveryKeywordRaw) {
+    const e = String(blockEventLower || '').trim();
+    const expKey = String(exposureKeywordRaw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '');
+    const recKey = String(recoveryKeywordRaw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '');
+
+    if (recKey && e.includes(recKey)) return false;
+
+    if (expKey) {
+        if (!e.includes(expKey)) return false;
+        if (e.includes('fenowindow') && !expKey.includes('window')) return false;
+        return true;
+    }
+
+    if (e.includes('ambient') || e.includes('baseline') || e.includes('reference') || e.includes('flush')) return false;
+    if (e.includes('fenowindow')) return false;
+    return true;
+}
+
+const RecoveryAnalysisPage = ({
+    data,
+    fileName,
+    compareDataList = [],
+    availableFiles = [],
+    primaryFileId = null,
+}) => {
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
 
     useEffect(() => {
@@ -60,6 +97,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
     // Results
     const [recoveryResults, setRecoveryResults] = useState(null);
+    /** Set when Analyze finds no usable workspace files (vs trials parsed but empty). */
+    const [driftInputError, setDriftInputError] = useState(null);
     const [selectedPlot, setSelectedPlot] = useState(null);
     const [maxPlotEnvMetric, setMaxPlotEnvMetric] = useState('absHumidity'); // 'none', 'absHumidity', 'relHumidity', 'temperature'
 
@@ -72,33 +111,59 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
     const [chronoBrushEndIdx, setChronoBrushEndIdx] = useState(null);
     const chronoChartWrapperRef = React.useRef(null);
 
-    /** AU serial capture `SN_YYYY-MM-DD_HHMMSS.csv` and legacy `_YYYYMMDD-HHMM.csv` trials */
-    const extractChronoSortKey = (name) => {
-        const base = String(name).split(/[/\\]/).pop() || '';
-        const auCap = base.match(/_(\d{4}-\d{2}-\d{2})_(\d{6})\.csv$/i);
-        if (auCap) return `${auCap[1].replace(/-/g, '')}${auCap[2]}`;
-        const legacy = base.match(/_(\d{8}-\d{4})\.csv$/i);
-        if (legacy) return legacy[1];
-        return base;
-    };
-
     const handleProcessRecovery = () => {
         setIsProcessing(true);
+        setDriftInputError(null);
         setTimeout(() => {
+            void (async () => {
             try {
-                // Batch input gathering
-                let allFiles = [];
-                if (data && fileName) {
-                    if (isKnownFile(fileName, data)) allFiles.push({ fileName, data });
+                const collected = [];
+                const seen = new Set();
+                const pushIfKnown = (nm, rows, dedupeKey) => {
+                    if (!nm || !rows?.length) return;
+                    const k = dedupeKey != null ? String(dedupeKey) : nm;
+                    if (seen.has(k)) return;
+                    if (!isKnownFile(nm, rows)) return;
+                    seen.add(k);
+                    collected.push({ fileName: nm, data: rows });
+                };
+
+                if (data?.length && fileName) {
+                    pushIfKnown(fileName, data, primaryFileId != null ? String(primaryFileId) : fileName);
                 }
-                if (compareDataList && compareDataList.length > 0) {
-                    compareDataList.forEach(c => {
-                        if (isKnownFile(c.fileName, c.data)) allFiles.push(c);
-                    });
+                for (const c of compareDataList || []) {
+                    if (c?.fileName && c?.data?.length) {
+                        pushIfKnown(c.fileName, c.data, c.id != null ? String(c.id) : c.fileName);
+                    }
+                }
+                // Help: analyze the batch you selected (main + compares). Only scan the whole workspace if nothing is selected.
+                if (collected.length === 0) {
+                    for (const f of availableFiles || []) {
+                        if (!f || f.isFolder) continue;
+                        const key = f.id != null ? String(f.id) : f.name;
+                        if (seen.has(key)) continue;
+                        let rows = Array.isArray(f.data) && f.data.length > 0 ? f.data : null;
+                        let nm = f.name;
+                        if (!rows) {
+                            try {
+                                const parsed = await parseFile(f);
+                                rows = parsed?.data;
+                                nm = parsed?.fileName || nm;
+                            } catch {
+                                continue;
+                            }
+                        }
+                        pushIfKnown(nm, rows, key);
+                    }
                 }
 
+                const allFiles = collected;
+
                 if (allFiles.length === 0) {
-                    setIsProcessing(false);
+                    setRecoveryResults([]);
+                    setDriftInputError(
+                        'No labelled captures found. Add CSV/XLSX files with ppb/ppm in the name (or known SiAC/raw patterns), or select a main file, then analyze again.'
+                    );
                     return;
                 }
 
@@ -217,13 +282,9 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                         for (let i = 0; i < blocks.length; i++) {
                             const b = blocks[i];
-                            const expKey = exposureKeyword.trim().toLowerCase();
                             const recKey = recoveryKeyword.trim().toLowerCase();
 
-                            // If no exposure keyword is provided, assume any event that isn't recovery/ambient is an exposure
-                            const isExposure = expKey
-                                ? b.event.includes(expKey)
-                                : (!b.event.includes(recKey) && !b.event.includes('ambient') && !b.event.includes('baseline') && !b.event.includes('reference'));
+                            const isExposure = isExposureBlockEvent(b.event, exposureKeyword, recoveryKeyword);
 
                             if (isExposure) {
                                 // Find the preceding baseline
@@ -233,7 +294,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                 // Traverse backward to find the ACTUAL baseline start
                                 for (let j = i - 1; j >= 0; j--) {
                                     const evJ = blocks[j].event;
-                                    if (evJ.includes(recKey)) continue;
+                                    if (recKey && evJ.includes(recKey)) continue;
 
                                     // We reached the start of the baseline
                                     if (evJ.includes('baseline') || evJ.includes('ambient') || evJ.includes('reference') || evJ.includes('flush')) {
@@ -244,9 +305,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     // Expand block inclusively backwards for things like "BreathSampleCollection"
                                     sequenceStartIdx = blocks[j].startIdx;
 
-                                    // If we hit another exposure target before a baseline, we assume we trace only back to here
-                                    const isExp = expKey ? evJ.includes(expKey) : (!evJ.includes(recKey) && !evJ.includes('ambient') && !evJ.includes('baseline') && !evJ.includes('reference') && !evJ.includes('flush'));
-                                    if (isExp) {
+                                    // If we hit another exposure anchor before a baseline, stop tracing backward
+                                    if (isExposureBlockEvent(evJ, exposureKeyword, recoveryKeyword)) {
                                         break;
                                     }
                                 }
@@ -261,7 +321,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                 for (let j = i + 1; j < blocks.length; j++) {
                                     const evJ = blocks[j].event;
 
-                                    if (!recoveryBlock && evJ.includes(recKey)) {
+                                    if (recKey && !recoveryBlock && evJ.includes(recKey)) {
                                         recoveryBlock = blocks[j];
                                     }
 
@@ -272,7 +332,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                     // Expand the sequence boundary to include these subsequent phases before the next baseline
                                     // Only expand if it's not a recovery event (which is handled separately) and not a baseline/ambient/reference/flush
-                                    if (!evJ.includes(recKey) && !evJ.includes('baseline') && !evJ.includes('ambient') && !evJ.includes('reference') && !evJ.includes('flush')) {
+                                    const notRecoveryPhase = !recKey || !evJ.includes(recKey);
+                                    if (notRecoveryPhase && !evJ.includes('baseline') && !evJ.includes('ambient') && !evJ.includes('reference') && !evJ.includes('flush')) {
                                         sequenceEndIdx = blocks[j].endIdx;
                                     }
                                 }
@@ -374,7 +435,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                     exactCol: exactCol,
                                     eventCol: eventCol,
                                     humCol: humColMatch,
-                                    tempCol: tempColMatch
+                                    tempCol: tempColMatch,
+                                    recoveryValue: getColAvg(ignoreHardwareRecovery ? (t.nextBaseline ? t.nextBaseline.rows : null) : (t.recovery ? t.recovery.rows : null), exactCol)
                                 });
                             });
                         }); // End of trials.forEach
@@ -402,12 +464,13 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 }); // End of Object.keys(groupedFiles).forEach
 
                 if (totalTrialsProcessed === 0) {
-                    setRecoveryResults([]); // Will trigger empty state component
-                    setIsProcessing(false);
+                    setRecoveryResults([]);
+                    setDriftInputError(null);
                     return;
                 }
 
                 setRecoveryResults(newRecoveryResults);
+                setDriftInputError(null);
 
             } catch (err) {
                 console.error("Error analyzing recovery:", err);
@@ -417,9 +480,11 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                     trialsCount: 0,
                     sensorPlots: {}
                 }]);
+                setDriftInputError(null);
             } finally {
                 setIsProcessing(false);
             }
+            })();
         }, 100);
     };
 
@@ -982,7 +1047,8 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                 className="text-input"
                                 value={exposureKeyword}
                                 onChange={e => setExposureKeyword(e.target.value)}
-                                placeholder="Auto-detect"
+                                placeholder="Auto (FeNO measurement, not window)"
+                                title="Empty = auto: FeNOMeasurement and similar challenge phases; FeNOWindow is excluded. Use a substring (e.g. measurement) or fenowindow to target a phase explicitly."
                                 style={{ padding: '6px' }}
                             />
                         </div>
@@ -1041,7 +1107,11 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                         </div>
                     ) : recoveryResults.length === 0 ? (
                         <div className="empty-state">
-                            <p style={{ color: '#ef4444' }}>No exposure trials found in the loaded files.</p>
+                            {driftInputError ? (
+                                <p style={{ color: '#f59e0b', maxWidth: 520, textAlign: 'center', lineHeight: 1.5 }}>{driftInputError}</p>
+                            ) : (
+                                <p style={{ color: '#ef4444' }}>No exposure trials found in the loaded files.</p>
+                            )}
                         </div>
                     ) : (
                         <div className="results-wrapper" style={{ overflowY: 'auto', paddingRight: 10 }}>
@@ -1057,10 +1127,16 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                             if (sensorObj.data.length === 0) return null;
 
                                             const dataVals = sensorObj.data.map(d => d.baselineValue);
+                                            const recVals = sensorObj.data.map(d => d.recoveryValue).filter(v => v > 0);
                                             const minR = Math.min(...dataVals);
                                             const maxR = Math.max(...dataVals);
                                             const deltaR = maxR - minR;
                                             const pctDrift = Math.abs(minR) > 0 ? ((deltaR / Math.abs(minR)) * 100).toFixed(1) : 0;
+
+                                            const minRec = recVals.length > 0 ? Math.min(...recVals) : 0;
+                                            const maxRec = recVals.length > 0 ? Math.max(...recVals) : 0;
+                                            const deltaRec = maxRec - minRec;
+                                            const pctRecDrift = Math.abs(minRec) > 0 ? ((deltaRec / Math.abs(minRec)) * 100).toFixed(1) : 0;
 
                                             const maxRh = Math.max(...sensorObj.data.map(d => d.relHumidity));
                                             const minRh = Math.min(...sensorObj.data.map(d => d.relHumidity));
@@ -1080,12 +1156,17 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                                                 {sensorName} <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>Drift & Recovery Map</span>
                                                             </h4>
                                                             <span style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>
-                                                                ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}%) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
+                                                                ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}%) {deltaRec > 0 ? `| ΔR Rec: ${deltaRec.toFixed(3)} Ω (${pctRecDrift}%)` : ''} | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                                             </span>
                                                         </div>
-                                                        <button type="button" className="icon-btn small" onClick={() => setSelectedPlot({ ...sensorObj, title: `${resultBatch.fileName} - ${sensorName}` })}>
-                                                            <Maximize2 size={14} />
-                                                        </button>
+                                                        <div style={{ display: 'flex', gap: 4 }}>
+                                                            <button type="button" className="icon-btn small" onClick={() => handleDownloadPng(plotId)} title="Download plot as PNG">
+                                                                <Download size={14} />
+                                                            </button>
+                                                            <button type="button" className="icon-btn small" onClick={() => setSelectedPlot({ ...sensorObj, title: `${resultBatch.fileName} - ${sensorName}` })}>
+                                                                <Maximize2 size={14} />
+                                                            </button>
+                                                        </div>
                                                     </div>
 
                                                     <div style={{ height: 260, width: '100%' }}>
@@ -1117,7 +1198,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                                                     contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: 'none', borderRadius: '12px', padding: '12px', boxShadow: 'none' }}
                                                                     itemStyle={{ fontSize: '11px', padding: '2px 0' }}
                                                                     labelStyle={{ color: '#94a3b8', fontSize: '12px', fontWeight: 600, marginBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}
-                                                                    formatter={(value, name, props) => {
+                                                                    formatter={(value, name) => {
                                                                         if (name === 'concentration') return [value, 'Concentration'];
                                                                         return [value, name];
                                                                     }}
@@ -1129,6 +1210,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
 
                                                                 {/* Lines */}
                                                                 <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={true} />
+                                                                <Line yAxisId="left" type="monotone" dataKey="recoveryValue" name="Recovery Avg (Ohms)" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} isAnimationActive={true} />
                                                                 <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1} dot={{ r: 2 }} opacity={0.5} isAnimationActive={true} />
                                                             </LineChart>
                                                         </ResponsiveContainer>
@@ -1160,6 +1242,12 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                 const minTc = Math.min(...selectedPlot.data.map(d => d.temperature));
                 const deltaTc = maxTc - minTc;
 
+                const recVals = selectedPlot.data.map(d => d.recoveryValue).filter(v => v > 0);
+                const minRec = recVals.length > 0 ? Math.min(...recVals) : 0;
+                const maxRec = recVals.length > 0 ? Math.max(...recVals) : 0;
+                const deltaRec = maxRec - minRec;
+                const pctRecDrift = Math.abs(minRec) > 0 ? ((deltaRec / Math.abs(minRec)) * 100).toFixed(1) : 0;
+
                 return (
                     <div className="modal-overlay" onClick={() => setSelectedPlot(null)} style={{ zIndex: 9999 }}>
                         <div
@@ -1178,7 +1266,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     <h3 style={{ margin: 0 }}>{selectedPlot.title}</h3>
                                     <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: 600 }}>
-                                        ΔR = {deltaR.toFixed(3)} Ω ({pctDrift}% Drift) | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
+                                        ΔR Base: {deltaR.toFixed(3)} Ω ({pctDrift}% Drift) {deltaRec > 0 ? `| ΔR Rec: ${deltaRec.toFixed(3)} Ω (${pctRecDrift}%)` : ''} | ΔRH: {deltaRh.toFixed(1)}% | ΔT: {deltaTc.toFixed(1)}°C
                                     </span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.2)', padding: '4px 10px', borderRadius: 6, marginRight: 20 }}>
@@ -1221,7 +1309,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                             contentStyle={{ backgroundColor: 'rgba(0, 0, 0, 0)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: 'none', borderRadius: '12px', padding: '16px' }}
                                             itemStyle={{ fontSize: '13px', padding: '4px 0' }}
                                             labelStyle={{ color: '#94a3b8', fontSize: '14px', fontWeight: 600, marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px' }}
-                                            formatter={(value, name, props) => {
+                                            formatter={(value, name) => {
                                                 if (name === 'concentration') return [value, 'Concentration'];
                                                 if (name === 'Ab. Humidity') return [Number(value).toFixed(2) + ' g/m³', 'Environment'];
                                                 if (name === 'Rel. Humidity') return [Number(value).toFixed(2) + ' %', 'Environment'];
@@ -1235,6 +1323,7 @@ const RecoveryAnalysisPage = ({ data, fileName, compareDataList = [], availableF
                                         <Line type="monotone" dataKey="concentration" name="concentration" stroke="none" activeDot={false} dot={false} isAnimationActive={false} />
 
                                         <Line yAxisId="left" type="monotone" dataKey="baselineValue" name="Baseline Avg (Ohms)" stroke="#38bdf8" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
+                                        <Line yAxisId="left" type="monotone" dataKey="recoveryValue" name="Recovery Avg (Ohms)" stroke="#10b981" strokeWidth={3} strokeDasharray="8 8" dot={{ r: 5 }} activeDot={{ r: 8 }} isAnimationActive={false} />
                                         {maxPlotEnvMetric === 'absHumidity' && (
                                             <Line yAxisId="right" type="monotone" dataKey="humidity" name="Ab. Humidity" stroke="#eab308" strokeWidth={1.5} dot={{ r: 3 }} activeDot={{ r: 6 }} opacity={0.6} isAnimationActive={false} />
                                         )}

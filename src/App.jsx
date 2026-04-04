@@ -38,6 +38,7 @@ import { parseFile } from './utils/fileParser';
 import { getBrowserStorageEstimate, uploadWorkloadHints } from './utils/browserCapacityHints.js';
 import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
 import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from './utils/fenoseWorkspace.js';
+import { extractChronoSortKey } from './utils/recoveryChronoSort.js';
 import {
   generateSyntheticFenoseRows,
   buildSyntheticFenoseFileName,
@@ -1051,6 +1052,21 @@ function App() {
     handleCompareSelect(compareIds);
   };
 
+  /** Sidebar: AU row / folder — chronological order for Drift Map, then open Recovery. */
+  const handleOpenRecoveryForFileIds = async (rawIds) => {
+    const ids = Array.isArray(rawIds) ? rawIds.filter(Boolean) : [];
+    if (ids.length === 0) return;
+    const byId = new Map(files.filter((f) => !f.isFolder).map((f) => [f.id, f]));
+    const sorted = [...ids].filter((id) => byId.has(id)).sort((a, b) => {
+      const na = byId.get(a)?.name || '';
+      const nb = byId.get(b)?.name || '';
+      return extractChronoSortKey(na).localeCompare(extractChronoSortKey(nb));
+    });
+    if (sorted.length === 0) return;
+    await handleSelectFiles(sorted);
+    setActivePage('recoveryAnalysis');
+  };
+
   const deleteFile = async (e, fileId) => {
     e.stopPropagation();
 
@@ -1135,6 +1151,7 @@ function App() {
           onDeleteAllFiles={deleteAllFiles}
           onSelectAll={handleSelectAll}
           onSelectFiles={handleSelectFiles}
+          onOpenRecoveryForFileIds={handleOpenRecoveryForFileIds}
           userName={userName}
           activePage={activePage}
           onPageChange={setActivePage}
@@ -1216,6 +1233,7 @@ function App() {
                     fileName={parsedData?.fileName}
                     compareDataList={compareDataList}
                     availableFiles={files}
+                    primaryFileId={selectedFileId}
                   />
                 ) : activePage === 'manufacturing' ? (
                   <ManufacturingVariationPage

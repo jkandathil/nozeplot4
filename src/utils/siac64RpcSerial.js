@@ -44,15 +44,17 @@ export function buildSiac64RawJsonRpcLine(payloadObj, lineEnding = '\n') {
 /**
  * @param {SerialPort} port opened Web Serial port with writable
  * @param {Record<string, unknown>} payloadObj RPC body, e.g. { method: 'TELEMETRY', params: { period: 100 } }
- * @param {{ lineEnding?: string; alsoSendRawJson?: boolean; preWriteDelayMs?: number; postWriteDelayMs?: number }} [options]
+ * @param {{ lineEnding?: string; alsoSendRawJson?: boolean; preWriteDelayMs?: number; postWriteDelayMs?: number; skipLeadingInterrupt?: boolean }} [options]
  */
 export async function writeSiac64RpcLine(port, payloadObj, options = {}) {
     if (!port?.writable) return;
     const writer = port.writable.getWriter();
     try {
-        // Send Ctrl+C then newline to clear any hung shell process or partial command
-        await writer.write(encoder.encode('\x03\n'));
-        await delay(options.preWriteDelayMs || 25);
+        if (!options.skipLeadingInterrupt) {
+            // Send Ctrl+C then newline to clear any hung shell process or partial command
+            await writer.write(encoder.encode('\x03\n'));
+        }
+        await delay(options.preWriteDelayMs ?? (options.skipLeadingInterrupt ? 15 : 25));
 
         const ending = options.lineEnding ?? '\r\n';
         const cmdLine = `${buildSiac64RpcSendCommandLine(payloadObj)}${ending}`;

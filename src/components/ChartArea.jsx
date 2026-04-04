@@ -10,12 +10,17 @@ import {
     Legend
 } from 'recharts';
 import { Download, Grid, Square, Maximize2, AlertCircle, RefreshCw, ZoomIn, ZoomOut, MessageSquare, Image as ImageIcon, BarChart3 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion } from 'framer-motion'; // eslint-disable-line no-unused-vars
 import { toPng } from 'html-to-image';
 import MultiFileSelect from './MultiFileSelect';
 import LazyChart from './LazyChart';
 import DashboardBaselineBarModal, { DashboardBaselineGridCard } from './DashboardBaselineBarModal';
 import { isKnownPlotFile } from '../utils/workspaceFilename';
+import {
+    filterRowsForNormalizeChart,
+    findPlotEventColumn,
+    isCleaningOnlyOrUnknownPhaseFile,
+} from '../utils/normalizePlotRowFilter';
 import './ChartArea.css';
 
 const COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#60a5fa'];
@@ -27,25 +32,6 @@ function shortDataFileLabel(filePath, maxLen = 40) {
     const base = filePath.split(/[/\\]/).pop() || filePath;
     if (base.length <= maxLen) return base;
     return `${base.slice(0, Math.max(1, maxLen - 1))}…`;
-}
-
-/** Event / phase column used to drop recovery rows (same idea as Aroma pipeline). */
-function findEventColumn(sampleRow) {
-    if (!sampleRow || typeof sampleRow !== 'object') return null;
-    const keys = Object.keys(sampleRow);
-    const ranked = keys
-        .map((col) => {
-            const l = col.toLowerCase();
-            let score = 0;
-            if (l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state') score = 100;
-            else if (l === 'event' || l === 'events' || l.endsWith('_phase') || l.endsWith('_event')) score = 85;
-            else if (l.includes('event') && !l.includes('reference')) score = 70;
-            else if (l.includes('phase') && !l.includes('reference')) score = 55;
-            return { col, score };
-        })
-        .filter((x) => x.score > 0)
-        .sort((a, b) => b.score - a.score);
-    return ranked[0]?.col ?? null;
 }
 
 /** Parse cell as number when CSV leaves RH/T as strings */
@@ -291,8 +277,23 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         return isKnownPlotFile(fName, fileData);
     };
 
-    const activeData = useMemo(() => (!filterUnknown || isKnownFile(fileName, data)) ? data : [], [data, fileName, filterUnknown]);
-    const activeCompareList = useMemo(() => (compareDataList || []).filter(c => isKnownFile(c.fileName, c.data)), [compareDataList, filterUnknown]);
+    const activeData = useMemo(() => {
+        if (!data?.length) return [];
+        if (!filterUnknown) return data;
+        if (!isKnownFile(fileName, data)) return [];
+        if (isCleaningOnlyOrUnknownPhaseFile(fileName, data)) return [];
+        return data;
+    }, [data, fileName, filterUnknown]);
+
+    const activeCompareList = useMemo(
+        () =>
+            (compareDataList || []).filter((c) => {
+                if (!filterUnknown) return true;
+                if (!isKnownFile(c.fileName, c.data)) return false;
+                return !isCleaningOnlyOrUnknownPhaseFile(c.fileName, c.data);
+            }),
+        [compareDataList, filterUnknown]
+    );
 
     // Index-based zoom: controls Brush startIndex/endIndex.
     const [brushStartIdx, setBrushStartIdx] = useState(0);
@@ -309,16 +310,11 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     const { seriesKeys: mainSeriesKeys, xKey, chartData } = useMemo(() => {
         if (!activeData || activeData.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
 
-        let processedData = activeData;
         const keys = Object.keys(activeData[0]);
-        const eventCol = findEventColumn(activeData[0]);
-        if (removeRecoveryEvents && eventCol) {
-            // Strip all recovery-tagged rows including recoveryOff / Recovery_Off (Dashboard: no exceptions)
-            processedData = activeData.filter((row) => {
-                const eNorm = String(row[eventCol] ?? '').toLowerCase().replace(/\s+/g, '');
-                return !eNorm.includes('recovery');
-            });
-        }
+        const processedData = filterRowsForNormalizeChart(activeData, {
+            removeRecovery: removeRecoveryEvents,
+            stripNonMeasurementStages: filterUnknown,
+        });
 
         if (!processedData || processedData.length === 0) return { seriesKeys: [], xKey: '', chartData: [] };
 
@@ -335,7 +331,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         const series = keys.filter(k => k !== potentialX && k.toLowerCase() !== 'index' && typeof processedData[0][k] === 'number');
         const chartDataWithIndex = processedData.map((row, i) => ({ ...row, index: i + 1 }));
         return { seriesKeys: series, xKey: 'index', chartData: chartDataWithIndex };
-    }, [activeData, removeRecoveryEvents]);
+    }, [activeData, removeRecoveryEvents, filterUnknown]);
 
     // Compute UNION of all series keys (Main + Comparisons)
     // This ensures we show variables that might only exist in comparison files
@@ -386,14 +382,11 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         // Filter recovery rows per compare file (same rules as main), then align by xKey or row index
         const comparePackages = activeCompareList.map((c) => {
             let pData = Array.isArray(c.data) ? [...c.data] : [];
-            if (removeRecoveryEvents && pData.length > 0) {
-                const eCol = findEventColumn(pData[0]);
-                if (eCol) {
-                    pData = pData.filter((r) => {
-                        const eNorm = String(r[eCol] ?? '').toLowerCase().replace(/\s+/g, '');
-                        return !eNorm.includes('recovery');
-                    });
-                }
+            if (pData.length > 0) {
+                pData = filterRowsForNormalizeChart(pData, {
+                    removeRecovery: removeRecoveryEvents,
+                    stripNonMeasurementStages: filterUnknown,
+                });
             }
 
             const lookup = new Map();
@@ -445,12 +438,12 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
         }
 
         return combined;
-    }, [chartData, activeCompareList, xKey, removeRecoveryEvents, allSeriesKeys]);
+    }, [chartData, activeCompareList, xKey, removeRecoveryEvents, filterUnknown, allSeriesKeys]);
 
     const baselineBarPayload = useMemo(() => {
         if (!processedChartData?.length || !mainSeriesKeys.length) return null;
         const row0 = processedChartData[0];
-        const eventCol = findEventColumn(row0);
+        const eventCol = findPlotEventColumn(row0);
         const { indices, usedEventBaseline, totalRows } = computeBaselineRowIndices(processedChartData, eventCol);
         const baseRows = indices.map((i) => processedChartData[i]);
         if (!baseRows.length) return null;
@@ -515,7 +508,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
     }, [processedChartData, mainSeriesKeys, activeCompareList]);
 
     // Identify the global bounds explicitly and calculate stats to minimize layout shift & Recharts unoptimized prop tracking overhead
-    const { chartStats, globalYBounds } = useMemo(() => {
+    const { chartStats: _chartStats, globalYBounds: _globalYBounds } = useMemo(() => {
         const stats = {};
         const localBounds = {};
         allSeriesKeys.forEach(key => {
@@ -1008,7 +1001,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                 </span>
                                             )}
                                         />
-                                        {singleViewKeys.flatMap((key, index) => {
+                                        {singleViewKeys.flatMap((key) => {
                                             const lines = [
                                                 <Line
                                                     key={`main-${key}`}
@@ -1100,7 +1093,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                                                                 name={key}
                                                                 isAnimationActive={false}
                                                             />,
-                                                            ...(compareKeysMap[key] ? compareKeysMap[key].map((comp, cIdx) => (
+                                                            ...(compareKeysMap[key] ? compareKeysMap[key].map((comp) => (
                                                                 <Line
                                                                     key={comp.key}
                                                                     type="monotone"

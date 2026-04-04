@@ -19,6 +19,7 @@ import {
     primeSerialPortForSiAcRead,
     openSerialPortForSiAc,
     readSiAcPortUtf8Until,
+    closeSerialPortsForKeys,
 } from '../utils/siacSerialProbe';
 import { writeSiac64RpcLine, clampTelemetryPeriodMs } from '../utils/siac64RpcSerial';
 import {
@@ -32,6 +33,31 @@ import './AromaUnitCapturePage.css';
 
 function webSerialSupported() {
     return typeof navigator !== 'undefined' && !!navigator.serial;
+}
+
+/**
+ * Buffer UART text and `console.info` each completed newline-delimited line (handles \\r\\n / \\r).
+ * Call `flush()` when the read ends to log any trailing partial line.
+ */
+function createSerialLineLogger(label) {
+    let partial = '';
+    return {
+        push(chunk) {
+            if (chunk == null || chunk === '') return;
+            let buf = partial + String(chunk).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const parts = buf.split('\n');
+            partial = parts.pop() ?? '';
+            for (const line of parts) {
+                console.info(`[Device:${label}]`, line);
+            }
+        },
+        flush() {
+            if (partial) {
+                console.info(`[Device:${label}]`, `${partial}  [partial at end of read]`);
+                partial = '';
+            }
+        },
+    };
 }
 
 export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
@@ -160,17 +186,31 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             const w = captureProgressWindowRef.current;
             if (!w || w.endMs <= w.startMs) return;
             const now = Date.now();
-            const span = w.endMs - w.startMs;
-            const pct = Math.min(100, Math.max(0, ((now - w.startMs) / span) * 100));
-            const secsLeft = Math.max(0, Math.ceil((w.endMs - now) / 1000));
-            setCaptureProgressPct(pct);
-            setCaptureSecsLeft(secsLeft);
+            const secsLeftWall = Math.max(0, Math.ceil((w.endMs - now) / 1000));
 
+            // Do not advance the bar until at least one byte arrived from the device (wall clock still ends on schedule).
+            if (w.firstDataAtMs == null) {
+                setCaptureProgressPct(0);
+                setCaptureSecsLeft(secsLeftWall);
+                setCurrentEventStatus('Waiting for data from device…');
+                return;
+            }
+
+            const elapsedData = now - w.firstDataAtMs;
+            const spanData = Math.max(1, w.endMs - w.firstDataAtMs);
+            const pct = Math.min(100, Math.max(0, (elapsedData / spanData) * 100));
+            setCaptureProgressPct(pct);
+            setCaptureSecsLeft(secsLeftWall);
+
+            const elapsedWall = now - w.startMs;
             let currentEv = '';
             if (w.schedule && w.schedule.length > 0) {
                 for (const step of w.schedule) {
-                    if (elapsed >= step.startOffsetMs && elapsed < step.startOffsetMs + step.durationMs) {
-                        const stepSecLeft = Math.max(0, Math.ceil((step.startOffsetMs + step.durationMs - elapsed) / 1000));
+                    if (elapsedWall >= step.startOffsetMs && elapsedWall < step.startOffsetMs + step.durationMs) {
+                        const stepSecLeft = Math.max(
+                            0,
+                            Math.ceil((step.startOffsetMs + step.durationMs - elapsedWall) / 1000)
+                        );
                         currentEv = `${step.name} (${stepSecLeft}s left)`;
                         break;
                     }
@@ -216,6 +256,15 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         setSelectedKey(null);
     }, [releaseReader]);
 
+    /** First serial bytes unlock the capture progress bar (until then it stays at 0%). */
+    const markCaptureStreamDataSeen = useCallback((text) => {
+        if (text == null || String(text).length === 0) return;
+        const w = captureProgressWindowRef.current;
+        if (w && w.firstDataAtMs == null) {
+            w.firstDataAtMs = Date.now();
+        }
+    }, []);
+
     useEffect(() => () => {
         disconnectPort();
     }, [disconnectPort]);
@@ -231,67 +280,6 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
 
     const pumpMaxCcm = profile.pumpControl?.maxCcm ?? 500;
     const pumpSliderStep = profile.pumpControl?.sliderStep ?? 1;
-
-    const applyPumpTargetFlow = async () => {
-        const port = portRef.current;
-        if (!port?.writable) {
-            setPumpFlowMsg('Connect a USB port first (select a device from the scan list).');
-            return;
-        }
-        if (recording) return;
-        setPumpFlowBusy(true);
-        setPumpFlowMsg('');
-        try {
-            await writeSiac64RpcLine(port, buildSiAc64SetPumpFlowPayload(flowTargetCcm, pumpMaxCcm));
-            const v = clampTargetFlowCcm(flowTargetCcm, pumpMaxCcm);
-            setFlowTargetCcm(v);
-            setPumpFlowMsg(
-                `Sent SET_PIEZO_PUMP setFlow=${v}, enable=1. Confirm in TELEMETRY (PZTFR0 / PZCFR0 / PZEN0).`
-            );
-        } catch (e) {
-            setPumpFlowMsg(e?.message || 'RPC write failed.');
-        } finally {
-            setPumpFlowBusy(false);
-        }
-    };
-
-    const applyPumpDisable = async () => {
-        const port = portRef.current;
-        if (!port?.writable) {
-            setPumpFlowMsg('Connect a USB port first.');
-            return;
-        }
-        if (recording) return;
-        setPumpFlowBusy(true);
-        setPumpFlowMsg('');
-        try {
-            await writeSiac64RpcLine(port, buildSiAc64PumpDisablePayload());
-            setPumpFlowMsg('Sent SET_PIEZO_PUMP enable=0 (pump off).');
-        } catch (e) {
-            setPumpFlowMsg(e?.message || 'RPC write failed.');
-        } finally {
-            setPumpFlowBusy(false);
-        }
-    };
-
-    const applyPumpQuery = async () => {
-        const port = portRef.current;
-        if (!port?.writable) {
-            setPumpFlowMsg('Connect a USB port first.');
-            return;
-        }
-        if (recording) return;
-        setPumpFlowBusy(true);
-        setPumpFlowMsg('');
-        try {
-            await writeSiac64RpcLine(port, buildSiAc64PumpQueryPayload());
-            setPumpFlowMsg('Sent SET_PIEZO_PUMP (no params). Check serial response / next TELEMETRY.');
-        } catch (e) {
-            setPumpFlowMsg(e?.message || 'RPC write failed.');
-        } finally {
-            setPumpFlowBusy(false);
-        }
-    };
 
     const runDeviceScan = async () => {
         setError('');
@@ -442,6 +430,91 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         }
     };
 
+    /**
+     * Multi-AU mode never calls selectDiscoveredDevice (rows are checkboxes only), so `connected` stays false
+     * and pump controls looked "gone" (disabled). If exactly one AU is checked, open that port the same way as Step 1.
+     */
+    const ensurePumpSerialPort = async () => {
+        if (recording) {
+            throw new Error('Pump is disabled while capturing.');
+        }
+        if (portRef.current?.writable) {
+            return portRef.current;
+        }
+        if (multiAuCapture && selectedKeysForMulti.length === 1) {
+            const key = selectedKeysForMulti[0];
+            const row = discovered.find((d) => d.key === key);
+            if (!row) {
+                throw new Error('Selected AU is not in the list — run Scan again.');
+            }
+            await selectDiscoveredDevice(row);
+            const p = portRef.current;
+            if (!p?.writable) {
+                throw new Error('Could not open the port for pump control.');
+            }
+            return p;
+        }
+        throw new Error(
+            'Connect a USB port first (tap a device in Step 1, or in Multi-AU mode select exactly one AU checkbox).'
+        );
+    };
+
+    const pumpControlsUnlocked =
+        !profile.disabled &&
+        !recording &&
+        (connected || (multiAuCapture && selectedKeysForMulti.length === 1));
+
+    const applyPumpTargetFlow = async () => {
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            const port = await ensurePumpSerialPort();
+            await writeSiac64RpcLine(port, buildSiAc64SetPumpFlowPayload(flowTargetCcm, pumpMaxCcm), {
+                skipLeadingInterrupt: true,
+            });
+            const v = clampTargetFlowCcm(flowTargetCcm, pumpMaxCcm);
+            setFlowTargetCcm(v);
+            setPumpFlowMsg(
+                `Sent SET_PIEZO_PUMP setFlow=${v}, enable=1. Confirm in TELEMETRY (PZTFR0 / PZCFR0 / PZEN0).`
+            );
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
+    const applyPumpDisable = async () => {
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            const port = await ensurePumpSerialPort();
+            await writeSiac64RpcLine(port, buildSiAc64PumpDisablePayload(), { skipLeadingInterrupt: true });
+            setPumpFlowMsg('Sent SET_PIEZO_PUMP enable=0 (pump off).');
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
+    const applyPumpQuery = async () => {
+        if (recording) return;
+        setPumpFlowBusy(true);
+        setPumpFlowMsg('');
+        try {
+            const port = await ensurePumpSerialPort();
+            await writeSiac64RpcLine(port, buildSiAc64PumpQueryPayload(), { skipLeadingInterrupt: true });
+            setPumpFlowMsg('Sent SET_PIEZO_PUMP (no params). Check serial response / next TELEMETRY.');
+        } catch (e) {
+            setPumpFlowMsg(e?.message || 'RPC write failed.');
+        } finally {
+            setPumpFlowBusy(false);
+        }
+    };
+
     const toggleMultiKey = (key) => {
         setSelectedKeysForMulti((prev) =>
             prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
@@ -561,6 +634,12 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             };
 
             const readFromOpenedPort = async (key, port, endAt) => {
+                const lineLabel = discovered.find((x) => x.key === key)?.sn || key;
+                const serialLines = createSerialLineLogger(lineLabel);
+                const onSerialChunk = (text) => {
+                    markCaptureStreamDataSeen(text);
+                    serialLines.push(text);
+                };
                 const rows = [];
                 let localParseErrors = 0;
                 let buffer = '';
@@ -584,9 +663,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                     if (rows.length % 5 === 0) {
                                         setLastPreview(JSON.stringify(rows[rows.length - 1]).slice(0, 280));
                                     }
-                                } else {
-                                    console.debug(`[Multi-AU Capture] JSON ignored (no sensors): ${jsonStr}`);
                                 }
+                                // Intentionally no console.debug here: logging every ignored chunk freezes the tab on 60s+ captures (CDC overflow).
                             } catch (e) {
                                 console.warn(`[Multi-AU Capture] Parse error for ${key}:`, e.message, "Raw chunk:", jsonStr);
                                 localParseErrors += 1;
@@ -609,6 +687,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         shouldStop: () => stopRef.current,
                         registerInMultiListRef: multiReadersRef,
                         onChunk: (text) => {
+                            onSerialChunk(text);
                             buffer += text;
                             consumeBuffer(false);
                         },
@@ -622,6 +701,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             shouldStop: () => stopRef.current,
                             registerInMultiListRef: multiReadersRef,
                             onChunk: (text) => {
+                                onSerialChunk(text);
                                 buffer += text;
                                 consumeBuffer(false);
                             },
@@ -639,6 +719,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         orphanTail: orphanTail || buffer,
                     };
                 } finally {
+                    serialLines.flush();
                     const t = getSerialPlatformTiming();
                     await serialDelay(t.afterReaderReleasedMs);
                     if (profile.rpcShell?.captureStopPayload) {
@@ -677,8 +758,15 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     return;
                 }
 
+                /** Same window as single-AU: full `sec` after all ports are open, TELEMETRY started, and primed. */
+                const endAt = Date.now() + sec * 1000;
                 console.info(`[Multi-AU] Capture stream loops active ... Ends precisely at:`, new Date(endAt).toISOString());
-                captureProgressWindowRef.current = { startMs: Date.now(), endMs: endAt, schedule };
+                captureProgressWindowRef.current = {
+                    startMs: Date.now(),
+                    endMs: endAt,
+                    schedule,
+                    firstDataAtMs: null,
+                };
                 setCaptureOpening(false);
 
                 const results = await Promise.all(
@@ -795,8 +883,10 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 setConnected(false);
                 setRecording(false);
                 setSelectedKey(null);
-                setPortHint('');
-                await serialDelay(getSerialPlatformTiming().afterPortCloseMs);
+                await closeSerialPortsForKeys(portByKeyRef.current, keys);
+                setPortHint(
+                    'Capture ports closed. Scan or select device(s) again before pump control or another run.'
+                );
             }
             return;
         }
@@ -819,8 +909,13 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         let bytesIn = 0;
         let captureParseErrors = 0;
         let orphanTail = '';
+        let captureSerialLabel = 'AU';
+        let serialLines = null;
 
         try {
+            captureSerialLabel =
+                discovered.find((x) => x.key === selectedKey)?.sn || selectedKey || 'AU';
+            serialLines = createSerialLineLogger(captureSerialLabel);
             const tOpen = getSerialPlatformTiming();
             try {
                 await port.close();
@@ -842,8 +937,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             await primeSerialPortForSiAcRead(port);
 
             /** Full `sec` seconds of reading start only after USB is open + primed (not before). */
+            const readEndAt = Date.now() + sec * 1000;
             console.info(`[Single-AU] Main capture loops running. Ends exactly at:`, new Date(readEndAt).toISOString());
-            captureProgressWindowRef.current = { startMs: Date.now(), endMs: readEndAt, schedule };
+            captureProgressWindowRef.current = {
+                startMs: Date.now(),
+                endMs: readEndAt,
+                schedule,
+                firstDataAtMs: null,
+            };
 
             const consumeBuffer = (isFinal) => {
                 const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
@@ -864,9 +965,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 const last = rowsRef.current[n - 1];
                                 setLastPreview(JSON.stringify(last).slice(0, 280));
                             }
-                        } else {
-                            console.debug(`[Capture] JSON ignored (no sensors): ${jsonStr}`);
                         }
+                        // Intentionally no console.debug here: logging every ignored chunk freezes the tab on 60s+ captures (CDC overflow).
                     } catch (e) {
                         console.warn(`[Capture] Parse error:`, e.message, "Raw chunk:", jsonStr);
                         captureParseErrors += 1;
@@ -889,6 +989,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 shouldStop: () => stopRef.current,
                 registerForCancelRef: readerRef,
                 onChunk: (text) => {
+                    markCaptureStreamDataSeen(text);
+                    serialLines?.push(text);
                     buffer += text;
                     consumeBuffer(false);
                     setLineCount(rowsRef.current.length);
@@ -903,6 +1005,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     shouldStop: () => stopRef.current,
                     registerForCancelRef: readerRef,
                     onChunk: (text) => {
+                        markCaptureStreamDataSeen(text);
+                        serialLines?.push(text);
                         buffer += text;
                         consumeBuffer(false);
                         setLineCount(rowsRef.current.length);
@@ -915,6 +1019,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         } catch (e) {
             setError(e?.message || 'Serial read failed.');
         } finally {
+            serialLines?.flush();
             captureProgressWindowRef.current = null;
             await releaseReader();
             const t = getSerialPlatformTiming();
@@ -929,12 +1034,17 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 }
                 await serialDelay(50);
             }
-            // Keep the port open for post-capture manual commands/pump setting
-            portRef.current = port;
-            setConnected(true);
+            try {
+                await port.close();
+            } catch {
+                /* ignore */
+            }
+            await serialDelay(t.afterPortCloseMs);
+            portRef.current = null;
+            setConnected(false);
             setRecording(false);
-            // We do NOT call port.close() here for single-AU, 
-            // allowing the user to 'connect and set flow rate' after capture ends.
+            setSelectedKey(null);
+            setPortHint('Port closed after capture (or stop). Scan or select the device again to reconnect or use pump.');
         }
 
         const rawRows = rowsRef.current;
@@ -1126,17 +1236,22 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         {profile.pumpControl ? (
                             <div className="au-field">
                                 <label htmlFor="au-flow-slider">Pump Flow (CCM)</label>
+                                {multiAuCapture && selectedKeysForMulti.length > 1 ? (
+                                    <p className="au-hint" style={{ marginBottom: 8 }}>
+                                        Pump controls one AU at a time. Select a single checkbox above, or turn off Multi-AU and tap one device to connect.
+                                    </p>
+                                ) : null}
                                 <div className="au-flow-slider-row">
-                                    <input id="au-flow-slider" type="range" min={0} max={pumpMaxCcm} step={pumpSliderStep} value={Math.min(flowTargetCcm, pumpMaxCcm)} onChange={(e) => setFlowTargetCcm(clampTargetFlowCcm(Number(e.target.value), pumpMaxCcm))} disabled={!connected || recording || pumpFlowBusy || profile.disabled} />
+                                    <input id="au-flow-slider" type="range" min={0} max={pumpMaxCcm} step={pumpSliderStep} value={Math.min(flowTargetCcm, pumpMaxCcm)} onChange={(e) => setFlowTargetCcm(clampTargetFlowCcm(Number(e.target.value), pumpMaxCcm))} disabled={!pumpControlsUnlocked || pumpFlowBusy} />
                                     <div className="au-flow-value-wrap">
-                                        <input id="au-flow-number" className="au-flow-number-input" type="text" value={flowTargetCcm} onChange={(e) => { const val = e.target.value; if (val === '') { setFlowTargetCcm(''); return; } const n = parseFloat(val); if (!isNaN(n)) { setFlowTargetCcm(clampTargetFlowCcm(n, pumpMaxCcm)); } }} onFocus={(e) => e.target.select()} onBlur={() => { if (flowTargetCcm === '') setFlowTargetCcm(0); }} disabled={!connected || recording || pumpFlowBusy || profile.disabled} />
+                                        <input id="au-flow-number" className="au-flow-number-input" type="text" value={flowTargetCcm} onChange={(e) => { const val = e.target.value; if (val === '') { setFlowTargetCcm(''); return; } const n = parseFloat(val); if (!isNaN(n)) { setFlowTargetCcm(clampTargetFlowCcm(n, pumpMaxCcm)); } }} onFocus={(e) => e.target.select()} onBlur={() => { if (flowTargetCcm === '') setFlowTargetCcm(0); }} disabled={!pumpControlsUnlocked || pumpFlowBusy} />
                                         <span className="au-flow-ccm-suffix">CCM</span>
                                     </div>
                                 </div>
                                 <div className="au-btn-row">
-                                    <button type="button" className="au-btn au-btn-primary" onClick={() => applyPumpTargetFlow()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Apply Flow</button>
-                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpDisable()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Pump Off</button>
-                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpQuery()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Query</button>
+                                    <button type="button" className="au-btn au-btn-primary" onClick={() => applyPumpTargetFlow()} disabled={!pumpControlsUnlocked || pumpFlowBusy}>Apply Flow</button>
+                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpDisable()} disabled={!pumpControlsUnlocked || pumpFlowBusy}>Pump Off</button>
+                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpQuery()} disabled={!pumpControlsUnlocked || pumpFlowBusy}>Query</button>
                                 </div>
                                 {pumpFlowMsg ? <p className="au-hint au-pump-flow-msg">{pumpFlowMsg}</p> : null}
                             </div>
@@ -1231,7 +1346,11 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         <div className="au-collection-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={captureOpening ? undefined : Math.round(captureProgressPct)}>
                             <div className="au-collection-progress-top">
                                 <span className="au-collection-progress-title">{captureOpening ? 'Opening ports…' : (currentEventStatus || 'Collecting…')}</span>
-                                {!captureOpening ? <span className="au-collection-progress-stats">{Math.round(captureProgressPct)}% · {captureSecsLeft}s total left</span> : null}
+                                {!captureOpening ? (
+                                    <span className="au-collection-progress-stats">
+                                        {Math.round(captureProgressPct)}% · {captureSecsLeft}s left on wire
+                                    </span>
+                                ) : null}
                             </div>
                             <div className={`au-collection-progress-track${captureOpening ? ' au-collection-progress-track--busy' : ''}`}>
                                 {captureOpening ? <div className="au-collection-progress-indeterminate" /> : <div className="au-collection-progress-fill" style={{ width: `${captureProgressPct}%` }} />}

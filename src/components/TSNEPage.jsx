@@ -28,11 +28,15 @@ import {
   parseFenosePpbFromFilename,
 } from '../utils/fenoseModel';
 import { parseFile } from '../utils/fileParser';
+import { FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace';
 import {
   generateSyntheticFenoseRows,
   computeCalibrationFromFiles,
+  groupFenoseCalibrationFilesByDevice,
   resolveSyntheticCalibration,
-  SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
+  deviceSuffixForSyntheticFile,
+  FENOSE_SYNTH_UNKNOWN_KEY,
+  buildSyntheticFenoseFileName,
 } from '../utils/fenoseSyntheticDataset';
 
 /** Must match App.jsx handleAddSyntheticFenoseToWorkspace seed progression for identical synth rows. */
@@ -792,57 +796,109 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     return results;
   }, [eligibleFiles]);
 
-  /* ── Synthetic generation + persist to workspace (same rows as t-SNE) ───── */
+  /* ── Synthetic generation + persist to workspace (same pipeline as ML Studio / App) ─ */
   const buildAndSaveSynthetics = useCallback(async (nPerConc, concs) => {
-    const calFiles = [];
-    for (const f of eligibleFiles.slice(0, 30)) {
-      try {
-        const p = await parseFile(f);
-        if (p?.data?.length) calFiles.push({ data: p.data, name: f.name });
-      } catch { /* skip unreadable */ }
+    const looksLabelled = (name) => /(\d+(?:\.\d+)?)\s*ppb\b/i.test(String(name || ''));
+    const isTabular = (name) => /\.(csv|xlsx?)/i.test(String(name || ''));
+
+    const synthFolder = workspaceFiles.find(
+      (f) => f.isFolder && String(f.name).toLowerCase() === FENOSE_SYNTHETIC_FOLDER_NAME.toLowerCase()
+    );
+    const synthFolderId = synthFolder ? String(synthFolder.id) : null;
+
+    const realCandidates = workspaceFiles.filter((f) => {
+      if (f.isFolder) return false;
+      if (synthFolderId && String(f.folderId) === synthFolderId) return false;
+      return looksLabelled(f.name) && isTabular(f.name);
+    });
+
+    let parsedForCal = [];
+    let pooledCalibration = null;
+    try {
+      parsedForCal = (
+        await Promise.all(
+          realCandidates.map(async (f) => {
+            try {
+              if (Array.isArray(f.data) && f.data.length > 0) {
+                return { fileName: f.name, data: f.data };
+              }
+              const r = await parseFile(f);
+              if (r?.data?.length) return { fileName: f.name, data: r.data };
+            } catch {
+              /* skip unparseable */
+            }
+            return null;
+          })
+        )
+      ).filter(Boolean);
+      pooledCalibration = computeCalibrationFromFiles(parsedForCal);
+    } catch (calErr) {
+      console.warn('[t-SNE synthetic] calibration error, using fallback:', calErr);
     }
-    const pooledCal = computeCalibrationFromFiles(calFiles);
-    const cal = resolveSyntheticCalibration([], pooledCal);
+
+    const byDevice = groupFenoseCalibrationFilesByDevice(parsedForCal);
+    let deviceJobs;
+    if (byDevice.size === 0) {
+      deviceJobs = [{ key: FENOSE_SYNTH_UNKNOWN_KEY, files: [] }];
+    } else {
+      deviceJobs = [...byDevice.entries()]
+        .map(([key, files]) => ({ key, files }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+    }
+
+    const totalPlanned = deviceJobs.length * concs.length * nPerConc;
+    const MAX_SYNTHETIC_BATCH = 10000;
+    if (totalPlanned > MAX_SYNTHETIC_BATCH) {
+      throw new Error(
+        `Too many synthetic files at once (${totalPlanned}). Maximum is ${MAX_SYNTHETIC_BATCH} per run — lower replicates, devices, or concentrations, or run multiple times.`
+      );
+    }
 
     const synthPts = [];
     const prebuiltRuns = [];
     const baseSeed = (Date.now() & 0xffffff) >>> 0;
     let k = 0;
-    for (const ppb of concs) {
-      for (let r = 0; r < nPerConc; r++) {
-        if (cancelRef.current) break;
-        try {
-          const rows = generateSyntheticFenoseRows({
-            ppb,
-            seed: (baseSeed + k * SYNTH_SEED_MULT) >>> 0,
-            nAmbient: SYNTH_N_AMBIENT,
-            nFeno: SYNTH_N_FENO,
-            nWindow: SYNTH_N_WINDOW,
-            calibration: cal,
-          });
-          const feats = extractFenoseFeaturesFromRows(rows);
-          const { featKeys, featVec } = featureKeysAndVectorFromFeats(feats);
-          if (featVec.length) {
-            synthPts.push({
-              feats: featVec,
-              featKeys,
+    for (const { key: deviceKey, files: devFiles } of deviceJobs) {
+      if (cancelRef.current) break;
+      const calibration = resolveSyntheticCalibration(devFiles, pooledCalibration);
+      const deviceSuffix = deviceSuffixForSyntheticFile(deviceKey);
+      for (const ppb of concs) {
+        for (let r = 0; r < nPerConc; r++) {
+          if (cancelRef.current) break;
+          try {
+            const rows = generateSyntheticFenoseRows({
               ppb,
-              deviceId: 'SYNTHETIC',
-              fileName: `fenose_synth_${SYNTHETIC_DEFAULT_DEVICE_SUFFIX}_r${r}_${ppb}ppb.csv`,
-              isSynthetic: true,
+              seed: (baseSeed + k * SYNTH_SEED_MULT) >>> 0,
+              nAmbient: SYNTH_N_AMBIENT,
+              nFeno: SYNTH_N_FENO,
+              nWindow: SYNTH_N_WINDOW,
+              calibration,
             });
-            prebuiltRuns.push({
-              data: rows,
-              ppb,
-              replicateIndex: r,
-              deviceSuffix: SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
-            });
+            const feats = extractFenoseFeaturesFromRows(rows);
+            const { featKeys, featVec } = featureKeysAndVectorFromFeats(feats);
+            if (featVec.length) {
+              const fileName = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });
+              synthPts.push({
+                feats: featVec,
+                featKeys,
+                ppb,
+                deviceId: parseFenoseDeviceIdFromFilename(fileName),
+                fileName,
+                isSynthetic: true,
+              });
+              prebuiltRuns.push({
+                data: rows,
+                ppb,
+                replicateIndex: r,
+                deviceSuffix,
+              });
+            }
+          } catch (e) {
+            console.warn('Synthetic sample failed:', e?.message || e);
           }
-        } catch (e) {
-          console.warn('Synthetic sample failed:', e?.message || e);
+          k++;
+          if (k % 20 === 0) await new Promise((r2) => setTimeout(r2, 0));
         }
-        k++;
-        if (k % 20 === 0) await new Promise((r2) => setTimeout(r2, 0));
       }
     }
 
@@ -857,7 +913,7 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     }
 
     return synthPts;
-  }, [eligibleFiles, onAddSyntheticFenoseToWorkspace]);
+  }, [workspaceFiles, onAddSyntheticFenoseToWorkspace]);
 
   /* ── t-SNE computation ─────────────────────────────────────────────────── */
   const computeTSNE = useCallback(async (allPoints, activeDim) => {

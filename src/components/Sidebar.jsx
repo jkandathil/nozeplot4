@@ -25,7 +25,7 @@ function fileBelongsToFolder(file, folderId) {
     return String(file.folderId) === String(folderId);
 }
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, onOpenRecoveryForFileIds, userName = "User", activePage = 'dashboard', onPageChange, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
@@ -230,6 +230,54 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     </div>
                 )}
             </div>
+
+            {/* Zen mode: icon rail so Drift Map / ML / t-SNE stay reachable when the full nav is hidden */}
+            {isCollapsed && (
+                <div
+                    className="sidebar-zen-page-rail"
+                    style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '4px 0 10px',
+                        flexShrink: 0,
+                        borderBottom: '1px solid var(--border-color)',
+                    }}
+                >
+                    {[
+                        { page: 'dashboard', title: 'Dashboard', Icon: BarChart2 },
+                        { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
+                        { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
+                        { page: 'mlStudio', title: 'FeNOse ML Studio', Icon: Brain },
+                        { page: 'tsnePage', title: 't-SNE explorer', Icon: Atom },
+                        { page: 'help', title: 'Help', Icon: BookOpen },
+                    ].map(({ page, title, Icon }) => (
+                        <button
+                            key={page}
+                            type="button"
+                            onClick={() => onPageChange?.(page)}
+                            title={title}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: 40,
+                                height: 34,
+                                padding: 0,
+                                border: 'none',
+                                borderRadius: 8,
+                                cursor: 'pointer',
+                                background:
+                                    activePage === page ? 'rgba(56, 189, 248, 0.18)' : 'transparent',
+                                color: activePage === page ? 'var(--accent-primary)' : 'var(--text-muted)',
+                            }}
+                        >
+                            <Icon size={15} strokeWidth={activePage === page ? 2.25 : 2} />
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {/* Page navigation */}
             {!isCollapsed && (
@@ -790,7 +838,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 marginBottom: auDevicesExpanded ? '8px' : 0,
                                 userSelect: 'none',
                             }}
-                            title={auDevicesExpanded ? 'Collapse AU list' : 'Expand AU list'}
+                            title={auDevicesExpanded ? 'Collapse AU list' : 'Expand AU list (click an AU name to open Drift Map)'}
                         >
                             {auDevicesExpanded ? (
                                 <ChevronDown size={14} color="#38bdf8" aria-hidden />
@@ -815,16 +863,18 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         </div>
                         {auDevicesExpanded ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {Object.keys(activeAUs).map(auId => {
+                            {Object.keys(activeAUs).map((auId, auIdx) => {
                                 const auFiles = activeAUs[auId];
                                 const auFileIds = auFiles.map(f => f.id);
                                 const isAllSelected = auFileIds.length > 0 && auFileIds.every(id => id === selectedFileId || compareFileIds?.includes(id));
+                                const chkId = `au-device-chk-${auIdx}`;
 
                                 return (
-                                    <div key={auId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', margin: 0 }}>
+                                    <div key={auId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
                                             <input
                                                 type="checkbox"
+                                                id={chkId}
                                                 checked={isAllSelected}
                                                 onChange={(e) => {
                                                     if (!onSelectFiles) return;
@@ -837,11 +887,36 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                         onSelectFiles(newSelected.length ? newSelected : []);
                                                     }
                                                 }}
-                                                title="Load all files from this device into the workspace (main + compares)"
-                                                style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer' }}
+                                                title="Select all files from this device for charts / compare"
+                                                style={{ width: 14, height: 14, accentColor: '#38bdf8', cursor: 'pointer', flexShrink: 0 }}
                                             />
-                                            <span style={{ fontSize: '0.75rem', color: '#f8fafc', fontWeight: 500 }}>{auId}</span>
-                                        </label>
+                                            <label htmlFor={chkId} style={{ fontSize: '0.65rem', color: '#94a3b8', cursor: 'pointer', margin: 0, flexShrink: 0, userSelect: 'none' }}>
+                                                All
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={() => auFileIds.length && onOpenRecoveryForFileIds?.(auFileIds)}
+                                                disabled={!auFileIds.length}
+                                                title="Open Baseline Drift & Recovery (Drift Map) for this AU — captures in chronological order"
+                                                style={{
+                                                    flex: 1,
+                                                    minWidth: 0,
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    padding: '2px 2px',
+                                                    cursor: auFileIds.length ? 'pointer' : 'not-allowed',
+                                                    fontSize: '0.75rem',
+                                                    color: '#f8fafc',
+                                                    fontWeight: 600,
+                                                    textAlign: 'left',
+                                                }}
+                                            >
+                                                {auId}
+                                            </button>
+                                        </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <span style={{ fontSize: '0.65rem', color: '#94a3b8' }} title="Number of workspace files for this AU">
                                                 ({auFiles.length})
@@ -1024,6 +1099,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                             }
                                                         }} title="Select all files in folder for analysis" style={{ margin: 0, width: 14, height: 14, cursor: 'pointer', accentColor: '#38bdf8' }} />
                                                     )}
+                                                    {folderFiles.length > 0 && onOpenRecoveryForFileIds ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                void onOpenRecoveryForFileIds(folderFileIds);
+                                                            }}
+                                                            title="Open Drift Map for all files in this folder (chronological order)"
+                                                            style={{
+                                                                background: 'rgba(245, 158, 11, 0.12)',
+                                                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                                                borderRadius: 6,
+                                                                cursor: 'pointer',
+                                                                padding: '3px 5px',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                            }}
+                                                        >
+                                                            <Activity size={14} color="#f59e0b" />
+                                                        </button>
+                                                    ) : null}
                                                     <button onClick={() => handleUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Files"><FileText size={14} color="#94a3b8" /></button>
                                                     <button onClick={() => handleFolderUploadClick(folder.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 1 }} title="Upload Folder Content"><UploadCloud size={14} color="#94a3b8" /></button>
                                                     {folderFiles.length > 0 && (
@@ -1104,6 +1201,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                             }
                                                         }} title="Select all DataFiles for analysis" style={{ margin: 0, width: 14, height: 14, cursor: 'pointer', accentColor: '#38bdf8' }} />
                                                     )}
+                                                    {allDataFiles.length > 0 && onOpenRecoveryForFileIds ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                void onOpenRecoveryForFileIds(rootFileIds);
+                                                            }}
+                                                            title="Open Drift Map for all DataFiles (chronological order)"
+                                                            style={{
+                                                                background: 'rgba(245, 158, 11, 0.12)',
+                                                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                                                borderRadius: 6,
+                                                                cursor: 'pointer',
+                                                                padding: '3px 5px',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                            }}
+                                                        >
+                                                            <Activity size={14} color="#f59e0b" />
+                                                        </button>
+                                                    ) : null}
                                                     {allDataFiles.length > 0 && (
                                                         <button
                                                             type="button"

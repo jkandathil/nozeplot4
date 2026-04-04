@@ -578,7 +578,45 @@ export async function readSiAcPortUtf8Until(port, options) {
         clearInterval(interval);
         readerSlot.current = null;
         if (registerForCancelRef) registerForCancelRef.current = null;
+        // Multi-AU: if anything threw before the inner per-reader finally ran, clear dangling refs and locks.
+        if (registerInMultiListRef?.current?.length) {
+            const stale = [...registerInMultiListRef.current];
+            registerInMultiListRef.current.length = 0;
+            for (const r of stale) {
+                try {
+                    await r.cancel();
+                } catch {
+                    /* ignore */
+                }
+                try {
+                    r.releaseLock();
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
     }
 
     return { bytesIn };
+}
+
+/**
+ * Best-effort close for specific keys in a port Map. Ignores errors.
+ * Call only after readers are released, otherwise close() may reject (readable locked).
+ * @param {Map<string, SerialPort>} portMap
+ * @param {string[]} keys
+ */
+export async function closeSerialPortsForKeys(portMap, keys) {
+    if (!portMap || !keys?.length) return;
+    const t = getSerialPlatformTiming();
+    for (const key of keys) {
+        const p = portMap.get(key);
+        if (!p) continue;
+        try {
+            await p.close();
+        } catch {
+            /* ignore */
+        }
+    }
+    await delay(t.afterPortCloseMs);
 }

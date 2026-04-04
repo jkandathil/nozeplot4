@@ -25,14 +25,18 @@ export function describePartialSerialBuffer(s, maxLen = 100) {
  */
 export function extractAuSerialNumberFromParsedJson(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
-    const top = obj.sn ?? obj.SN ?? obj.serial ?? obj.id ?? obj.ID ?? obj.AU_ID ?? obj.device_id;
+    let root = obj;
+    if (obj.jsonrpc != null && obj.result != null && typeof obj.result === 'object' && !Array.isArray(obj.result)) {
+        root = obj.result;
+    }
+    const top = root.sn ?? root.SN ?? root.serial ?? root.id ?? root.ID ?? root.AU_ID ?? root.device_id;
     if (top != null) {
         const s = String(top).trim();
         if (s) return s;
     }
-    const meth = obj.method != null ? String(obj.method).toUpperCase() : '';
-    if (meth === 'TELEMETRY' && obj.result && typeof obj.result === 'object' && !Array.isArray(obj.result)) {
-        const r = obj.result.sn ?? obj.result.SN ?? obj.result.id ?? obj.result.ID ?? obj.result.AU_ID;
+    const meth = root.method != null ? String(root.method).toUpperCase() : '';
+    if (meth === 'TELEMETRY' && root.result && typeof root.result === 'object' && !Array.isArray(root.result)) {
+        const r = root.result.sn ?? root.result.SN ?? root.result.id ?? root.result.ID ?? root.result.AU_ID;
         if (r != null) {
             const s = String(r).trim();
             if (s) return s;
@@ -42,20 +46,50 @@ export function extractAuSerialNumberFromParsedJson(obj) {
 }
 
 /**
+ * SiAC64 UART often mixes Zephyr shell (CSI color, `ASAU:…>` prompts), CRLF, and JSON.
+ * Normalize so brace scanning is stable across chunks.
+ * @param {string} s
+ * @returns {string}
+ */
+export function normalizeCaptureSerialText(s) {
+    let t = String(s);
+    t = t.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // CSI sequences: ESC [ … final byte (common Zephyr / shell coloring, cursor moves)
+    t = t.replace(/\u001b\[[0-9;?]*[0-9A-Za-z]/g, '');
+    return t;
+}
+
+/**
+ * Index of `{` that starts the next top-level JSON object, or -1.
+ * Prefers boundaries after newline, start of buffer, or `}` (back-to-back `}{` frames).
+ * Falls back to the first `{` in the remainder so prompts like `> {"code"` still parse.
+ * @param {string} buffer normalized
+ * @param {number} i
+ */
+export function findNextJsonObjectStart(buffer, i) {
+    const searchBuf = buffer.slice(i);
+    const strict = searchBuf.match(/(?:^|[\n]+|\})\s*\{/);
+    if (strict) {
+        return i + strict.index + strict[0].length - 1;
+    }
+    const k = searchBuf.indexOf('{');
+    return k < 0 ? -1 : i + k;
+}
+
+/**
  * True if `buffer` contains a `{` starting an object whose braces are not yet balanced
  * (string-aware). Used to extend serial reads briefly when a large SiAC JSON frame is split
  * across the capture end boundary.
  */
 export function hasIncompleteLeadingJsonObject(buffer) {
-    const b = String(buffer);
-    const match = b.match(/(?:^|\n)\s*\{/);
-    if (!match) return false;
-    const start = match.index + match[0].length - 1;
+    const b = normalizeCaptureSerialText(String(buffer));
+    const start = findNextJsonObjectStart(b, 0);
+    if (start < 0) return false;
     let depth = 0;
     let inString = false;
     let escape = false;
-    for (let i = start; i < b.length; i++) {
-        const c = b[i];
+    for (let idx = start; idx < b.length; idx++) {
+        const c = b[idx];
         if (escape) {
             escape = false;
             continue;
@@ -78,17 +112,19 @@ export function hasIncompleteLeadingJsonObject(buffer) {
     return depth > 0;
 }
 
+/** SiAC64 TELEMETRY frames are a few KB; larger “open” spans are usually a false `{` or UART junk. */
+const DRAIN_INCOMPLETE_RESYNC_BYTES = 96 * 1024;
+
 export function drainJsonObjectsFromBuffer(buffer) {
+    const b = normalizeCaptureSerialText(String(buffer));
     const chunks = [];
     let i = 0;
 
-    while (i < buffer.length) {
-        const searchBuf = buffer.slice(i);
-        const match = searchBuf.match(/(?:^|\n)\s*\{/);
-        if (!match) {
-            return { chunks, rest: buffer.slice(i) };
+    while (i < b.length) {
+        const start = findNextJsonObjectStart(b, i);
+        if (start < 0) {
+            return { chunks, rest: b.slice(i) };
         }
-        const start = i + match.index + match[0].length - 1;
 
         let depth = 0;
         let inString = false;
@@ -96,8 +132,8 @@ export function drainJsonObjectsFromBuffer(buffer) {
         let j = start;
         let closed = false;
 
-        for (; j < buffer.length; j++) {
-            const c = buffer[j];
+        for (; j < b.length; j++) {
+            const c = b[j];
             if (escape) {
                 escape = false;
                 continue;
@@ -122,7 +158,7 @@ export function drainJsonObjectsFromBuffer(buffer) {
             } else if (c === '}') {
                 depth--;
                 if (depth === 0) {
-                    chunks.push(buffer.slice(start, j + 1));
+                    chunks.push(b.slice(start, j + 1));
                     i = j + 1;
                     closed = true;
                     break;
@@ -131,11 +167,58 @@ export function drainJsonObjectsFromBuffer(buffer) {
         }
 
         if (!closed) {
-            return { chunks, rest: buffer.slice(start) };
+            // Long captures: a bogus `{` (shell/log) can leave us “inside” an object for 100k+ bytes and
+            // hide every real TELEMETRY frame. Only resync when this pass emitted no complete objects yet.
+            if (
+                chunks.length === 0 &&
+                b.length - start >= DRAIN_INCOMPLETE_RESYNC_BYTES
+            ) {
+                const next = findNextJsonObjectStart(b, start + 1);
+                if (next > start) {
+                    i = next;
+                    continue;
+                }
+                i = start + 1;
+                continue;
+            }
+            return { chunks, rest: b.slice(start) };
         }
     }
 
-    return { chunks, rest: buffer.slice(i) };
+    return { chunks, rest: b.slice(i) };
+}
+
+/** Collect scalar leaf keys from nested objects (mux groups, etc.). Arrays: recurse into object elements only. */
+function collectTelemetryScalarLeaves(o, maxDepth, out, depth = 0) {
+    if (o == null || typeof o !== 'object' || depth > maxDepth) return;
+    if (Array.isArray(o)) {
+        for (const el of o) {
+            if (el != null && typeof el === 'object') collectTelemetryScalarLeaves(el, maxDepth, out, depth + 1);
+        }
+        return;
+    }
+    for (const [k, v] of Object.entries(o)) {
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+            collectTelemetryScalarLeaves(v, maxDepth, out, depth + 1);
+        } else {
+            out[k] = v;
+        }
+    }
+}
+
+/**
+ * Keys we persist from SiAC64 TELEMETRY `result` (Telemetry.md).
+ * Includes `includeRawValues` raw ADC keys (RCH, RRF, REF) and alternate `ch0`…`ch15` shape from Notes.
+ */
+function isSiAc64TelemetrySensorKey(up) {
+    if (/^[A-H][1-8]$/.test(up)) return true;
+    if (/^CH\d+$/.test(up)) return true;
+    if (/^RCH\d*$/.test(up) || /^RRF\d*$/.test(up) || /^REF\d*$/.test(up)) return true;
+    return (
+        /^(ASELT|BT[1-2]|DPP0|DPT0|DPSN|DPPID|PZTFR0|PZCFR0|PZEFR0|PZVMV0|PZCDV0|PZEN0|PZDM0|PZCAL0|AQT0|AQH0|AQP0|AQGR0|AQAH0|AQBSTAT|AQBTS|AQBVAL|AQSENS|AQSID|TRHT0|TRHH0|TRHSN|SYSUT|SYSHF|SYSHA|SYSCL|SYSRC)$/.test(
+            up
+        )
+    );
 }
 
 /**
@@ -143,6 +226,8 @@ export function drainJsonObjectsFromBuffer(buffer) {
  *
  * Envelope: `code`, `message`, `sn`, `method`, `format`, `version`, `frequency`, `result` (Telemetry.md § example).
  * `result` is a flat map: `A1`…`H8`, `ASELT`, `BT1`, pump keys (`PZTFR0`, …), `DPP0`, `AQ*`, `SYS*`, etc.
+ * With `includeRawValues:1`, firmware may send **only** `RCH*`, `RRF*`, `REF*` (Telemetry.md § Additional Options).
+ * JSON-RPC may wrap the envelope as `{ "jsonrpc":"2.0", "result": { ...telemetry... } }`.
  * Firmware may emit unquoted `nan` in JSON; we sanitize before parse.
  */
 export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
@@ -161,42 +246,52 @@ export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
     }
     if (!obj || typeof obj !== 'object') return null;
 
-    const snRaw = obj.sn ?? obj.SN ?? obj.id ?? obj.ID ?? obj.AU_ID ?? obj.device_id;
+    let payload = obj;
+    if (
+        obj.jsonrpc != null &&
+        obj.result != null &&
+        typeof obj.result === 'object' &&
+        !Array.isArray(obj.result)
+    ) {
+        payload = obj.result;
+    }
+
+    const snRaw =
+        payload.sn ?? payload.SN ?? payload.id ?? payload.ID ?? payload.AU_ID ?? payload.device_id;
     const row = {
         timestamp: timestampIso,
         sn: snRaw != null ? String(snRaw) : '',
     };
 
-    // SiAC64: sensors A1..H8 can be in 'result' (standard) or at the top level
-    const res = obj.result || obj;
-    if (res && typeof res === 'object' && !Array.isArray(res)) {
-        for (const [k, v] of Object.entries(res)) {
-            const up = k.toUpperCase();
-            // Match A1..H8, pump flow, env sensors, and system stats
-            const isSen = /^[A-H][1-8]$/.test(up) ||
-                        /^(ASELT|BT[1-2]|DPP0|DPT0|DPSN|DPPID|PZTFR0|PZCFR0|PZEFR0|PZVMV0|PZCDV0|PZEN0|PZDM0|PZCAL0|AQT0|AQH0|AQP0|AQGR0|AQAH0|AQBSTAT|AQBTS|AQBVAL|AQSENS|AQSID|TRHT0|TRHH0|TRHSN|SYSUT|SYSHF|SYSHA|SYSCL|SYSRC)$/.test(up);
+    let block = payload.result;
+    if (block == null || typeof block !== 'object' || Array.isArray(block)) {
+        block = payload;
+    }
 
-            if (isSen) {
-                if (v === null || v === undefined) {
-                    row[k] = '';
-                } else if (typeof v === 'string') {
-                    const n = parseFloat(v);
-                    row[k] = isNaN(n) ? v : n;
-                } else {
-                    row[k] = v;
-                }
-            }
+    const leaves = {};
+    collectTelemetryScalarLeaves(block, 6, leaves);
+
+    for (const [k, v] of Object.entries(leaves)) {
+        const up = k.toUpperCase();
+        if (!isSiAc64TelemetrySensorKey(up)) continue;
+        if (v === null || v === undefined) {
+            row[k] = '';
+        } else if (typeof v === 'string') {
+            const n = parseFloat(v);
+            row[k] = Number.isNaN(n) ? v : n;
+        } else {
+            row[k] = v;
         }
     }
 
-    // Capture other JSON-RPC metadata
-    if (obj.code !== undefined && obj.code !== null) row.telemetry_code = obj.code;
-    if (obj.message != null) row.telemetry_message = String(obj.message);
-    if (obj.method != null) row.telemetry_method = String(obj.method);
-    if (obj.format != null) row.telemetry_format = String(obj.format);
-    if (obj.version !== undefined && obj.version !== null) row.telemetry_version = obj.version;
-    if (obj.frequency != null) {
-        const f = Number(obj.frequency);
+    // Capture other JSON-RPC metadata from the telemetry envelope
+    if (payload.code !== undefined && payload.code !== null) row.telemetry_code = payload.code;
+    if (payload.message != null) row.telemetry_message = String(payload.message);
+    if (payload.method != null) row.telemetry_method = String(payload.method);
+    if (payload.format != null) row.telemetry_format = String(payload.format);
+    if (payload.version !== undefined && payload.version !== null) row.telemetry_version = payload.version;
+    if (payload.frequency != null) {
+        const f = Number(payload.frequency);
         if (Number.isFinite(f)) row.telemetry_frequency_hz = f;
     }
 
