@@ -9,10 +9,6 @@ const echoBuffer = `> rpc send "{\\"method\\":\\"TELEMETRY\\",\\"params\\":{\\"p
 }
 `;
 
-const match = echoBuffer.match(/(?:^|\n)\s*\{/);
-if (match) {
-    const start = match.index + match[0].length - 1;
-    console.log("Found { at index:", start, "char:", echoBuffer[start]);
-} else {
-    console.log("No match");
-}
+const res = drainJsonObjectsFromBuffer(echoBuffer);
+console.log("Chunks:", res.chunks);
+console.log("Rest:", res.rest);
