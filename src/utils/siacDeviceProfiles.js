@@ -48,8 +48,9 @@ export function extractAuSerialNumberFromParsedJson(obj) {
  */
 export function hasIncompleteLeadingJsonObject(buffer) {
     const b = String(buffer);
-    const start = b.indexOf('{');
-    if (start < 0) return false;
+    const match = b.match(/(?:^|\n)\s*\{/);
+    if (!match) return false;
+    const start = match.index + match[0].length - 1;
     let depth = 0;
     let inString = false;
     let escape = false;
@@ -82,10 +83,12 @@ export function drainJsonObjectsFromBuffer(buffer) {
     let i = 0;
 
     while (i < buffer.length) {
-        const start = buffer.indexOf('{', i);
-        if (start < 0) {
+        const searchBuf = buffer.slice(i);
+        const match = searchBuf.match(/(?:^|\n)\s*\{/);
+        if (!match) {
             return { chunks, rest: buffer.slice(i) };
         }
+        const start = i + match.index + match[0].length - 1;
 
         let depth = 0;
         let inString = false;
@@ -104,15 +107,19 @@ export function drainJsonObjectsFromBuffer(buffer) {
                     escape = true;
                     continue;
                 }
-                if (c === '"') inString = false;
+                if (c === '"') {
+                    inString = false;
+                }
                 continue;
             }
             if (c === '"') {
                 inString = true;
                 continue;
             }
-            if (c === '{') depth++;
-            else if (c === '}') {
+
+            if (c === '{') {
+                depth++;
+            } else if (c === '}') {
                 depth--;
                 if (depth === 0) {
                     chunks.push(buffer.slice(start, j + 1));
@@ -153,30 +160,36 @@ export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
         return null;
     }
     if (!obj || typeof obj !== 'object') return null;
-    const meth = obj.method != null ? String(obj.method).toUpperCase() : '';
-    if (meth !== 'TELEMETRY') return null;
-    const res = obj.result;
-    if (!res || typeof res !== 'object' || Array.isArray(res)) return null;
 
-    const snRaw = obj.sn ?? obj.SN ?? res.sn;
+    const snRaw = obj.sn ?? obj.SN ?? obj.id ?? obj.ID ?? obj.AU_ID ?? obj.device_id;
     const row = {
         timestamp: timestampIso,
         sn: snRaw != null ? String(snRaw) : '',
     };
 
-    for (const [k, v] of Object.entries(res)) {
-        if (v === null || v === undefined) {
-            row[k] = '';
-            continue;
-        }
-        if (typeof v === 'string') {
-            const n = parseFloat(v);
-            row[k] = isNaN(n) ? v : n;
-        } else {
-            row[k] = v;
+    // SiAC64: sensors A1..H8 can be in 'result' (standard) or at the top level
+    const res = obj.result || obj;
+    if (res && typeof res === 'object' && !Array.isArray(res)) {
+        for (const [k, v] of Object.entries(res)) {
+            const up = k.toUpperCase();
+            // Match A1..H8, pump flow, env sensors, and system stats
+            const isSen = /^[A-H][1-8]$/.test(up) ||
+                        /^(ASELT|BT[1-2]|DPP0|DPT0|DPSN|DPPID|PZTFR0|PZCFR0|PZEFR0|PZVMV0|PZCDV0|PZEN0|PZDM0|PZCAL0|AQT0|AQH0|AQP0|AQGR0|AQAH0|AQBSTAT|AQBTS|AQBVAL|AQSENS|AQSID|TRHT0|TRHH0|TRHSN|SYSUT|SYSHF|SYSHA|SYSCL|SYSRC)$/.test(up);
+
+            if (isSen) {
+                if (v === null || v === undefined) {
+                    row[k] = '';
+                } else if (typeof v === 'string') {
+                    const n = parseFloat(v);
+                    row[k] = isNaN(n) ? v : n;
+                } else {
+                    row[k] = v;
+                }
+            }
         }
     }
 
+    // Capture other JSON-RPC metadata
     if (obj.code !== undefined && obj.code !== null) row.telemetry_code = obj.code;
     if (obj.message != null) row.telemetry_message = String(obj.message);
     if (obj.method != null) row.telemetry_method = String(obj.method);
@@ -261,7 +274,7 @@ export function normalizeCaptureRows(rows) {
     for (const r of rows) {
         Object.keys(r).forEach((k) => keys.add(k));
     }
-    const priority = ['timestamp', 'sn'];
+    const priority = ['timestamp', 'sn', 'Event'];
     const rest = [...keys]
         .filter((k) => !priority.includes(k))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -318,6 +331,7 @@ export const AU_DEVICE_PROFILES = {
         label: 'SiAC32-V2',
         baudRate: 115200,
         parseLine: parseSiac32V2Line,
+        isFormatCompatible: (obj) => obj && Array.isArray(obj.t),
     },
     SIAC32_V3: {
         id: 'SiAC32-V3',
@@ -326,6 +340,7 @@ export const AU_DEVICE_PROFILES = {
         disabled: true,
         hint: 'Different frame format — support coming later.',
         parseLine: null,
+        isFormatCompatible: () => false,
     },
     /** SiAC64 v0.3.x mux-dev: USB shell `rpc send` + TELEMETRY JSON (A1–H8, pump, env). See Telemetry.md */
     SIAC64_V03_RPC: {
@@ -333,6 +348,7 @@ export const AU_DEVICE_PROFILES = {
         label: 'SiAC64 v0.3 (TELEMETRY RPC)',
         baudRate: 115200,
         parseLine: parseSiAc64RpcTelemetryLine,
+        isFormatCompatible: (obj) => obj && (obj.method != null || obj.result != null || obj.params != null),
         rpcShell: {
             probePayload: () => ({ method: 'TELEMETRY', params: { period: 1000, outputFormat: 0 } }),
             captureStartPayload: (ms) => ({ method: 'TELEMETRY', params: { period: ms, outputFormat: 0 } }),

@@ -1488,18 +1488,44 @@ const MLStudioPage = ({
                                                 <code>{'{name}_{version}_weights.json'}</code>, etc.
                                             </p>
                                         </div>
-                                        <div className="ml-fenose-train-actions">
-                                            <button
-                                                type="button"
-                                                className="btn-secondary ml-fenose-train-pill-btn"
-                                                onClick={() => setFenoseTrainSelectedIds(trainingCandidates.map((f) => f.id))}
-                                                disabled={fenoseTrainBusy || trainingCandidates.length === 0}
-                                            >
-                                                Select all
-                                            </button>
-                                            <button type="button" className="btn-secondary ml-fenose-train-pill-btn ml-fenose-train-pill-btn--muted" onClick={() => setFenoseTrainSelectedIds([])} disabled={fenoseTrainBusy}>
-                                                Clear
-                                            </button>
+                                        <div className="ml-fenose-train-actions" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary ml-fenose-train-pill-btn"
+                                                    onClick={() => setFenoseTrainSelectedIds(trainingCandidates.map((f) => f.id))}
+                                                    disabled={fenoseTrainBusy || trainingCandidates.length === 0}
+                                                >
+                                                    Select all
+                                                </button>
+                                                <button type="button" className="btn-secondary ml-fenose-train-pill-btn ml-fenose-train-pill-btn--muted" onClick={() => setFenoseTrainSelectedIds([])} disabled={fenoseTrainBusy}>
+                                                    Clear
+                                                </button>
+                                            </div>
+                                            {fenoseSynthAuOptions.length > 0 && (
+                                                <select
+                                                    className="text-input ml-fenose-input-full"
+                                                    defaultValue=""
+                                                    onChange={(e) => {
+                                                        const k = e.target.value;
+                                                        if (!k) return;
+                                                        const ids = trainingCandidates.filter(f => {
+                                                            const raw = parseFenoseDeviceIdFromFilename(f.name);
+                                                            const fKey = raw === 'UNKNOWN' ? FENOSE_SYNTH_UNKNOWN_KEY : String(raw).toUpperCase();
+                                                            return fKey === k;
+                                                        }).map(f => f.id);
+                                                        setFenoseTrainSelectedIds(ids);
+                                                        setFenoseModelName(k === FENOSE_SYNTH_UNKNOWN_KEY ? 'fenose_unknown' : `fenose_${k.toLowerCase()}`);
+                                                        e.target.value = '';
+                                                    }}
+                                                    disabled={fenoseTrainBusy}
+                                                >
+                                                    <option value="">Quick select specific AU…</option>
+                                                    {fenoseSynthAuOptions.map(o => (
+                                                        <option key={o.key} value={o.key}>{o.label} ({o.fileCount} files)</option>
+                                                    ))}
+                                                </select>
+                                            )}
                                         </div>
                                     </div>
                                 </div>

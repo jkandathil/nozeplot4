@@ -3,7 +3,7 @@ import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2, Pencil,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
-    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
@@ -25,7 +25,7 @@ function fileBelongsToFolder(file, folderId) {
     return String(file.folderId) === String(folderId);
 }
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, isCalculatorOpen, setIsCalculatorOpen, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, userName = "User", activePage = 'dashboard', onPageChange, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
@@ -523,26 +523,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <Blend size={14} /> Polymer–CB
                 </button>
                 <button
-                    onClick={() => setIsCalculatorOpen(!isCalculatorOpen)}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: '1px solid rgba(255,255,255,0.05)',
-                        cursor: 'pointer',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        background: isCalculatorOpen ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.02)',
-                        color: isCalculatorOpen ? '#10b981' : 'var(--text-muted)',
-                    }}
-                    title="Popup Calculator"
-                >
-                    <CalcIcon size={18} />
-                </button>
-                <button
                     onClick={() => onPageChange?.('mlStudio')}
                     style={{
                         display: 'flex',
@@ -561,6 +541,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="FeNOse ML Studio (inference & training)"
                 >
                     <Brain size={18} />
+                </button>
+                <button
+                    onClick={() => onPageChange?.('tsnePage')}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: activePage === 'tsnePage' ? '1px solid rgba(0,222,147,0.35)' : '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'tsnePage' ? 'rgba(0,222,147,0.12)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'tsnePage' ? '#00DE93' : 'var(--text-muted)',
+                        boxShadow: activePage === 'tsnePage' ? '0 0 10px rgba(0,222,147,0.15)' : 'none',
+                        transition: 'all 0.15s',
+                    }}
+                    title="t-SNE Concentration Explorer"
+                >
+                    <Atom size={16} />
                 </button>
             </div>
 

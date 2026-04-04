@@ -35,23 +35,74 @@ function webSerialSupported() {
 }
 
 export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
-    const [profileKey, setProfileKey] = useState('SIAC32_V2');
+    const [profileKey, setProfileKey] = useState('SIAC64_V03_RPC');
     const profile = getAuProfile(profileKey);
+    const [baudRate, setBaudRate] = useState(profile.baudRate);
+
     const serialOpenOpts = useMemo(
         () => ({
-            baudRate: profile.baudRate,
+            baudRate: baudRate,
             dataBits: 8,
             stopBits: 1,
             parity: 'none',
             flowControl: 'none',
         }),
-        [profile.baudRate]
+        [baudRate]
     );
     /** Avoid Windows `bufferSize` on long capture opens — can yield 0 bytes on some CDC stacks; scan still uses large buffer. */
     const captureOpenExtra = useMemo(() => ({ useLargeRxBuffer: false }), []);
-    /** String so the field can be cleared while editing; parsed when capture starts. */
-    const [durationSecStr, setDurationSecStr] = useState('60');
+    const [savedEvents, setSavedEvents] = useState(() => {
+        try {
+            const saved = localStorage.getItem('auSavedEvents');
+            if (saved) return JSON.parse(saved);
+        } catch { /* ignore */ }
+        return ['Baseline', 'FeNoWindow', 'FeNOMeasurement', 'Recovery'];
+    });
+    const [captureSequence, setCaptureSequence] = useState([
+        { id: 'initial-1', name: 'Baseline', durationStr: '60' }
+    ]);
+    const [newEventName, setNewEventName] = useState('');
+
+    const saveCustomEvent = () => {
+        const name = newEventName.trim();
+        if (!name) return;
+        if (!savedEvents.includes(name)) {
+            const up = [...savedEvents, name];
+            setSavedEvents(up);
+            localStorage.setItem('auSavedEvents', JSON.stringify(up));
+        }
+        setNewEventName('');
+    };
+    const removeCustomEvent = (nameToRemove) => {
+         const up = savedEvents.filter(name => name !== nameToRemove);
+         setSavedEvents(up);
+         localStorage.setItem('auSavedEvents', JSON.stringify(up));
+    };
+
+    const addSeqNode = () => {
+        setCaptureSequence(prev => [
+            ...prev,
+            { id: Date.now().toString(36) + Math.random().toString(36).slice(2), name: savedEvents[0] || 'Event', durationStr: '60' }
+        ]);
+    };
+    const removeSeqNode = (id) => {
+        setCaptureSequence(prev => prev.filter(n => n.id !== id));
+    };
+    const updateSeqNode = (id, field, val) => {
+        setCaptureSequence(prev => prev.map(n => n.id === id ? { ...n, [field]: val } : n));
+    };
+    
+    const getTotalDurationSec = () => {
+        let total = 0;
+        for (const node of captureSequence) {
+            const d = parseInt(node.durationStr, 10);
+            if (Number.isFinite(d)) total += d;
+        }
+        return total > 0 ? total : 60; // default to 60 if empty or 0
+    };
+
     /** SiAC64 RPC: TELEMETRY period in ms (device allows 10–1000; 0 = stop, used only on teardown). */
+
     /** SiAC64: TELEMETRY.params.period — default 1000 ms (once per second). */
     const [telemetryPeriodMsStr, setTelemetryPeriodMsStr] = useState('1000');
     /** SiAC64 pump: SET_PIEZO_PUMP setFlow (CCM); max from profile.pumpControl.maxCcm. */
@@ -85,6 +136,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const [captureSecsLeft, setCaptureSecsLeft] = useState(0);
     /** Multi-AU: true while opening ports before the timed collection window. */
     const [captureOpening, setCaptureOpening] = useState(false);
+    const [currentEventStatus, setCurrentEventStatus] = useState('');
 
     useEffect(() => {
         const valid = new Set(discovered.map((d) => d.key));
@@ -113,6 +165,19 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             const secsLeft = Math.max(0, Math.ceil((w.endMs - now) / 1000));
             setCaptureProgressPct(pct);
             setCaptureSecsLeft(secsLeft);
+
+            let currentEv = '';
+            if (w.schedule && w.schedule.length > 0) {
+                for (const step of w.schedule) {
+                    if (elapsed >= step.startOffsetMs && elapsed < step.startOffsetMs + step.durationMs) {
+                        const stepSecLeft = Math.max(0, Math.ceil((step.startOffsetMs + step.durationMs - elapsed) / 1000));
+                        currentEv = `${step.name} (${stepSecLeft}s left)`;
+                        break;
+                    }
+                }
+                if (!currentEv) currentEv = w.schedule[w.schedule.length - 1].name + ' (finishing…)';
+            }
+            setCurrentEventStatus(currentEv || 'Collecting…');
         };
         tick();
         const id = setInterval(tick, 120);
@@ -156,6 +221,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     }, [disconnectPort]);
 
     const fmtVidPid = (info) => {
+        if (!info) return 'VID — · PID —';
         const vid =
             info.usbVendorId != null ? `0x${info.usbVendorId.toString(16).padStart(4, '0')}` : '—';
         const pid =
@@ -230,14 +296,13 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const runDeviceScan = async () => {
         setError('');
         setSavedOk('');
+        setPortHint('');
         if (!webSerialSupported()) {
-            setError(
-                'Web Serial is not available. Use Chrome or Edge on HTTPS or localhost, and allow the port when prompted.'
-            );
+            setPortHint('Web Serial is not available. Use Chrome or Edge on HTTPS or localhost, and allow the port when prompted.');
             return;
         }
         if (profile.disabled || !profile.parseLine) {
-            setError('This device profile is not available yet.');
+            setPortHint('This device profile is not available yet.');
             return;
         }
         setScanning(true);
@@ -247,9 +312,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             if (ports.length === 0) {
                 setDiscovered([]);
                 portByKeyRef.current = new Map();
-                setError(
-                    'No USB serial devices are linked to this site yet. Use “Link USB device” once per cable (browser security), then scan again.'
-                );
+                setPortHint('No USB serial devices are linked to this site yet. Use “Link USB device” once per cable (browser security), then scan again.');
                 return;
             }
 
@@ -268,18 +331,31 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     port,
                     serialOpenOpts,
                     undefined,
-                    rpcProbe
+                    rpcProbe,
+                    profile.isFormatCompatible
                 );
-                rows.push({
-                    key,
-                    sn,
-                    vidPid,
-                    error: probeError,
-                });
+                
+                if (sn) {
+                    rows.push({
+                        key,
+                        sn,
+                        vidPid,
+                        error: probeError,
+                    });
+                }
             }
 
             portByKeyRef.current = map;
             setDiscovered(rows);
+
+            if (rows.length === 0) {
+                setPortHint(`No compatible ${profile.label} devices found. Ensure the correct hardware profile is selected and the unit is actively streaming.`);
+            }
+
+            // Auto-select if exactly one port is linked and not already connected
+            if (rows.length === 1 && !connected) {
+                selectDiscoveredDevice(rows[0]).catch(() => {});
+            }
         } catch (e) {
             setError(e?.message || 'Scan failed.');
         } finally {
@@ -391,8 +467,27 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             setError('This device profile is not supported yet.');
             return;
         }
-        const parsed = parseInt(durationSecStr, 10);
-        const sec = Math.max(1, Math.min(86400, Number.isFinite(parsed) ? parsed : 60));
+        
+        const sec = getTotalDurationSec();
+        const schedule = [];
+        let currentOffsetMs = 0;
+        for (const step of captureSequence) {
+            const d = parseInt(step.durationStr, 10);
+            if (!Number.isFinite(d) || d <= 0) continue;
+            schedule.push({ name: step.name, startOffsetMs: currentOffsetMs, durationMs: d * 1000 });
+            currentOffsetMs += d * 1000;
+        }
+
+        const getEventForOffset = (offsetMs) => {
+            if (schedule.length === 0) return '';
+            for (const step of schedule) {
+                if (offsetMs >= step.startOffsetMs && offsetMs < step.startOffsetMs + step.durationMs) {
+                    return step.name;
+                }
+            }
+            return schedule[schedule.length - 1].name;
+        };
+
         const parseLine = profile.parseLine;
 
         if (multiAuCapture) {
@@ -479,6 +574,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             try {
                                 const row = parseLine(jsonStr, ts);
                                 if (row && captureRowHasSensorValues(row)) {
+                                    const elapsedMs = captureProgressWindowRef.current ? Date.now() - captureProgressWindowRef.current.startMs : 0;
+                                    row.Event = getEventForOffset(elapsedMs);
                                     rows.push(row);
                                     bumpLines();
                                     if (rows.length === 1) {
@@ -580,8 +677,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     return;
                 }
 
-                const endAt = Date.now() + sec * 1000;
-                captureProgressWindowRef.current = { startMs: Date.now(), endMs: endAt };
+                console.info(`[Multi-AU] Capture stream loops active ... Ends precisely at:`, new Date(endAt).toISOString());
+                captureProgressWindowRef.current = { startMs: Date.now(), endMs: endAt, schedule };
                 setCaptureOpening(false);
 
                 const results = await Promise.all(
@@ -732,17 +829,21 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             }
             await serialDelay(tOpen.postCloseBeforeOpenMs);
             await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
-            await primeSerialPortForSiAcRead(port);
-
             if (profile.rpcShell) {
                 const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
-                await writeSiac64RpcLine(port, profile.rpcShell.captureStartPayload(periodMs));
+                const startPayloadRaw = profile.rpcShell.captureStartPayload;
+                const startPayload = typeof startPayloadRaw === 'function' ? startPayloadRaw(periodMs) : startPayloadRaw;
+                await writeSiac64RpcLine(port, startPayload);
                 await serialDelay(getSerialPlatformTiming().win ? 200 : 100);
             }
 
+            setConnected(true);
+            portRef.current = port;
+            await primeSerialPortForSiAcRead(port);
+
             /** Full `sec` seconds of reading start only after USB is open + primed (not before). */
-            const readEndAt = Date.now() + sec * 1000;
-            captureProgressWindowRef.current = { startMs: Date.now(), endMs: readEndAt };
+            console.info(`[Single-AU] Main capture loops running. Ends exactly at:`, new Date(readEndAt).toISOString());
+            captureProgressWindowRef.current = { startMs: Date.now(), endMs: readEndAt, schedule };
 
             const consumeBuffer = (isFinal) => {
                 const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
@@ -751,6 +852,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     try {
                         const row = parseLine(jsonStr, ts);
                         if (row && captureRowHasSensorValues(row)) {
+                            const elapsedMs = captureProgressWindowRef.current ? Date.now() - captureProgressWindowRef.current.startMs : 0;
+                            row.Event = getEventForOffset(elapsedMs);
                             rowsRef.current.push(row);
                             const n = rowsRef.current.length;
                             if (n === 1) {
@@ -826,16 +929,12 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 }
                 await serialDelay(50);
             }
-            try {
-                await port.close();
-            } catch {
-                /* ignore */
-            }
-            await serialDelay(t.afterPortCloseMs);
-            portRef.current = null;
-            setConnected(false);
+            // Keep the port open for post-capture manual commands/pump setting
+            portRef.current = port;
+            setConnected(true);
             setRecording(false);
-            setSelectedKey(null);
+            // We do NOT call port.close() here for single-AU, 
+            // allowing the user to 'connect and set flow rate' after capture ends.
         }
 
         const rawRows = rowsRef.current;
@@ -898,447 +997,253 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             </header>
             <div className="au-capture-body">
                 <div className="au-capture-card">
-                    <h3>Device</h3>
+                    <h3>Step 1: Connection</h3>
                     <div className="au-field">
-                        <label htmlFor="au-profile">Model</label>
-                        <select
-                            id="au-profile"
-                            value={profileKey}
-                            onChange={(e) => setProfileKey(e.target.value)}
-                            disabled={recording}
-                        >
-                            {Object.entries(AU_DEVICE_PROFILES).map(([key, p]) => (
-                                <option key={key} value={key} disabled={!!p.disabled}>
-                                    {p.label}
-                                    {p.disabled ? ' — coming later' : ''}
-                                </option>
-                            ))}
-                        </select>
-                        {profile.disabled && profile.hint ? <p className="au-hint">{profile.hint}</p> : null}
-                        {!profile.disabled ? (
-                            <p className="au-hint">
-                                <strong>SiAC64 v0.3 (TELEMETRY RPC)</strong> uses the same flow as SiAC32-V2: Link →
-                                Scan → connect → <strong>Start capture</strong> → CSV in workspace under the AU serial
-                                folder. Choose the profile that matches your firmware (JSON with <code>t[]</code> vs{' '}
-                                <code>method:&quot;TELEMETRY&quot;</code> + <code>result</code>).
-                            </p>
-                        ) : null}
+                        <label htmlFor="au-profile">Hardware Profile</label>
+                        <div className="au-model-baud-row">
+                            <select
+                                id="au-profile"
+                                value={profileKey}
+                                onChange={(e) => {
+                                    const k = e.target.value;
+                                    setProfileKey(k);
+                                    setBaudRate(AU_DEVICE_PROFILES[k].baudRate);
+                                }}
+                                disabled={recording}
+                            >
+                                {Object.entries(AU_DEVICE_PROFILES).map(([key, p]) => (
+                                    <option key={key} value={key} disabled={!!p.disabled}>
+                                        {p.label}
+                                        {p.disabled ? ' — coming later' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <label htmlFor="au-baud" className="sr-only">Baud Rate</label>
+                            <select
+                                id="au-baud"
+                                value={baudRate}
+                                onChange={(e) => setBaudRate(parseInt(e.target.value, 10))}
+                                disabled={recording}
+                                className="au-baud-select"
+                            >
+                                <option value={115200}>115200</option>
+                                <option value={921600}>921600</option>
+                                <option value={230400}>230400</option>
+                            </select>
+                        </div>
                     </div>
                     <div className="au-field">
-                        <label htmlFor="au-duration">Collection window (seconds)</label>
-                        <input
-                            id="au-duration"
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            autoComplete="off"
-                            value={durationSecStr}
-                            onChange={(e) => {
-                                const v = e.target.value;
-                                if (v === '' || /^\d+$/.test(v)) {
-                                    setDurationSecStr(v);
-                                }
-                            }}
-                            onBlur={() => {
-                                const n = parseInt(durationSecStr, 10);
-                                if (!Number.isFinite(n) || durationSecStr === '') {
-                                    setDurationSecStr('60');
-                                    return;
-                                }
-                                const clamped = Math.max(1, Math.min(86400, n));
-                                setDurationSecStr(String(clamped));
-                            }}
-                            disabled={recording}
-                        />
-                        <p className="au-hint">
-                            How long we read from the port after USB open + wake (not including that setup). Each saved
-                            row is one complete JSON object from the AU — big/slow frames produce fewer rows per minute
-                            than wall-clock seconds.
+                        <p className="au-status">
+                            {webSerialSupported() ? 'Web Serial API is available.' : 'Web Serial is not supported.'}
                         </p>
-                    </div>
-                    {profile.rpcShell ? (
-                        <>
-                            <div className="au-field">
-                                <label htmlFor="au-telemetry-period">Telemetry interval (ms)</label>
-                                <input
-                                    id="au-telemetry-period"
-                                    type="text"
-                                    inputMode="numeric"
-                                    pattern="[0-9]*"
-                                    autoComplete="off"
-                                    value={telemetryPeriodMsStr}
-                                    onChange={(e) => {
-                                        const v = e.target.value;
-                                        if (v === '' || /^\d+$/.test(v)) {
-                                            setTelemetryPeriodMsStr(v);
-                                        }
-                                    }}
-                                    onBlur={() => {
-                                        const n = parseInt(telemetryPeriodMsStr, 10);
-                                        if (!Number.isFinite(n) || telemetryPeriodMsStr === '') {
-                                            setTelemetryPeriodMsStr('1000');
-                                            return;
-                                        }
-                                        const c = clampTelemetryPeriodMs(n);
-                                        setTelemetryPeriodMsStr(String(c));
-                                    }}
-                                    disabled={recording}
-                                />
-                                <div className="au-telemetry-presets" role="group" aria-label="Telemetry interval presets">
-                                    <span className="au-telemetry-presets-label">Quick</span>
-                                    {[1000, 500, 250, 100, 50, 10].map((ms) => (
-                                        <button
-                                            key={ms}
-                                            type="button"
-                                            className="au-telemetry-preset-btn"
-                                            disabled={recording}
-                                            onClick={() => setTelemetryPeriodMsStr(String(ms))}
-                                        >
-                                            {ms === 1000 ? '1 s' : `${ms} ms`}
-                                        </button>
-                                    ))}
+                        <div className="au-btn-row">
+                            <button
+                                type="button"
+                                className="au-btn au-btn-secondary"
+                                onClick={linkNewUsbDevice}
+                                disabled={recording || scanning || !webSerialSupported() || profile.disabled}
+                            >
+                                <Plug size={16} /> Link USB device…
+                            </button>
+                            <button
+                                type="button"
+                                className="au-btn au-btn-secondary"
+                                onClick={runDeviceScan}
+                                disabled={recording || scanning || !webSerialSupported() || profile.disabled}
+                            >
+                                <ScanSearch size={16} /> {scanning ? 'Scanning…' : 'Scan for units'}
+                            </button>
+                        </div>
+                        {discovered.length > 0 ? (
+                            <div className="au-device-list">
+                                <div className="au-device-list-title">
+                                    {multiAuCapture ? 'Select AUs for parallel capture' : 'Select a port to connect'}
                                 </div>
-                                <p className="au-hint">
-                                    Default <strong>1000 ms</strong> (one sample per second). Sent as{' '}
-                                    <code>TELEMETRY.params.period</code>; device allows <strong>10–1000</strong> ms (
-                                    <code>Telemetry.md</code>). The app sends <code>period: 0</code> when capture ends.
-                                    Rows include <strong>A1–H8</strong> and pump/env keys (e.g. PZTFR0, PZCFR0).
-                                </p>
+                                <div className="au-device-list-items">
+                                {discovered.map((res) => {
+                                    const isSel = multiAuCapture ? selectedKeysForMulti.includes(res.key) : selectedKey === res.key;
+                                    const body = (
+                                        <>
+                                            <div className="au-device-row-main">
+                                                <div className="au-device-sn-line">
+                                                    {multiAuCapture && (
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSel}
+                                                            onChange={() => toggleMultiKey(res.key)}
+                                                            disabled={recording}
+                                                            className="au-multi-checkbox"
+                                                        />
+                                                    )}
+                                                    {res.sn ? (
+                                                        <div className="au-device-sn">
+                                                            {res.sn} <span className="au-device-port-muted">({res.key.split('-').pop()})</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="au-device-sn au-device-sn--muted">
+                                                            Hardware Port {res.key.split('-').pop()} (SN not read yet)
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </>
+                                    );
+
+                                    if (multiAuCapture) {
+                                        return (
+                                            <label key={res.key} className={`au-device-row au-device-row--multi${isSel ? ' au-device-row--checked' : ''}`}>
+                                                <div className="au-device-row-body">{body}</div>
+                                            </label>
+                                        );
+                                    }
+
+                                    return (
+                                        <button
+                                            key={res.key}
+                                            type="button"
+                                            className={`au-device-row${isSel ? ' au-device-row--selected' : ''}`}
+                                            onClick={() => selectDiscoveredDevice(res)}
+                                            disabled={connected || recording}
+                                        >
+                                            {body}
+                                        </button>
+                                    );
+                                })}
+                                </div>
                             </div>
-                            {profile.pumpControl ? (
-                                <div className="au-field">
-                                    <label htmlFor="au-flow-slider">Target flow (CCM)</label>
-                                    <div className="au-flow-slider-row">
-                                        <input
-                                            id="au-flow-slider"
-                                            type="range"
-                                            min={0}
-                                            max={pumpMaxCcm}
-                                            step={pumpSliderStep}
-                                            value={Math.min(flowTargetCcm, pumpMaxCcm)}
-                                            onChange={(e) =>
-                                                setFlowTargetCcm(
-                                                    clampTargetFlowCcm(Number(e.target.value), pumpMaxCcm)
-                                                )
-                                            }
-                                            disabled={
-                                                !connected || recording || pumpFlowBusy || profile.disabled
-                                            }
-                                            aria-valuemin={0}
-                                            aria-valuemax={pumpMaxCcm}
-                                            aria-valuenow={Math.min(flowTargetCcm, pumpMaxCcm)}
-                                        />
-                                        <div className="au-flow-value-wrap">
-                                            <input
-                                                id="au-flow-number"
-                                                type="number"
-                                                min={0}
-                                                max={pumpMaxCcm}
-                                                step={0.1}
-                                                value={flowTargetCcm}
-                                                onChange={(e) => {
-                                                    const n = parseFloat(e.target.value);
-                                                    if (Number.isFinite(n)) {
-                                                        setFlowTargetCcm(clampTargetFlowCcm(n, pumpMaxCcm));
-                                                    }
-                                                }}
-                                                disabled={
-                                                    !connected || recording || pumpFlowBusy || profile.disabled
-                                                }
-                                            />
-                                            <span className="au-flow-ccm-suffix">CCM</span>
-                                        </div>
-                                    </div>
-                                    <div className="au-btn-row au-pump-btn-row">
-                                        <button
-                                            type="button"
-                                            className="au-btn au-btn-primary"
-                                            onClick={() => applyPumpTargetFlow()}
-                                            disabled={
-                                                !connected ||
-                                                recording ||
-                                                pumpFlowBusy ||
-                                                profile.disabled
-                                            }
-                                        >
-                                            Apply flow (enable on)
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="au-btn au-btn-secondary"
-                                            onClick={() => applyPumpDisable()}
-                                            disabled={
-                                                !connected ||
-                                                recording ||
-                                                pumpFlowBusy ||
-                                                profile.disabled
-                                            }
-                                        >
-                                            Pump off
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="au-btn au-btn-secondary"
-                                            onClick={() => applyPumpQuery()}
-                                            disabled={
-                                                !connected ||
-                                                recording ||
-                                                pumpFlowBusy ||
-                                                profile.disabled
-                                            }
-                                            title='Bare SET_PIEZO_PUMP (no params), same as firmware shell'
-                                        >
-                                            Query pump
-                                        </button>
-                                    </div>
-                                    {pumpFlowMsg ? (
-                                        <p className="au-hint au-pump-flow-msg">{pumpFlowMsg}</p>
-                                    ) : null}
-                                    <p className="au-hint">
-                                        Uses device RPC{' '}
-                                        <code>SET_PIEZO_PUMP</code>: <strong>Apply flow</strong> sends{' '}
-                                        <code>setFlow</code> (CCM) and <code>enable: 1</code>; <strong>Pump off</strong>{' '}
-                                        sends <code>enable: 0</code>; <strong>Query pump</strong> sends the bare method.
-                                        Slider <strong>0–{pumpMaxCcm} CCM</strong> (adjust{' '}
-                                        <code>profile.pumpControl.maxCcm</code> if needed). Disabled while recording.
-                                    </p>
-                                </div>
-                            ) : null}
-                        </>
-                    ) : null}
+                        ) : null}
+                        {portHint ? <p className="au-hint au-port-hint" style={{ color: portHint.startsWith('No ') || portHint.includes('not available') ? '#fbbf24' : undefined }}>{portHint}</p> : null}
+                    </div>
+                    <label className="au-multi-toggle">
+                        <input type="checkbox" checked={multiAuCapture} onChange={(e) => setMultiAuCapture(e.target.checked)} disabled={recording || scanning || profile.disabled} />
+                        <span>Enable Multi-AU parallel capture</span>
+                    </label>
                 </div>
 
+                {profile.rpcShell ? (
+                    <div className="au-capture-card">
+                        <h3>Step 2: Settings</h3>
+                        {profile.pumpControl ? (
+                            <div className="au-field">
+                                <label htmlFor="au-flow-slider">Pump Flow (CCM)</label>
+                                <div className="au-flow-slider-row">
+                                    <input id="au-flow-slider" type="range" min={0} max={pumpMaxCcm} step={pumpSliderStep} value={Math.min(flowTargetCcm, pumpMaxCcm)} onChange={(e) => setFlowTargetCcm(clampTargetFlowCcm(Number(e.target.value), pumpMaxCcm))} disabled={!connected || recording || pumpFlowBusy || profile.disabled} />
+                                    <div className="au-flow-value-wrap">
+                                        <input id="au-flow-number" className="au-flow-number-input" type="text" value={flowTargetCcm} onChange={(e) => { const val = e.target.value; if (val === '') { setFlowTargetCcm(''); return; } const n = parseFloat(val); if (!isNaN(n)) { setFlowTargetCcm(clampTargetFlowCcm(n, pumpMaxCcm)); } }} onFocus={(e) => e.target.select()} onBlur={() => { if (flowTargetCcm === '') setFlowTargetCcm(0); }} disabled={!connected || recording || pumpFlowBusy || profile.disabled} />
+                                        <span className="au-flow-ccm-suffix">CCM</span>
+                                    </div>
+                                </div>
+                                <div className="au-btn-row">
+                                    <button type="button" className="au-btn au-btn-primary" onClick={() => applyPumpTargetFlow()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Apply Flow</button>
+                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpDisable()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Pump Off</button>
+                                    <button type="button" className="au-btn au-btn-secondary" onClick={() => applyPumpQuery()} disabled={!connected || recording || pumpFlowBusy || profile.disabled}>Query</button>
+                                </div>
+                                {pumpFlowMsg ? <p className="au-hint au-pump-flow-msg">{pumpFlowMsg}</p> : null}
+                            </div>
+                        ) : null}
+                        <div className="au-field" style={{ marginTop: '1.5rem' }}>
+                            <label htmlFor="au-telemetry-period">Telemetry Interval (ms)</label>
+                            <div className="au-telemetry-row">
+                                <input id="au-telemetry-period" type="text" value={telemetryPeriodMsStr} onChange={(e) => setTelemetryPeriodMsStr(e.target.value)} onFocus={(e) => e.target.select()} onBlur={() => { const n = parseInt(telemetryPeriodMsStr, 10); if (!Number.isFinite(n)) { setTelemetryPeriodMsStr('1000'); return; } setTelemetryPeriodMsStr(String(clampTelemetryPeriodMs(n))); }} disabled={recording} />
+                                <div className="au-telemetry-presets">
+                                    {[1000, 500, 250, 100].map((ms) => (
+                                        <button key={ms} type="button" className="au-telemetry-preset-btn" disabled={recording} onClick={() => setTelemetryPeriodMsStr(String(ms))}>{ms}ms</button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+
                 <div className="au-capture-card">
-                    <h3>Serial (Web Serial API)</h3>
-                    <p className="au-status">
-                        {webSerialSupported() ? (
-                            <>
-                                <strong>Link</strong> each USB cable once (browser picker), then <strong>Scan</strong> to
-                                list AUs. SiAC: <strong>115200</strong> 8N1. Click a row to connect one unit, or use{' '}
-                                <strong>multi-AU</strong> below to record several with one timer. While capturing, you can
-                                open the <strong>dashboard</strong>, <strong>Normalize</strong>, or other pages — collection
-                                keeps running; return here to see progress and results.
-                            </>
-                        ) : (
-                            <strong>This browser does not expose Web Serial.</strong>
-                        )}
-                    </p>
-                    <label className="au-multi-toggle">
-                        <input
-                            type="checkbox"
-                            checked={multiAuCapture}
-                            onChange={(e) => {
-                                const on = e.target.checked;
-                                if (on) disconnectPort();
-                                else setSelectedKeysForMulti([]);
-                                setMultiAuCapture(on);
-                            }}
-                            disabled={recording || scanning || profile.disabled}
-                        />
-                        <span>Multi-AU capture</span>
-                    </label>
-                    <div className="au-btn-row">
-                        <button
-                            type="button"
-                            className="au-btn au-btn-secondary"
-                            onClick={linkNewUsbDevice}
-                            disabled={recording || scanning || !webSerialSupported() || profile.disabled}
-                        >
-                            <Plug size={16} />
-                            Link USB device…
-                        </button>
-                        <button
-                            type="button"
-                            className="au-btn au-btn-secondary"
-                            onClick={runDeviceScan}
-                            disabled={recording || scanning || !webSerialSupported() || profile.disabled}
-                        >
-                            <ScanSearch size={16} />
-                            {scanning ? 'Scanning…' : 'Scan for aroma units'}
-                        </button>
-                        <button
+                    <h3>Step 3: Capture</h3>
+                    <div className="au-events-manager">
+                        <label>Collection Sequence</label>
+                        <div className="au-sequence-list">
+                            {captureSequence.map((seqNode, i) => (
+                                <div key={seqNode.id} className="au-seq-row">
+                                    <span className="au-seq-num">{i + 1}</span>
+                                    <select
+                                        className="au-seq-select"
+                                        value={seqNode.name}
+                                        onChange={(e) => updateSeqNode(seqNode.id, 'name', e.target.value)}
+                                        disabled={recording}
+                                    >
+                                        {savedEvents.map(ev => <option key={ev} value={ev}>{ev}</option>)}
+                                    </select>
+                                    <input
+                                        className="au-seq-dur"
+                                        type="text"
+                                        value={seqNode.durationStr}
+                                        onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) updateSeqNode(seqNode.id, 'durationStr', v); }}
+                                        onBlur={(e) => { const n = parseInt(e.target.value, 10); if (!Number.isFinite(n) || n <= 0) updateSeqNode(seqNode.id, 'durationStr', '1'); else updateSeqNode(seqNode.id, 'durationStr', String(n)); }}
+                                        disabled={recording}
+                                    />
+                                    <span className="au-seq-lbl">sec</span>
+                                    <button type="button" className="au-seq-del" onClick={() => removeSeqNode(seqNode.id)} disabled={recording || captureSequence.length === 1}>×</button>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="au-sequence-actions">
+                            <button type="button" className="au-btn au-btn-secondary au-btn-small" onClick={addSeqNode} disabled={recording}>+ Add Phase</button>
+                            <span className="au-seq-total">Total: {getTotalDurationSec()}s</span>
+                        </div>
+                        <div className="au-custom-event-add">
+                            <input
+                                type="text"
+                                placeholder="New custom event name…"
+                                value={newEventName}
+                                onChange={(e) => setNewEventName(e.target.value)}
+                                disabled={recording}
+                            />
+                            <button type="button" className="au-btn au-btn-primary au-btn-small" onClick={saveCustomEvent} disabled={recording || !newEventName.trim()}>Save Event</button>
+                        </div>
+                    </div>
+                    <div className="au-btn-row" style={{ marginTop: '1.5rem' }}>
+                         <button
                             type="button"
                             className="au-btn au-btn-primary"
                             onClick={startRecording}
-                            disabled={
-                                recording ||
-                                profile.disabled ||
-                                (multiAuCapture
-                                    ? selectedKeysForMulti.length === 0
-                                    : !connected)
-                            }
+                            disabled={recording || profile.disabled || (multiAuCapture ? selectedKeysForMulti.length === 0 : !connected)}
                         >
-                            <Usb size={16} />
-                            {multiAuCapture && selectedKeysForMulti.length > 0
-                                ? `Start capture (${selectedKeysForMulti.length} AUs)`
-                                : 'Start capture'}
+                            <Usb size={16} /> 
+                            {recording 
+                                ? 'Capturing…' 
+                                : multiAuCapture 
+                                    ? (selectedKeysForMulti.length === 0 ? 'Start Capture (Select AUs first)' : `Start Capture (${selectedKeysForMulti.length})`) 
+                                    : (!connected ? 'Start Capture (Connect step 1 above)' : 'Start Capture')
+                            }
                         </button>
                         {recording ? (
                             <button type="button" className="au-btn au-btn-danger" onClick={stopCapture}>
-                                <Square size={16} />
-                                Stop early
+                                <Square size={16} /> Stop Early
                             </button>
                         ) : null}
                     </div>
-                    {discovered.length > 0 ? (
-                        <div className="au-device-list" aria-label="Detected aroma units">
-                            <div className="au-device-list-header">
-                                <div className="au-device-list-title">
-                                    {multiAuCapture
-                                        ? 'Select AUs (checked = included in next capture)'
-                                        : 'Detected ports (click to connect)'}
-                                </div>
-                                {multiAuCapture ? (
-                                    <div className="au-device-list-actions">
-                                        <button
-                                            type="button"
-                                            className="au-link-btn"
-                                            onClick={() =>
-                                                setSelectedKeysForMulti(discovered.map((d) => d.key))
-                                            }
-                                            disabled={recording || scanning || profile.disabled}
-                                        >
-                                            Select all
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="au-link-btn"
-                                            onClick={() => setSelectedKeysForMulti([])}
-                                            disabled={
-                                                recording ||
-                                                scanning ||
-                                                profile.disabled ||
-                                                selectedKeysForMulti.length === 0
-                                            }
-                                        >
-                                            Clear
-                                        </button>
-                                    </div>
-                                ) : null}
-                            </div>
-                            {discovered.map((d) => {
-                                const checked = selectedKeysForMulti.includes(d.key);
-                                const body = (
-                                    <>
-                                        <div className="au-device-row-main">
-                                            {d.sn ? (
-                                                <>
-                                                    <span className="au-device-sn">{d.sn}</span>
-                                                    <span className="au-device-sub">AU ID</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <span className="au-device-sn au-device-sn--muted">
-                                                        {d.error ? 'Port error' : 'AU ID not detected'}
-                                                    </span>
-                                                    <span className="au-device-sub">
-                                                        {d.error || 'Power the unit or check baud'}
-                                                    </span>
-                                                </>
-                                            )}
-                                        </div>
-                                        <div className="au-device-row-meta">{d.vidPid}</div>
-                                    </>
-                                );
-                                if (multiAuCapture) {
-                                    return (
-                                        <label
-                                            key={d.key}
-                                            className={`au-device-row au-device-row--multi${
-                                                checked ? ' au-device-row--checked' : ''
-                                            }`}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={checked}
-                                                onChange={() => toggleMultiKey(d.key)}
-                                                disabled={recording || scanning || profile.disabled}
-                                                aria-label={`Include ${d.sn || 'port'} in multi capture`}
-                                            />
-                                            <div className="au-device-row-body">{body}</div>
-                                        </label>
-                                    );
-                                }
-                                return (
-                                    <button
-                                        key={d.key}
-                                        type="button"
-                                        className={`au-device-row${
-                                            selectedKey === d.key ? ' au-device-row--selected' : ''
-                                        }`}
-                                        onClick={() => selectDiscoveredDevice(d)}
-                                        disabled={recording || scanning || profile.disabled}
-                                    >
-                                        {body}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    ) : null}
-                    {portHint ? (
-                        <p className="au-status" style={{ marginTop: 10 }}>
-                            <strong>Status:</strong> {connected ? 'Port open — ' : ''}
-                            {portHint}
-                        </p>
-                    ) : null}
-                    {error ? <p className="au-error">{error}</p> : null}
-                    {savedOk ? <p className="au-status" style={{ color: '#34d399' }}>{savedOk}</p> : null}
                 </div>
 
                 <div className="au-capture-card">
-                    <h3>Session</h3>
-                    <p className="au-status">
-                        <strong>Lines stored:</strong> {lineCount}
-                        {parseErrors > 0 ? (
-                            <>
-                                {' '}
-                                · <strong>Parse errors:</strong> {parseErrors}
-                            </>
-                        ) : null}
-                    </p>
+                    <h3>Session Results</h3>
+                    {savedOk ? <p className="au-status" style={{ color: '#34d399', marginBottom: '1rem' }}>{savedOk}</p> : null}
+                    {error ? <p className="au-error" style={{ marginBottom: '1rem' }}>{error}</p> : null}
+
                     {recording ? (
-                        <div
-                            className="au-collection-progress"
-                            role="progressbar"
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={captureOpening ? undefined : Math.round(captureProgressPct)}
-                            aria-label={captureOpening ? 'Opening serial ports' : 'Collection time remaining'}
-                        >
+                        <div className="au-collection-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={captureOpening ? undefined : Math.round(captureProgressPct)}>
                             <div className="au-collection-progress-top">
-                                <span className="au-collection-progress-title">
-                                    {captureOpening ? 'Opening ports…' : 'Collecting'}
-                                </span>
-                                {!captureOpening ? (
-                                    <span className="au-collection-progress-stats">
-                                        {Math.round(captureProgressPct)}% · {captureSecsLeft}s left
-                                    </span>
-                                ) : null}
+                                <span className="au-collection-progress-title">{captureOpening ? 'Opening ports…' : (currentEventStatus || 'Collecting…')}</span>
+                                {!captureOpening ? <span className="au-collection-progress-stats">{Math.round(captureProgressPct)}% · {captureSecsLeft}s total left</span> : null}
                             </div>
-                            <div
-                                className={`au-collection-progress-track${
-                                    captureOpening ? ' au-collection-progress-track--busy' : ''
-                                }`}
-                            >
-                                {captureOpening ? (
-                                    <div className="au-collection-progress-indeterminate" />
-                                ) : (
-                                    <div
-                                        className="au-collection-progress-fill"
-                                        style={{ width: `${captureProgressPct}%` }}
-                                    />
-                                )}
+                            <div className={`au-collection-progress-track${captureOpening ? ' au-collection-progress-track--busy' : ''}`}>
+                                {captureOpening ? <div className="au-collection-progress-indeterminate" /> : <div className="au-collection-progress-fill" style={{ width: `${captureProgressPct}%` }} />}
                             </div>
                         </div>
-                    ) : null}
-                    {recording ? (
-                        <p className="au-hint">
-                            {multiAuCapture
-                                ? 'Recording from all selected AUs in parallel with the same start and stop time (full window on each). Stop early closes every port.'
-                                : 'Recording… use Stop early or wait for the timer. The port closes after capture; scan again and select the same AU for another run.'}
+                    ) : (
+                        <p className="au-status" style={{ opacity: 0.7 }}>
+                            <strong>Lines stored:</strong> {lineCount}
+                            {parseErrors > 0 ? ` · Parse errors: ${parseErrors}` : null}
                         </p>
-                    ) : null}
-                    {lastPreview ? <div className="au-preview">{lastPreview}</div> : null}
+                    )}
+                    {lastPreview ? <div className="au-preview" style={{ marginTop: '1rem' }}>{lastPreview}</div> : null}
                     {lastParseHint ? <p className="au-error" style={{ marginTop: 8 }}>{lastParseHint}</p> : null}
                 </div>
             </div>

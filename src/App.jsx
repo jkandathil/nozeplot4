@@ -25,13 +25,13 @@ import CSVPlotterPage from './components/CSVPlotterPage';
 import GasDilutionMathPage from './components/GasDilutionMathPage';
 import PolymerCBMixPage from './components/PolymerCBMixPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
-import Calculator from './components/Calculator';
 import MLStudioPage from './components/MLStudioPage';
 import SeparabilityAnalysisPage from './components/SeparabilityAnalysisPage';
 import SensitivityAnalysisPage from './components/SensitivityAnalysisPage';
 import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 
 import FolderCompareAromaPage from './components/FolderCompareAromaPage';
+import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import { parseFile } from './utils/fileParser';
@@ -80,8 +80,7 @@ function App() {
   const [selectedFileId, setSelectedFileId] = useState(null);
   const [parsedData, setParsedData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [activePage, setActivePage] = useState('dashboard'); // 'dashboard' | 'normalize'
-  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+  const [activePage, setActivePage] = useState('dashboard');
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
@@ -1056,8 +1055,6 @@ function App() {
           userName={userName}
           activePage={activePage}
           onPageChange={setActivePage}
-          isCalculatorOpen={isCalculatorOpen}
-          setIsCalculatorOpen={setIsCalculatorOpen}
           onCreateFolder={handleCreateFolder}
           onDeleteFolder={handleDeleteFolder}
           onRenameFolder={handleRenameFolder}
@@ -1160,6 +1157,11 @@ function App() {
                     onUploadModelJsonToWorkspace={handleUploadModelJsonToWorkspace}
                     onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
                   />
+                ) : activePage === 'tsnePage' ? (
+                  <TSNEPage
+                    key="tsnePage"
+                    workspaceFiles={files}
+                  />
                 ) : !selectedFileId ? (
                   <EmptyState
                     key="empty"
@@ -1217,9 +1219,6 @@ function App() {
           <h2>Drop more files to add</h2>
         </div>
       )}
-
-      {/* Floating Calculator */}
-      <Calculator isOpen={isCalculatorOpen} onClose={() => setIsCalculatorOpen(false)} />
     </div>
   );
 }

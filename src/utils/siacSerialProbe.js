@@ -68,7 +68,7 @@ export function getSerialPlatformTiming() {
  * After port.open(), read raw bytes until a full SiAC JSON object appears and return obj.sn.
  * Releases the reader so capture can attach to port.readable again.
  */
-export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, externalAbortSignal) {
+export async function readAuSerialFromOpenPort(port, timeoutMs = 2000, externalAbortSignal = null, validateObjFn = null) {
     if (!port?.readable) return null;
 
     let reader;
@@ -119,6 +119,7 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
             for (const jsonStr of chunks) {
                 try {
                     const obj = JSON.parse(sanitizeSiacFirmwareJsonText(jsonStr));
+                    if (validateObjFn && !validateObjFn(obj)) continue;
                     const sn = extractAuSerialNumberFromParsedJson(obj);
                     if (sn) {
                         found = sn;
@@ -139,6 +140,10 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
                 try {
                     const clean = sanitizeSiacFirmwareJsonText(c);
                     const parsed = JSON.parse(clean);
+                    if (validateObjFn && !validateObjFn(parsed)) {
+                        console.debug(`[Scan] JSON payload exists but is incompatible with selected device profile:`, parsed);
+                        continue;
+                    }
                     const sn = extractAuSerialNumberFromParsedJson(parsed);
                     if (sn) {
                         console.info(`[Scan] Verified Serial Number: "${sn}"`);
@@ -177,7 +182,7 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 12000, external
  * Wall-clock fallback: abort read (releases reader); optionally port.close() if the read never completes.
  * @param {boolean} closePortOnBust - false on Windows first scan pass so a second read can run on the same open.
  */
-async function readAuSerialWithWatchdog(port, readTimeoutMs, bustAfterMs, closePortOnBust = true) {
+async function readAuSerialWithWatchdog(port, readTimeoutMs, bustAfterMs, closePortOnBust = true, validateObjFn = null) {
     const ac = new AbortController();
     let bustTimer;
     let settled = false;
@@ -191,7 +196,7 @@ async function readAuSerialWithWatchdog(port, readTimeoutMs, bustAfterMs, closeP
             }
             resolve(null);
         }, bustAfterMs);
-        readAuSerialFromOpenPort(port, readTimeoutMs, ac.signal)
+        readAuSerialFromOpenPort(port, readTimeoutMs, ac.signal, validateObjFn)
             .then((sn) => {
                 if (settled) return;
                 settled = true;
@@ -337,12 +342,11 @@ export async function openSerialPortForSiAc(port, baseOpenOpts, extra = {}) {
         }
     }
 }
-
 /**
  * Close if needed, open, probe for sn, always close. One port at a time.
  * @param {Record<string, unknown> | null} [rpcProbePayload] If set, sends `rpc send "…"` (SiAC64 shell) before reading.
  */
-export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProbePayload = null) {
+export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProbePayload = null, validateObjFn = null) {
     const t = getSerialPlatformTiming();
     const maxWaitMs = 3000;
     const readMs = Math.max(readTimeoutMs ?? t.scanReadTimeoutMs, maxWaitMs);
@@ -407,7 +411,7 @@ export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProb
         }
 
         const closeOnFirstBust = !t.win;
-        let sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+        let sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust, validateObjFn);
 
         /* SiAC64: first TELEMETRY can be slow or lost; resend RPC once before OS-specific retries. */
         if (!sn && rpcProbePayload && typeof rpcProbePayload === 'object') {
@@ -417,7 +421,7 @@ export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProb
                     postWriteDelayMs: 25,
                 });
                 await delay(t.win ? 520 : 400);
-                sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+                sn = await readAuSerialWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust, validateObjFn);
             } catch {
                 /* ignore */
             }
@@ -439,7 +443,7 @@ export async function scanProbeSerialPort(port, openOpts, readTimeoutMs, rpcProb
                 }
             }
             const secondMs = t.scanSecondReadMs;
-            sn = await readAuSerialWithWatchdog(port, secondMs, secondMs + 5000, true);
+            sn = await readAuSerialWithWatchdog(port, secondMs, secondMs + 5000, true, validateObjFn);
         }
 
         return { sn, error: null };
