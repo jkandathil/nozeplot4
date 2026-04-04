@@ -148,6 +148,18 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
     const [renderLimit, setRenderLimit] = useState(0);
     const pdfRef = useRef(null);
     const [isDownloading, setIsDownloading] = useState(false);
+    const [removeRecoveryEvents, setRemoveRecoveryEvents] = useState(
+        () => localStorage.getItem('aroma_removeRecoveryEvents') !== 'false'
+    );
+    const [filterUnknown, setFilterUnknown] = useState(
+        () => localStorage.getItem('aroma_filterUnknown') !== 'false'
+    );
+
+    // Persist filter flag changes back to localStorage so AromaAnalysisPage stays in sync
+    useEffect(() => {
+        localStorage.setItem('aroma_removeRecoveryEvents', removeRecoveryEvents.toString());
+        localStorage.setItem('aroma_filterUnknown', filterUnknown.toString());
+    }, [removeRecoveryEvents, filterUnknown]);
 
     const activeFolders = useMemo(() => {
         const rootFiles = files.filter(f => !f.folderId && !f.isFolder);
@@ -221,9 +233,8 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
                 const humCols = localStorage.getItem('aroma_humCols') || 'AQH0, TRHH0';
                 const filterWindow = parseInt(localStorage.getItem('aroma_filterWindow') || '5', 10);
                 const baselinePts = parseInt(localStorage.getItem('aroma_baselinePts') || '50', 10);
-                const removeRecoveryEvents = localStorage.getItem('aroma_removeRecoveryEvents') !== 'false';
+                // Use React state (not raw localStorage) so toggling checkboxes triggers re-run
                 const fenoTruncateSeconds = parseInt(localStorage.getItem('aroma_fenoTruncateSeconds') || '0', 10);
-                const filterUnknown = localStorage.getItem('aroma_filterUnknown') !== 'false';
 
                 const config = {
                     sensingElements: sElements,
@@ -305,7 +316,7 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
             isMounted = false;
             clearTimeout(t);
         };
-    }, [files, selectedFileId, compareFileIds, activeFolders]);
+    }, [files, selectedFileId, compareFileIds, activeFolders, removeRecoveryEvents, filterUnknown]);
 
     const successfullyProcessedFolders = (processedGrid && processedGrid.gridData)
         ? activeFolders.filter(f => processedGrid.gridData[f.id])
@@ -323,6 +334,26 @@ const FolderCompareAromaPage = ({ files, selectedFileId, compareFileIds = [], on
                         <h1 style={{ margin: 0, fontSize: '1.2rem', color: '#f8fafc', fontWeight: 600 }}>Multi AU Trials comparison</h1>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px' }}>
+                        {/* Filter checkboxes — toggling re-runs the pipeline automatically */}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem', color: '#94a3b8', userSelect: 'none' }} title="Remove Recovery Phase rows from each file before processing">
+                            <input
+                                type="checkbox"
+                                checked={removeRecoveryEvents}
+                                onChange={(e) => setRemoveRecoveryEvents(e.target.checked)}
+                                style={{ accentColor: '#38bdf8', cursor: 'pointer', width: 14, height: 14, margin: 0 }}
+                            />
+                            Remove Recovery
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.78rem', color: '#94a3b8', userSelect: 'none' }} title="Exclude files without a known concentration (ppb/ppm) label">
+                            <input
+                                type="checkbox"
+                                checked={filterUnknown}
+                                onChange={(e) => setFilterUnknown(e.target.checked)}
+                                style={{ accentColor: '#38bdf8', cursor: 'pointer', width: 14, height: 14, margin: 0 }}
+                            />
+                            No Unknowns
+                        </label>
+                        <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
                         <button
                             onClick={handleDownloadPdf}
                             disabled={isDownloading || !processedGrid}

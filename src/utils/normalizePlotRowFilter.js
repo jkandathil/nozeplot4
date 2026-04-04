@@ -1,8 +1,30 @@
-import {
-    normalizeEventValue,
-    keepRowWhenStrippingRecovery,
-    datasetHasRecoveryOffEvent,
-} from './recoveryEventFilter.js';
+import { normalizeEventValue } from './recoveryEventFilter.js';
+
+/**
+ * FeNO / SiAC runs: blocks to keep when trimming to measurement-relevant data (substring match on normalized event).
+ * Includes AmbientSamplingRFC and similar (ambientsampling prefix).
+ */
+export const FENO_MEASUREMENT_BLOCK_SUBSTRINGS = [
+    'breathsamplecollection',
+    'fenowindow',
+    'fenomeasurement',
+    'ambientsampling',
+];
+
+/** Unknown / cleaning / purge phases removed when "No unknowns" is enabled. */
+export function isUnknownOrCleaningPhaseNorm(eNorm) {
+    if (!eNorm) return false;
+    if (eNorm.includes('unknown')) return true;
+    if (
+        eNorm.includes('cleaning') ||
+        eNorm.includes('systemclean') ||
+        eNorm.includes('purge') ||
+        eNorm.includes('purging')
+    ) {
+        return true;
+    }
+    return false;
+}
 
 /** Event / phase / stage column — aligned with Dashboard + Normalize (stage matches FeNO-style exports). */
 export function findPlotEventColumn(sampleRow) {
@@ -20,6 +42,8 @@ export function findPlotEventColumn(sampleRow) {
                 l === 'state'
             ) {
                 score = 100;
+            } else if (l === 'eventlabel' || l === 'phase_name' || l === 'stagename') {
+                score = 98;
             } else if (
                 l === 'event' ||
                 l === 'events' ||
@@ -38,25 +62,12 @@ export function findPlotEventColumn(sampleRow) {
 }
 
 function shouldStripNonMeasurementRow(eNorm) {
-    if (!eNorm) return false;
-    if (eNorm.includes('unknown')) return true;
-    if (
-        eNorm.includes('cleaning') ||
-        eNorm.includes('systemclean') ||
-        eNorm.includes('purge') ||
-        eNorm.includes('purging')
-    ) {
-        return true;
-    }
-    return false;
+    return isUnknownOrCleaningPhaseNorm(eNorm);
 }
 
 const MEANINGFUL_SUBSTRINGS = [
-    'fenomeasurement',
-    'fenowindow',
+    ...FENO_MEASUREMENT_BLOCK_SUBSTRINGS,
     'breathsample',
-    'breathsamplecollection',
-    'ambientsampling',
     'ambient',
     'baseline',
     'reference',
@@ -64,6 +75,7 @@ const MEANINGFUL_SUBSTRINGS = [
     'flush',
     'rfc',
     'feno',
+    'ambientsamplingrfc',
 ];
 
 function rowHasMeaningfulPhase(eNorm) {
@@ -121,11 +133,9 @@ export function filterRowsForNormalizeChart(rows, options = {}) {
     const eventCol = findPlotEventColumn(rows[0]);
     if (!eventCol) return rows;
 
-    const fileHasRecoveryOff = datasetHasRecoveryOffEvent(rows, eventCol);
-
     return rows.filter((row) => {
         const eNorm = normalizeEventValue(row, eventCol);
-        if (removeRecovery && !keepRowWhenStrippingRecovery(eNorm, fileHasRecoveryOff)) return false;
+        if (removeRecovery && eNorm.includes('recovery')) return false;
         if (stripNonMeasurementStages && shouldStripNonMeasurementRow(eNorm)) return false;
         return true;
     });

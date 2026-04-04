@@ -6,7 +6,12 @@ import {
 import { RefreshCw, Play, Settings, Activity, LineChart as LineChartIcon, Maximize2, X, ZoomIn, ZoomOut, Download, Layers } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import './AromaAnalysisPage.css';
-import { isRecoveryOffEvent, shouldRemoveRecoveryBlock } from '../utils/recoveryEventFilter';
+import { shouldRemoveRecoveryBlock } from '../utils/recoveryEventFilter';
+import {
+    findPlotEventColumn,
+    FENO_MEASUREMENT_BLOCK_SUBSTRINGS,
+    isUnknownOrCleaningPhaseNorm,
+} from '../utils/normalizePlotRowFilter';
 import { extractConcentration } from '../utils/aromaAnalysisPipeline';
 
 /**
@@ -590,11 +595,19 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
 
                     // 1.5 ALAAC Smart Truncation: Delete Recovery events (so graph fills the area) & FeNO truncating
                     const originalData = [...fileData];
-                    if (removeRecoveryEvents || fenoTruncateSeconds > 0) {
-                        const eventCol = sampleKeys.find(col => {
-                            const l = col.toLowerCase();
-                            return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-                        });
+                    if (removeRecoveryEvents || fenoTruncateSeconds > 0 || filterUnknown) {
+                        const eventCol =
+                            findPlotEventColumn(fileData[0]) ||
+                            sampleKeys.find((col) => {
+                                const l = col.toLowerCase();
+                                return (
+                                    l === 'event_name' ||
+                                    l === 'phase' ||
+                                    l === 'mode' ||
+                                    l === 'state' ||
+                                    (l.includes('event') && !l.includes('reference'))
+                                );
+                            });
                         if (eventCol) {
                             const blocks = [];
                             let currentBlock = null;
@@ -611,26 +624,35 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                             if (currentBlock) blocks.push(currentBlock);
 
                             const rowsToRemove = new Set();
-                            const allowedPlots = ['breathsamplecollection', 'fenowindow', 'fenomeasurement'];
-                            const hasBreathEvents = blocks.some(b => allowedPlots.some(p => b.event.includes(p)));
-                            const fileHasRecoveryOff = blocks.some((b) => isRecoveryOffEvent(b.event));
+                            const allowedPlots = FENO_MEASUREMENT_BLOCK_SUBSTRINGS;
+                            const hasBreathEvents = blocks.some((b) =>
+                                allowedPlots.some((p) => b.event.includes(p))
+                            );
 
-                            blocks.forEach(b => {
+                            blocks.forEach((b) => {
                                 if (hasBreathEvents) {
-                                    const isAllowedPLOT = allowedPlots.some(p => b.event.includes(p));
+                                    const isAllowedPLOT = allowedPlots.some((p) => b.event.includes(p));
                                     if (!isAllowedPLOT && b.event !== '') {
                                         for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
-                                    } else if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
+                                    } else if (
+                                        fenoTruncateSeconds > 0 &&
+                                        (b.event.includes('feno') || b.event.includes('breath'))
+                                    ) {
                                         const allowedRows = fenoTruncateSeconds * 3;
-                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++)
+                                            rowsToRemove.add(i);
                                     }
                                 } else {
-                                    if (removeRecoveryEvents && shouldRemoveRecoveryBlock(b.event, fileHasRecoveryOff)) {
+                                    if (removeRecoveryEvents && shouldRemoveRecoveryBlock(b.event)) {
+                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                    }
+                                    if (filterUnknown && isUnknownOrCleaningPhaseNorm(b.event)) {
                                         for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
                                     }
                                     if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
                                         const allowedRows = fenoTruncateSeconds * 3;
-                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++) rowsToRemove.add(i);
+                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++)
+                                            rowsToRemove.add(i);
                                     }
                                 }
                             });
@@ -640,10 +662,18 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
 
                     // Plot visual boundaries for events (calculated AFTER truncation so X-axis matches)
                     let detectedEvents = [];
-                    const evCol = sampleKeys.find(col => {
-                        const l = col.toLowerCase();
-                        return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-                    });
+                    const evCol =
+                        findPlotEventColumn(fileData[0]) ||
+                        sampleKeys.find((col) => {
+                            const l = col.toLowerCase();
+                            return (
+                                l === 'event_name' ||
+                                l === 'phase' ||
+                                l === 'mode' ||
+                                l === 'state' ||
+                                (l.includes('event') && !l.includes('reference'))
+                            );
+                        });
                     if (evCol) {
                         let curEv = null;
                         fileData.forEach((r, idx) => {
@@ -681,10 +711,18 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                         rawCols.forEach(k => {
                             let baselineVals = [];
                             // Check if file has an event column and 'RFC' event
-                            const eventCol = Object.keys(originalData[0] || {}).find(col => {
-                                const l = col.toLowerCase();
-                                return l === 'event_name' || l === 'phase' || l === 'mode' || l === 'state' || (l.includes('event') && !l.includes('reference'));
-                            });
+                            const eventCol =
+                                findPlotEventColumn(originalData[0]) ||
+                                Object.keys(originalData[0] || {}).find((col) => {
+                                    const l = col.toLowerCase();
+                                    return (
+                                        l === 'event_name' ||
+                                        l === 'phase' ||
+                                        l === 'mode' ||
+                                        l === 'state' ||
+                                        (l.includes('event') && !l.includes('reference'))
+                                    );
+                                });
                             let rfcEventRows = [];
 
                             if (eventCol) {
@@ -788,16 +826,9 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                 let colorIdx = 0;
                 const colorMap = {};
 
-                const batchHasRecoveryOffRef = sequenceAverages.some((seq) => isRecoveryOffEvent(seq.str));
                 let refLines = [];
-                sequenceAverages.forEach(seq => {
-                    if (
-                        removeRecoveryEvents &&
-                        seq.str.includes('recovery') &&
-                        !(batchHasRecoveryOffRef && isRecoveryOffEvent(seq.str))
-                    ) {
-                        return;
-                    }
+                sequenceAverages.forEach((seq) => {
+                    if (removeRecoveryEvents && seq.str.includes('recovery')) return;
                     if (!colorMap[seq.label]) {
                         colorMap[seq.label] = uniqueColors[colorIdx % uniqueColors.length];
                         colorIdx++;

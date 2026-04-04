@@ -1,9 +1,6 @@
 /**
- * ALAAC-style recovery trimming: if the file contains explicit RecoveryOff markers, those
- * rows/blocks are kept; other events whose name includes "recovery" are removed.
- *
- * Recognized marker names (after normalizeEventValue): recoveryOff, Recovery_Off, Recovery-Off,
- * "Recovery Off", etc. → normalized forms like recoveryoff, recovery_off, recovery-off.
+ * Phase / event strings are normalized (lower + strip whitespace) for substring checks.
+ * RecoveryOff, Recovery, hardware recovery, etc. all normalize to strings containing "recovery".
  */
 
 export function normalizeEventValue(row, eventCol) {
@@ -26,23 +23,12 @@ export function datasetHasRecoveryOffEvent(rows, eventCol) {
     return rows.some((r) => isRecoveryOffEvent(normalizeEventValue(r, eventCol)));
 }
 
-/**
- * Dashboard / row filter: keep row when stripping recovery?
- * - No "recovery" in name → keep
- * - Has RecoveryOff marker and file also has at least one RecoveryOff anywhere → keep
- * - Otherwise "recovery" in name → drop
- */
-export function keepRowWhenStrippingRecovery(eNorm, fileHasRecoveryOff) {
-    if (!eNorm.includes('recovery')) return true;
-    if (fileHasRecoveryOff && isRecoveryOffEvent(eNorm)) return true;
-    return false;
+/** Keep row when "No recovery" is on: drop every recovery-tagged phase, including RecoveryOff. */
+export function keepRowWhenStrippingRecovery(eNorm) {
+    return !eNorm.includes('recovery');
 }
 
-/**
- * Pipeline block removal: remove entire block if it's recovery-like but not RecoveryOff when file has RecoveryOff events.
- */
-export function shouldRemoveRecoveryBlock(blockEventNorm, fileHasRecoveryOff) {
-    if (!blockEventNorm.includes('recovery')) return false;
-    if (fileHasRecoveryOff && isRecoveryOffEvent(blockEventNorm)) return false;
-    return true;
+/** Remove contiguous block when it is any recovery-related phase (including RecoveryOff). */
+export function shouldRemoveRecoveryBlock(blockEventNorm) {
+    return Boolean(blockEventNorm && blockEventNorm.includes('recovery'));
 }
