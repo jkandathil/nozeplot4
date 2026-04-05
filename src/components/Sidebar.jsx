@@ -3,7 +3,7 @@ import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2, Pencil,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
-    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal
 } from 'lucide-react';
 import './Sidebar.css';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
@@ -480,6 +480,27 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Capture SiAC / aroma unit over USB serial (Chrome)"
                 >
                     <Usb size={13} /> AU capture
+                </button>
+                <button
+                    onClick={() => onPageChange?.('serialMonitor')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: activePage === 'serialMonitor' ? 'rgba(56,189,248,0.15)' : 'transparent',
+                        color: activePage === 'serialMonitor' ? '#38bdf8' : 'var(--text-muted)',
+                    }}
+                    title="Read any USB serial device line-by-line (Web Serial)"
+                >
+                    <Terminal size={13} /> Serial
                 </button>
                 <button
                     onClick={() => onPageChange?.('manufacturing')}

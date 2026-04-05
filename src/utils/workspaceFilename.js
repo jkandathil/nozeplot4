@@ -32,6 +32,34 @@ export function isSiacSerialCaptureFileName(fileName) {
     return /^.+_\d{4}-\d{2}-\d{2}_\d{6}\.csv$/i.test(b);
 }
 
+/** In-app Serial monitor save (workspace serial_data/ or download). Distinct from SiAC AU capture names. */
+export function isSerialMonitorExportFileName(fileName) {
+    return /^serial-monitor-.+\.(csv|txt)$/i.test(fileBasename(fileName));
+}
+
+/** Tab/comma export shape: receive timestamp + field_1..field_N (even if the file was renamed). */
+export function looksLikeSerialMonitorExportData(data) {
+    if (!Array.isArray(data) || data.length === 0) return false;
+    const row = data[0];
+    if (!row || typeof row !== 'object') return false;
+    const keys = Object.keys(row);
+    const ts = keys.some((k) => String(k).toLowerCase() === 'timestamp_iso');
+    const fields = keys.some((k) => /^field_\d+$/i.test(String(k)));
+    const legacyLine = keys.some((k) => String(k).toLowerCase() === 'line');
+    return ts && (fields || legacyLine);
+}
+
+/** GEN3 AU capture rows (Precision-R1, s1…s32, temperature, humidity, sn). */
+export function looksLikeGen3AuCaptureData(data) {
+    if (!Array.isArray(data) || data.length === 0) return false;
+    const row = data[0];
+    if (!row || typeof row !== 'object') return false;
+    const keys = Object.keys(row);
+    const hasPrecision = keys.some((k) => String(k).replace(/\s+/g, '').toLowerCase() === 'precision-r1');
+    const hasS = keys.some((k) => /^s\d+$/i.test(String(k).trim()));
+    return (hasPrecision || hasS) && keys.some((k) => String(k).toLowerCase() === 'sn');
+}
+
 /** Heuristic: flattened SiAC32 JSON rows (CHR*, RRF*) or SiAC64 TELEMETRY rows (A1–H8 grid, ASELT, …). */
 export function looksLikeSiacCaptureData(data) {
     if (!Array.isArray(data) || data.length === 0) return false;
@@ -115,7 +143,8 @@ export function isKnownPlotFileName(fileName) {
     return (
         hasConcentrationInFilename(fileName) ||
         isRawDeviceTimeSeriesName(fileName) ||
-        isSiacSerialCaptureFileName(fileName)
+        isSiacSerialCaptureFileName(fileName) ||
+        isSerialMonitorExportFileName(fileName)
     );
 }
 
@@ -231,5 +260,7 @@ export function isKnownPlotFile(fileName, data = null) {
     if (hasConcentrationInCatalogPath(fileName)) return true;
     if (data && hasConcentrationInData(data)) return true;
     if (data && looksLikeSiacCaptureData(data)) return true;
+    if (data && looksLikeGen3AuCaptureData(data)) return true;
+    if (data && looksLikeSerialMonitorExportData(data)) return true;
     return false;
 }

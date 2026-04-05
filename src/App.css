@@ -61,6 +61,20 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Serial monitor: only the log panel scrolls; keep controls + disconnect reachable */
+.content-area:has(.serial-monitor-root) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  align-items: stretch;
+}
+
+.content-area .serial-monitor-root {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .drag-overlay {
   position: absolute;
   top: 0;

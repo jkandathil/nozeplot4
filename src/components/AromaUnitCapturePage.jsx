@@ -14,6 +14,7 @@ import {
 } from '../utils/siacDeviceProfiles';
 import {
     scanProbeSerialPort,
+    scanProbeGen3AuPort,
     getSerialPlatformTiming,
     delay as serialDelay,
     primeSerialPortForSiAcRead,
@@ -39,6 +40,55 @@ function webSerialSupported() {
  * Buffer UART text and `console.info` each completed newline-delimited line (handles \\r\\n / \\r).
  * Call `flush()` when the read ends to log any trailing partial line.
  */
+/** GEN3 AU: accumulate UART text and emit complete lines for parseLine (tab/comma CSV). */
+function consumeDelimitedCaptureChunk(
+    lineCarryRef,
+    textChunk,
+    parseLine,
+    { onValidRow, onParseError, skipFirstPhysicalLineRef }
+) {
+    lineCarryRef.current = (lineCarryRef.current || '') + textChunk;
+    let buf = lineCarryRef.current.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const parts = buf.split('\n');
+    lineCarryRef.current = parts.pop() ?? '';
+    for (const rawLine of parts) {
+        const line = rawLine.trimEnd();
+        if (!line.trim()) continue;
+        if (skipFirstPhysicalLineRef?.current) {
+            skipFirstPhysicalLineRef.current = false;
+            continue;
+        }
+        const ts = new Date().toISOString();
+        try {
+            const row = parseLine(line, ts);
+            if (row && captureRowHasSensorValues(row)) onValidRow(row);
+        } catch (e) {
+            onParseError?.(e, line);
+        }
+    }
+}
+
+function flushDelimitedCaptureCarry(
+    lineCarryRef,
+    parseLine,
+    { onValidRow, onParseError, skipFirstPhysicalLineRef }
+) {
+    const rest = String(lineCarryRef.current || '').trim();
+    lineCarryRef.current = '';
+    if (!rest) return;
+    if (skipFirstPhysicalLineRef?.current) {
+        skipFirstPhysicalLineRef.current = false;
+        return;
+    }
+    const ts = new Date().toISOString();
+    try {
+        const row = parseLine(rest, ts);
+        if (row && captureRowHasSensorValues(row)) onValidRow(row);
+    } catch (e) {
+        onParseError?.(e, rest);
+    }
+}
+
 function createSerialLineLogger(label) {
     let partial = '';
     return {
@@ -63,7 +113,22 @@ function createSerialLineLogger(label) {
 export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const [profileKey, setProfileKey] = useState('SIAC64_V03_RPC');
     const profile = getAuProfile(profileKey);
+    const isLineDelimited = profile.streamMode === 'lineDelimited';
     const [baudRate, setBaudRate] = useState(profile.baudRate);
+    const [multiAuCapture, setMultiAuCapture] = useState(false);
+    const [selectedKeysForMulti, setSelectedKeysForMulti] = useState([]);
+
+    useEffect(() => {
+        if (profile.fixedBaud) {
+            setBaudRate(profile.baudRate);
+        }
+    }, [profileKey, profile.baudRate, profile.fixedBaud]);
+
+    useEffect(() => {
+        if (isLineDelimited && multiAuCapture) {
+            setMultiAuCapture(false);
+        }
+    }, [profileKey, isLineDelimited, multiAuCapture]);
 
     const serialOpenOpts = useMemo(
         () => ({
@@ -147,8 +212,6 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const [scanning, setScanning] = useState(false);
     const [discovered, setDiscovered] = useState([]);
     const [selectedKey, setSelectedKey] = useState(null);
-    const [multiAuCapture, setMultiAuCapture] = useState(false);
-    const [selectedKeysForMulti, setSelectedKeysForMulti] = useState([]);
 
     const portRef = useRef(null);
     const portByKeyRef = useRef(new Map());
@@ -315,13 +378,15 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 map.set(key, port);
                 const rpcProbeRaw = profile.rpcShell?.probePayload;
                 const rpcProbe = typeof rpcProbeRaw === 'function' ? rpcProbeRaw() : (rpcProbeRaw ?? null);
-                const { sn, error: probeError } = await scanProbeSerialPort(
-                    port,
-                    serialOpenOpts,
-                    undefined,
-                    rpcProbe,
-                    profile.isFormatCompatible
-                );
+                const { sn, error: probeError } = isLineDelimited
+                    ? await scanProbeGen3AuPort(port, serialOpenOpts)
+                    : await scanProbeSerialPort(
+                          port,
+                          serialOpenOpts,
+                          undefined,
+                          rpcProbe,
+                          profile.isFormatCompatible
+                      );
                 
                 if (sn) {
                     rows.push({
@@ -407,7 +472,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             }
             await serialDelay(t.postCloseBeforeOpenMs);
             await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
-            await primeSerialPortForSiAcRead(port);
+            await primeSerialPortForSiAcRead(port, { txPing: !profile.readOnly });
             portRef.current = port;
             setConnected(true);
             setSelectedKey(row.key);
@@ -435,6 +500,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
      * and pump controls looked "gone" (disabled). If exactly one AU is checked, open that port the same way as Step 1.
      */
     const ensurePumpSerialPort = async () => {
+        if (profile.readOnly) {
+            throw new Error('This device profile is receive-only — no commands are sent to the unit.');
+        }
         if (recording) {
             throw new Error('Pump is disabled while capturing.');
         }
@@ -564,6 +632,10 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         const parseLine = profile.parseLine;
 
         if (multiAuCapture) {
+            if (isLineDelimited) {
+                setError('GEN3 AU is receive-only single-port capture. Turn off Multi-AU, connect one device, then start.');
+                return;
+            }
             const keys = [...selectedKeysForMulti];
             if (keys.length === 0) {
                 setError('Select one or more AUs (checkboxes) for simultaneous capture, or turn off multi-AU mode and connect one port.');
@@ -607,7 +679,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         }
                         await serialDelay(t.postCloseBeforeOpenMs);
                         await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
-                        await primeSerialPortForSiAcRead(port);
+                        await primeSerialPortForSiAcRead(port, { txPing: !profile.readOnly });
                         if (profile.rpcShell) {
                             const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
                             const startPayloadRaw = profile.rpcShell.captureStartPayload;
@@ -645,59 +717,90 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 let buffer = '';
                 let bytesIn = 0;
                 let orphanTail = '';
+                const lineCarryRef = { current: '' };
+                const skipFirstPhysicalLineRef = isLineDelimited ? { current: true } : null;
                 try {
-                    const consumeBuffer = (isFinal) => {
-                        const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
-                        for (const jsonStr of chunks) {
-                            const ts = new Date().toISOString();
-                            try {
-                                const row = parseLine(jsonStr, ts);
-                                if (row && captureRowHasSensorValues(row)) {
-                                    const elapsedMs = captureProgressWindowRef.current ? Date.now() - captureProgressWindowRef.current.startMs : 0;
-                                    row.Event = getEventForOffset(elapsedMs);
-                                    rows.push(row);
-                                    bumpLines();
-                                    if (rows.length === 1) {
-                                        console.info(`[Multi-AU Capture] First valid JSON row from ${key}:`, row);
-                                    }
-                                    if (rows.length % 5 === 0) {
-                                        setLastPreview(JSON.stringify(rows[rows.length - 1]).slice(0, 280));
-                                    }
-                                }
-                                // Intentionally no console.debug here: logging every ignored chunk freezes the tab on 60s+ captures (CDC overflow).
-                            } catch (e) {
-                                console.warn(`[Multi-AU Capture] Parse error for ${key}:`, e.message, "Raw chunk:", jsonStr);
-                                localParseErrors += 1;
-                                setParseErrors((x) => x + 1);
-                                const msg = e?.message || 'parse error';
-                                const bit = jsonStr.slice(0, 120);
-                                setLastParseHint(`${msg} — sample: ${bit}${jsonStr.length > 120 ? '…' : ''}`);
-                            }
+                    const pushRowMulti = (row) => {
+                        const elapsedMs = captureProgressWindowRef.current
+                            ? Date.now() - captureProgressWindowRef.current.startMs
+                            : 0;
+                        row.Event = getEventForOffset(elapsedMs);
+                        rows.push(row);
+                        bumpLines();
+                        if (rows.length === 1) {
+                            console.info(
+                                `[Multi-AU Capture] First valid row from ${key}:`,
+                                row
+                            );
                         }
-                        if (isFinal) {
-                            orphanTail = rest;
-                            buffer = '';
-                        } else {
-                            buffer = rest;
+                        if (rows.length % 5 === 0) {
+                            setLastPreview(JSON.stringify(rows[rows.length - 1]).slice(0, 280));
                         }
                     };
+                    const onParseErrMulti = (e, sample) => {
+                        console.warn(`[Multi-AU Capture] Parse error for ${key}:`, e?.message, 'Sample:', sample);
+                        localParseErrors += 1;
+                        setParseErrors((x) => x + 1);
+                        const msg = e?.message || 'parse error';
+                        const bit = String(sample).slice(0, 120);
+                        setLastParseHint(`${msg} — sample: ${bit}${String(sample).length > 120 ? '…' : ''}`);
+                    };
 
-                    const r = await readSiAcPortUtf8Until(port, {
-                        endAt,
-                        shouldStop: () => stopRef.current,
-                        registerInMultiListRef: multiReadersRef,
-                        onChunk: (text) => {
-                            onSerialChunk(text);
-                            buffer += text;
-                            consumeBuffer(false);
-                        },
-                    });
-                    bytesIn = r.bytesIn;
-                    const tGrace = getSerialPlatformTiming();
-                    const graceMs = tGrace.win ? 6000 : 4000;
-                    if (hasIncompleteLeadingJsonObject(buffer)) {
-                        const r2 = await readSiAcPortUtf8Until(port, {
-                            endAt: Date.now() + graceMs,
+                    if (isLineDelimited) {
+                        const r = await readSiAcPortUtf8Until(port, {
+                            endAt,
+                            shouldStop: () => stopRef.current,
+                            registerInMultiListRef: multiReadersRef,
+                            onChunk: (text) => {
+                                onSerialChunk(text);
+                                consumeDelimitedCaptureChunk(lineCarryRef, text, parseLine, {
+                                    onValidRow: pushRowMulti,
+                                    onParseError: onParseErrMulti,
+                                    skipFirstPhysicalLineRef,
+                                });
+                            },
+                        });
+                        bytesIn = r.bytesIn;
+                        flushDelimitedCaptureCarry(lineCarryRef, parseLine, {
+                            onValidRow: pushRowMulti,
+                            onParseError: onParseErrMulti,
+                            skipFirstPhysicalLineRef,
+                        });
+                        orphanTail = lineCarryRef.current;
+                    } else {
+                        const consumeBuffer = (isFinal) => {
+                            const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
+                            for (const jsonStr of chunks) {
+                                const ts = new Date().toISOString();
+                                try {
+                                    const row = parseLine(jsonStr, ts);
+                                    if (row && captureRowHasSensorValues(row)) {
+                                        pushRowMulti(row);
+                                    }
+                                } catch (e) {
+                                    console.warn(
+                                        `[Multi-AU Capture] Parse error for ${key}:`,
+                                        e.message,
+                                        'Raw chunk:',
+                                        jsonStr
+                                    );
+                                    localParseErrors += 1;
+                                    setParseErrors((x) => x + 1);
+                                    const msg = e?.message || 'parse error';
+                                    const bit = jsonStr.slice(0, 120);
+                                    setLastParseHint(`${msg} — sample: ${bit}${jsonStr.length > 120 ? '…' : ''}`);
+                                }
+                            }
+                            if (isFinal) {
+                                orphanTail = rest;
+                                buffer = '';
+                            } else {
+                                buffer = rest;
+                            }
+                        };
+
+                        const r = await readSiAcPortUtf8Until(port, {
+                            endAt,
                             shouldStop: () => stopRef.current,
                             registerInMultiListRef: multiReadersRef,
                             onChunk: (text) => {
@@ -706,9 +809,24 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 consumeBuffer(false);
                             },
                         });
-                        bytesIn += r2.bytesIn;
+                        bytesIn = r.bytesIn;
+                        const tGrace = getSerialPlatformTiming();
+                        const graceMs = tGrace.win ? 6000 : 4000;
+                        if (hasIncompleteLeadingJsonObject(buffer)) {
+                            const r2 = await readSiAcPortUtf8Until(port, {
+                                endAt: Date.now() + graceMs,
+                                shouldStop: () => stopRef.current,
+                                registerInMultiListRef: multiReadersRef,
+                                onChunk: (text) => {
+                                    onSerialChunk(text);
+                                    buffer += text;
+                                    consumeBuffer(false);
+                                },
+                            });
+                            bytesIn += r2.bytesIn;
+                        }
+                        consumeBuffer(true);
                     }
-                    consumeBuffer(true);
                 } catch (e) {
                     return {
                         key,
@@ -716,7 +834,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         parseErrors: localParseErrors,
                         error: e?.message || 'Serial read failed.',
                         bytesIn,
-                        orphanTail: orphanTail || buffer,
+                        orphanTail: orphanTail || buffer || lineCarryRef.current,
                     };
                 } finally {
                     serialLines.flush();
@@ -909,6 +1027,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         let bytesIn = 0;
         let captureParseErrors = 0;
         let orphanTail = '';
+        const lineCarryRefSingle = { current: '' };
+        const skipFirstPhysicalLineRef = isLineDelimited ? { current: true } : null;
         let captureSerialLabel = 'AU';
         let serialLines = null;
 
@@ -934,7 +1054,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
 
             setConnected(true);
             portRef.current = port;
-            await primeSerialPortForSiAcRead(port);
+            await primeSerialPortForSiAcRead(port, { txPing: !profile.readOnly });
 
             /** Full `sec` seconds of reading start only after USB is open + primed (not before). */
             const readEndAt = Date.now() + sec * 1000;
@@ -946,62 +1066,86 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 firstDataAtMs: null,
             };
 
-            const consumeBuffer = (isFinal) => {
-                const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
-                for (const jsonStr of chunks) {
-                    const ts = new Date().toISOString();
-                    try {
-                        const row = parseLine(jsonStr, ts);
-                        if (row && captureRowHasSensorValues(row)) {
-                            const elapsedMs = captureProgressWindowRef.current ? Date.now() - captureProgressWindowRef.current.startMs : 0;
-                            row.Event = getEventForOffset(elapsedMs);
-                            rowsRef.current.push(row);
-                            const n = rowsRef.current.length;
-                            if (n === 1) {
-                                console.info(`[Capture] First valid JSON row:`, row);
-                            }
-                            if (n % 10 === 0) setLineCount(n);
-                            if (n % 5 === 0) {
-                                const last = rowsRef.current[n - 1];
-                                setLastPreview(JSON.stringify(last).slice(0, 280));
-                            }
-                        }
-                        // Intentionally no console.debug here: logging every ignored chunk freezes the tab on 60s+ captures (CDC overflow).
-                    } catch (e) {
-                        console.warn(`[Capture] Parse error:`, e.message, "Raw chunk:", jsonStr);
-                        captureParseErrors += 1;
-                        setParseErrors((x) => x + 1);
-                        const msg = e?.message || 'parse error';
-                        const bit = jsonStr.slice(0, 120);
-                        setLastParseHint(`${msg} — sample: ${bit}${jsonStr.length > 120 ? '…' : ''}`);
-                    }
+            const pushRowSingle = (row) => {
+                const elapsedMs = captureProgressWindowRef.current
+                    ? Date.now() - captureProgressWindowRef.current.startMs
+                    : 0;
+                row.Event = getEventForOffset(elapsedMs);
+                rowsRef.current.push(row);
+                const n = rowsRef.current.length;
+                if (n === 1) {
+                    console.info(`[Capture] First valid row:`, row);
                 }
-                if (isFinal) {
-                    orphanTail = rest;
-                    buffer = '';
-                } else {
-                    buffer = rest;
+                if (n % 10 === 0) setLineCount(n);
+                if (n % 5 === 0) {
+                    const last = rowsRef.current[n - 1];
+                    setLastPreview(JSON.stringify(last).slice(0, 280));
                 }
             };
 
-            const r = await readSiAcPortUtf8Until(port, {
-                endAt: readEndAt,
-                shouldStop: () => stopRef.current,
-                registerForCancelRef: readerRef,
-                onChunk: (text) => {
-                    markCaptureStreamDataSeen(text);
-                    serialLines?.push(text);
-                    buffer += text;
-                    consumeBuffer(false);
-                    setLineCount(rowsRef.current.length);
-                },
-            });
-            bytesIn = r.bytesIn;
-            const tGraceSingle = getSerialPlatformTiming();
-            const graceMsSingle = tGraceSingle.win ? 6000 : 4000;
-            if (hasIncompleteLeadingJsonObject(buffer)) {
-                const r2 = await readSiAcPortUtf8Until(port, {
-                    endAt: Date.now() + graceMsSingle,
+            if (isLineDelimited) {
+                const r = await readSiAcPortUtf8Until(port, {
+                    endAt: readEndAt,
+                    shouldStop: () => stopRef.current,
+                    registerForCancelRef: readerRef,
+                    onChunk: (text) => {
+                        markCaptureStreamDataSeen(text);
+                        serialLines?.push(text);
+                        consumeDelimitedCaptureChunk(lineCarryRefSingle, text, parseLine, {
+                            onValidRow: pushRowSingle,
+                            onParseError: (e, line) => {
+                                console.warn(`[Capture] Parse error:`, e?.message, 'Line:', line);
+                                captureParseErrors += 1;
+                                setParseErrors((x) => x + 1);
+                                const msg = e?.message || 'parse error';
+                                const bit = String(line).slice(0, 120);
+                                setLastParseHint(`${msg} — sample: ${bit}${String(line).length > 120 ? '…' : ''}`);
+                            },
+                            skipFirstPhysicalLineRef,
+                        });
+                        setLineCount(rowsRef.current.length);
+                    },
+                });
+                bytesIn = r.bytesIn;
+                flushDelimitedCaptureCarry(lineCarryRefSingle, parseLine, {
+                    onValidRow: pushRowSingle,
+                    onParseError: (e, line) => {
+                        captureParseErrors += 1;
+                        setParseErrors((x) => x + 1);
+                        setLastParseHint(`${e?.message || 'parse error'} — ${String(line).slice(0, 100)}`);
+                    },
+                    skipFirstPhysicalLineRef,
+                });
+                orphanTail = lineCarryRefSingle.current;
+            } else {
+                const consumeBuffer = (isFinal) => {
+                    const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
+                    for (const jsonStr of chunks) {
+                        const ts = new Date().toISOString();
+                        try {
+                            const row = parseLine(jsonStr, ts);
+                            if (row && captureRowHasSensorValues(row)) {
+                                pushRowSingle(row);
+                            }
+                        } catch (e) {
+                            console.warn(`[Capture] Parse error:`, e.message, 'Raw chunk:', jsonStr);
+                            captureParseErrors += 1;
+                            setParseErrors((x) => x + 1);
+                            const msg = e?.message || 'parse error';
+                            const bit = jsonStr.slice(0, 120);
+                            setLastParseHint(`${msg} — sample: ${bit}${jsonStr.length > 120 ? '…' : ''}`);
+                        }
+                    }
+                    if (isFinal) {
+                        orphanTail = rest;
+                        buffer = '';
+                    } else {
+                        buffer = rest;
+                    }
+                };
+
+                const r = await readSiAcPortUtf8Until(port, {
+                    endAt: readEndAt,
                     shouldStop: () => stopRef.current,
                     registerForCancelRef: readerRef,
                     onChunk: (text) => {
@@ -1012,9 +1156,26 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         setLineCount(rowsRef.current.length);
                     },
                 });
-                bytesIn += r2.bytesIn;
+                bytesIn = r.bytesIn;
+                const tGraceSingle = getSerialPlatformTiming();
+                const graceMsSingle = tGraceSingle.win ? 6000 : 4000;
+                if (hasIncompleteLeadingJsonObject(buffer)) {
+                    const r2 = await readSiAcPortUtf8Until(port, {
+                        endAt: Date.now() + graceMsSingle,
+                        shouldStop: () => stopRef.current,
+                        registerForCancelRef: readerRef,
+                        onChunk: (text) => {
+                            markCaptureStreamDataSeen(text);
+                            serialLines?.push(text);
+                            buffer += text;
+                            consumeBuffer(false);
+                            setLineCount(rowsRef.current.length);
+                        },
+                    });
+                    bytesIn += r2.bytesIn;
+                }
+                consumeBuffer(true);
             }
-            consumeBuffer(true);
             setLineCount(rowsRef.current.length);
         } catch (e) {
             setError(e?.message || 'Serial read failed.');
@@ -1052,13 +1213,18 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             setError((prev) => {
                 if (prev) return prev;
                 if (bytesIn === 0) {
-                    return `No data captured: 0 bytes in ${sec}s. Port is silent (device not streaming, wrong baud — use ${profile.baudRate} or 921600 for ${profile.label}, bad cable, or wrong COM device).`;
+                    return isLineDelimited
+                        ? `No data captured: 0 bytes in ${sec}s. Check ${profile.baudRate} baud, USB, and that the GEN3 unit is streaming CSV lines (Precision-R1, s1…s32, temperature, humidity, sn).`
+                        : `No data captured: 0 bytes in ${sec}s. Port is silent (device not streaming, wrong baud — use ${profile.baudRate} or 921600 for ${profile.label}, bad cable, or wrong COM device).`;
                 }
                 if (captureParseErrors > 0) {
                     return `No valid rows: ${bytesIn} byte(s) and ${captureParseErrors} parse error(s). Data may not match ${profile.label}. Check the browser console (Ctrl+Shift+J) for raw chunks or firmware issues.`;
                 }
                 const tail = describePartialSerialBuffer(orphanTail);
                 const seen = tail ? ` Unparsed tail: ${tail}.` : '';
+                if (isLineDelimited) {
+                    return `No GEN3 CSV rows with sensor columns in ${sec}s (${bytesIn} byte(s)).${seen} Expect tab- or comma-separated lines; the first line of each capture is not saved (header).`;
+                }
                 if (bytesIn <= 16) {
                     return `No complete JSON: only ${bytesIn} raw byte(s) in ${sec}s.${seen} Often: another app on the same COM port, wrong baud (${profile.label} usually uses ${profile.baudRate} or 921600), USB hub, or multi-AU capture starving a port on Windows.`;
                 }
@@ -1070,7 +1236,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         const rowsForSave = rawRows.filter(captureRowHasSensorValues);
         if (rowsForSave.length === 0) {
             setError(
-                `Received ${rawRows.length} JSON object(s) in ${sec}s with timestamp/serial only — no channel readings (A1–H8 / CHR/RRF). Those lines are not saved; check the device stream.`
+                isLineDelimited
+                    ? `Received ${rawRows.length} line(s) in ${sec}s but none had usable sensor columns (s1…s32 / Precision-R1). Check the stream format.`
+                    : `Received ${rawRows.length} JSON object(s) in ${sec}s with timestamp/serial only — no channel readings (A1–H8 / CHR/RRF). Those lines are not saved; check the device stream.`
             );
             return;
         }
@@ -1090,7 +1258,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 savingAtMs: savingAt.getTime(),
             });
             setSavedOk(
-                `Saved to workspace folder "${folderName}" as ${fileName} (${dataToSave.length} rows, ${Object.keys(dataToSave[0] || {}).length} columns). Only rows with channel data are saved. Collection ran ${sec}s on the wire after the port was ready.`
+                isLineDelimited
+                    ? `Saved to workspace folder "${folderName}" as ${fileName} (${dataToSave.length} rows, ${Object.keys(dataToSave[0] || {}).length} columns). GEN3 CSV lines (Precision-R1, s1…s32, temperature, humidity, sn). Receive-only — ${sec}s on the wire.`
+                    : `Saved to workspace folder "${folderName}" as ${fileName} (${dataToSave.length} rows, ${Object.keys(dataToSave[0] || {}).length} columns). Only rows with channel data are saved. Collection ran ${sec}s on the wire after the port was ready.`
             );
         } catch (err) {
             setError(err?.message || 'Failed to save to workspace.');
@@ -1128,14 +1298,22 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                     </option>
                                 ))}
                             </select>
+                            {isLineDelimited ? (
+                                <p className="au-hint" style={{ marginTop: 8, marginBottom: 0 }}>
+                                    GEN3 AU: <strong>9600 baud</strong>, receive-only (no RPC/pump). Device sends CSV/TSV lines;
+                                    columns map to Precision-R1, s1…s32, temperature, humidity, sn. The first line of each capture run is dropped (column header), then rows are saved.
+                                </p>
+                            ) : null}
                             <label htmlFor="au-baud" className="sr-only">Baud Rate</label>
                             <select
                                 id="au-baud"
                                 value={baudRate}
                                 onChange={(e) => setBaudRate(parseInt(e.target.value, 10))}
-                                disabled={recording}
+                                disabled={recording || profile.fixedBaud}
                                 className="au-baud-select"
+                                title={profile.fixedBaud ? `Fixed at ${profile.baudRate} for this profile` : undefined}
                             >
+                                <option value={9600}>9600</option>
                                 <option value={115200}>115200</option>
                                 <option value={921600}>921600</option>
                                 <option value={230400}>230400</option>
@@ -1225,8 +1403,13 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         {portHint ? <p className="au-hint au-port-hint" style={{ color: portHint.startsWith('No ') || portHint.includes('not available') ? '#fbbf24' : undefined }}>{portHint}</p> : null}
                     </div>
                     <label className="au-multi-toggle">
-                        <input type="checkbox" checked={multiAuCapture} onChange={(e) => setMultiAuCapture(e.target.checked)} disabled={recording || scanning || profile.disabled} />
-                        <span>Enable Multi-AU parallel capture</span>
+                        <input
+                            type="checkbox"
+                            checked={multiAuCapture}
+                            onChange={(e) => setMultiAuCapture(e.target.checked)}
+                            disabled={recording || scanning || profile.disabled || isLineDelimited}
+                        />
+                        <span>Enable Multi-AU parallel capture{isLineDelimited ? ' (not available for GEN3 AU)' : ''}</span>
                     </label>
                 </div>
 

@@ -34,6 +34,7 @@ import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
+import SerialMonitorPage from './components/SerialMonitorPage';
 import { parseFile } from './utils/fileParser';
 import { getBrowserStorageEstimate, uploadWorkloadHints } from './utils/browserCapacityHints.js';
 import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
@@ -54,6 +55,9 @@ import {
 const RESERVED_WORKSPACE_FOLDER_NAMES = new Set(
   [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME].map((s) => String(s).toLowerCase())
 );
+
+/** Serial monitor exports (CSV/TXT with timestamps). */
+const SERIAL_DATA_FOLDER_NAME = 'serial_data';
 
 /** Keep sidebar metadata but drop row payloads so huge FeNOse_synthetic/ folders do not OOM React on refresh. */
 function workspaceFilesForReactState(all) {
@@ -609,6 +613,47 @@ function App() {
     });
 
     return { count: written, folderName: FENOSE_SYNTHETIC_FOLDER_NAME };
+  }, []);
+
+  const handleSaveSerialLogToWorkspace = useCallback(async ({ content, fileName }) => {
+    if (typeof content !== 'string' || !fileName) {
+      throw new Error('Missing serial log content or file name.');
+    }
+    const existing = await fileManager.getAllFiles();
+    let folderId;
+    let folderCreatedAt = null;
+    const match = existing.find(
+      (f) => f.isFolder && String(f.name).toLowerCase() === SERIAL_DATA_FOLDER_NAME.toLowerCase()
+    );
+    if (match) {
+      folderId = match.id;
+    } else {
+      folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+      folderCreatedAt = Date.now();
+      await fileManager.saveFile({
+        id: folderId,
+        name: SERIAL_DATA_FOLDER_NAME,
+        isFolder: true,
+        createdAt: folderCreatedAt,
+      });
+    }
+    const fileId = Math.random().toString(36).substr(2, 9);
+    const mime = String(fileName).toLowerCase().endsWith('.csv') ? 'text/csv' : 'text/plain';
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const nativeFile = new File([blob], fileName, { type: blob.type });
+    const createdAt = Date.now();
+    await fileManager.saveFile({
+      id: fileId,
+      name: fileName,
+      folderId: String(folderId),
+      file: nativeFile,
+      csvText: content,
+      size: blob.size,
+      createdAt,
+    });
+    const refreshed = await fileManager.getAllFiles();
+    setFiles(workspaceFilesForReactState(refreshed));
+    return { fileId, folderId };
   }, []);
 
   const handleSaveJsonToWorkspace = useCallback(async ({ folderName, fileName, json }) => {
@@ -1245,6 +1290,11 @@ function App() {
                   />
                 ) : activePage === 'csvPlotter' ? (
                   <CSVPlotterPage key="csvPlotter" workspaceFiles={files} />
+                ) : activePage === 'serialMonitor' ? (
+                  <SerialMonitorPage
+                    key="serialMonitor"
+                    onSaveSerialLogToWorkspace={handleSaveSerialLogToWorkspace}
+                  />
                 ) : activePage === 'mlStudio' ? (
                   <MLStudioPage
                     key="mlStudio"

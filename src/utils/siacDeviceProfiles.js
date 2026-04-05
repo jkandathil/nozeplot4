@@ -4,7 +4,7 @@
  * use drainJsonObjectsFromBuffer instead of splitting on \n only.
  */
 
-import { DEFAULT_TELEMETRY_PERIOD_MS } from './siac64RpcSerial.js';
+import Papa from 'papaparse';
 
 /**
  * Extract complete top-level `{...}` JSON substrings (string-aware brace matching).
@@ -298,6 +298,80 @@ export function parseSiAc64RpcTelemetryLine(line, timestampIso) {
     return row;
 }
 
+/** GEN3 AU CSV column order (matches device header: Precision-R1, s1…s32, temperature, humidity, sn). */
+export const GEN3_AU_CSV_KEYS = [
+    'Precision-R1',
+    ...Array.from({ length: 32 }, (_, i) => `s${i + 1}`),
+    'temperature',
+    'humidity',
+    'sn',
+];
+
+function splitGen3DelimitedLine(line) {
+    const raw = String(line).replace(/\r+$/, '').trim();
+    if (!raw) return null;
+    if (raw.includes('\t')) {
+        return raw.split('\t').map((c) => c.trim());
+    }
+    const res = Papa.parse(raw, { header: false, skipEmptyLines: false });
+    const first = res.data?.[0];
+    if (Array.isArray(first)) {
+        return first.map((c) => (c == null ? '' : String(c).trim()));
+    }
+    return [raw];
+}
+
+/** True if this line is the device’s column header row (skip for data). */
+export function isGen3AuHeaderLineCells(cells) {
+    if (!cells?.length) return false;
+    const c0 = String(cells[0] ?? '').trim();
+    if (/^precision-?r1$/i.test(c0.replace(/\s+/g, ''))) return true;
+    const c1 = String(cells[1] ?? '').trim().toLowerCase();
+    const c32 = String(cells[32] ?? '').trim().toLowerCase();
+    if (c1 === 's1' && c32 === 's32') return true;
+    return false;
+}
+
+/**
+ * One UART line → one dashboard row. Tab- or comma-separated (quoted CSV aware).
+ * @param {string} line
+ * @param {string} timestampIso
+ * @returns {object|null}
+ */
+export function parseGen3AuDelimitedLine(line, timestampIso) {
+    const cells = splitGen3DelimitedLine(line);
+    if (!cells || cells.length < 3) return null;
+    if (isGen3AuHeaderLineCells(cells)) return null;
+
+    const keys = GEN3_AU_CSV_KEYS;
+    const row = {
+        timestamp: timestampIso,
+        sn: '',
+    };
+
+    for (let i = 0; i < keys.length && i < cells.length; i++) {
+        const k = keys[i];
+        const rawCell = cells[i];
+        if (k === 'sn') {
+            row.sn = String(rawCell ?? '').trim();
+            continue;
+        }
+        const s = String(rawCell ?? '').trim();
+        if (s === '') {
+            row[k] = '';
+            continue;
+        }
+        const n = parseFloat(s.replace(/,/g, ''));
+        row[k] = Number.isFinite(n) ? n : s;
+    }
+
+    if (!row.sn && cells.length > 0) {
+        row.sn = String(cells[cells.length - 1] ?? '').trim();
+    }
+
+    return row;
+}
+
 export function parseSiac32V2Line(line, timestampIso) {
     const s = String(line).replace(/^\r+|\r+$/g, '').trim();
     if (!s) return null;
@@ -454,6 +528,20 @@ export const AU_DEVICE_PROFILES = {
             maxCcm: 500,
             sliderStep: 1,
         },
+    },
+    /**
+     * GEN3 aroma unit: 9600 baud, passive CSV/TSV lines only (no host writes).
+     * Columns: Precision-R1, s1…s32, temperature, humidity, sn
+     */
+    GEN3_AU: {
+        id: 'GEN3-AU',
+        label: 'GEN3 AU (9600 · CSV stream)',
+        baudRate: 9600,
+        streamMode: 'lineDelimited',
+        readOnly: true,
+        fixedBaud: true,
+        parseLine: parseGen3AuDelimitedLine,
+        isFormatCompatible: () => false,
     },
 };
 

@@ -1,6 +1,7 @@
 import {
     drainJsonObjectsFromBuffer,
     extractAuSerialNumberFromParsedJson,
+    parseGen3AuDelimitedLine,
 } from './siacDeviceProfiles.js';
 import { writeSiac64RpcLine, sanitizeSiacFirmwareJsonText } from './siac64RpcSerial.js';
 
@@ -288,8 +289,10 @@ async function trySiAcStreamWakeWrite(port, t) {
 /**
  * After `port.open()`, run the same wake sequence as scan (DTR/RTS, optional settle, CRLF on writable).
  * Call this before `readable.getReader()` so capture sees JSON on picky Windows CDC bridges.
+ * @param {{ txPing?: boolean }} [opts] — set `txPing: false` for read-only devices (no CRLF on TX).
  */
-export async function primeSerialPortForSiAcRead(port) {
+export async function primeSerialPortForSiAcRead(port, opts = {}) {
+    const txPing = opts.txPing !== false;
     const t = getSerialPlatformTiming();
     if (t.win) {
         await applyAlternateWindowsSerialSignals(port);
@@ -300,13 +303,144 @@ export async function primeSerialPortForSiAcRead(port) {
         await delay(t.preReadAfterOpenMs);
     }
     await waitForReadable(port, t.readableWaitAttempts, t.readableWaitStepMs);
-    await trySiAcStreamWakeWrite(port, t);
-    await delay(t.afterWritablePingMs);
-    if (t.win) {
-        await delay(320);
-        await applySerialPortWakeSignals(port);
+    if (txPing) {
         await trySiAcStreamWakeWrite(port, t);
-        await delay(Math.min(t.afterWritablePingMs, 160));
+        await delay(t.afterWritablePingMs);
+        if (t.win) {
+            await delay(320);
+            await applySerialPortWakeSignals(port);
+            await trySiAcStreamWakeWrite(port, t);
+            await delay(Math.min(t.afterWritablePingMs, 160));
+        }
+    }
+}
+
+/**
+ * Read line-delimited GEN3 AU CSV until a data row yields `sn` (passive stream, no writes).
+ * @param {number} timeoutMs
+ * @returns {Promise<string|null>}
+ */
+export async function readGen3AuStreamForSn(port, timeoutMs = 8000) {
+    if (!port?.readable) return null;
+    let reader;
+    try {
+        reader = port.readable.getReader();
+    } catch {
+        return null;
+    }
+    const decoder = new TextDecoder();
+    let carry = '';
+    let foundSn = null;
+    const timer = setTimeout(() => {
+        reader?.cancel().catch(() => {});
+    }, timeoutMs);
+    try {
+        while (!foundSn) {
+            let readResult;
+            try {
+                readResult = await reader.read();
+            } catch {
+                break;
+            }
+            const { value, done } = readResult;
+            if (done) break;
+            if (value?.byteLength) {
+                carry += decoder.decode(value, { stream: true });
+            }
+            carry = carry.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const parts = carry.split('\n');
+            carry = parts.pop() ?? '';
+            for (const line of parts) {
+                const ts = new Date().toISOString();
+                const row = parseGen3AuDelimitedLine(line, ts);
+                const sn = row?.sn && String(row.sn).trim();
+                if (sn) {
+                    foundSn = sn;
+                    break;
+                }
+            }
+        }
+        carry += decoder.decode();
+        carry = carry.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const tailParts = carry.split('\n');
+        for (const line of tailParts) {
+            if (foundSn) break;
+            const ts = new Date().toISOString();
+            const row = parseGen3AuDelimitedLine(line, ts);
+            const sn = row?.sn && String(row.sn).trim();
+            if (sn) foundSn = sn;
+        }
+    } finally {
+        clearTimeout(timer);
+        try {
+            await reader.cancel();
+        } catch {
+            /* ignore */
+        }
+        try {
+            reader.releaseLock();
+        } catch {
+            /* ignore */
+        }
+    }
+    return foundSn || null;
+}
+
+/**
+ * Scan one port for GEN3 AU (9600 CSV). No RPC / no TX wake bytes — DTR/RTS only.
+ */
+export async function scanProbeGen3AuPort(port, openOpts) {
+    const t = getSerialPlatformTiming();
+    const readMs = Math.max(t.scanReadTimeoutMs, 4000);
+    const openWithFlow = { ...openOpts, flowControl: openOpts.flowControl ?? 'none' };
+    if (t.win) {
+        openWithFlow.bufferSize = openWithFlow.bufferSize ?? 16384;
+    }
+    try {
+        try {
+            await port.close();
+        } catch {
+            /* ignore */
+        }
+        await delay(t.postCloseBeforeOpenMs);
+        try {
+            await port.open(openWithFlow);
+        } catch (e) {
+            if (t.win && openWithFlow.bufferSize) {
+                const { bufferSize: _b, ...rest } = openWithFlow;
+                await port.open(rest);
+            } else {
+                throw e;
+            }
+        }
+        await applySerialPortWakeSignals(port);
+        await delay(t.postWakeSignalsMs);
+        if (t.preReadAfterOpenMs > 0) {
+            await delay(t.preReadAfterOpenMs);
+        }
+        const okReadable = await waitForReadable(port, t.readableWaitAttempts, t.readableWaitStepMs);
+        if (!okReadable) {
+            return { sn: null, error: 'No readable stream after open.' };
+        }
+        let sn = await readGen3AuStreamForSn(port, readMs);
+        if (!sn && t.win) {
+            await applyAlternateWindowsSerialSignals(port);
+            await delay(200);
+            sn = await readGen3AuStreamForSn(port, t.scanSecondReadMs);
+        }
+        return {
+            sn,
+            error: sn ? null : 'No GEN3 CSV line with serial (sn) seen — check 9600 baud and streaming.',
+        };
+    } catch (e) {
+        return { sn: null, error: e?.message || 'Could not open port' };
+    } finally {
+        try {
+            await port.close();
+        } catch {
+            /* ignore */
+        }
+        await delay(t.postCloseAfterProbeMs);
     }
 }
 
