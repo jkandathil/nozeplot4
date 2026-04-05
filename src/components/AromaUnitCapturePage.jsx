@@ -13,8 +13,7 @@ import {
     auDeviceFolderNameFromSn,
 } from '../utils/siacDeviceProfiles';
 import {
-    scanProbeSerialPort,
-    scanProbeGen3AuPort,
+    scanProbeAuPortAuto,
     getSerialPlatformTiming,
     delay as serialDelay,
     primeSerialPortForSiAcRead,
@@ -34,6 +33,11 @@ import './AromaUnitCapturePage.css';
 
 function webSerialSupported() {
     return typeof navigator !== 'undefined' && !!navigator.serial;
+}
+
+function detectedProfileLabel(detectedProfileKey) {
+    if (!detectedProfileKey || detectedProfileKey === 'UNKNOWN') return 'Unknown';
+    return AU_DEVICE_PROFILES[detectedProfileKey]?.label ?? detectedProfileKey;
 }
 
 /**
@@ -110,7 +114,7 @@ function createSerialLineLogger(label) {
     };
 }
 
-export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
+export default function AromaUnitCapturePage({ onSaveToWorkspace, onOpenSerialTab }) {
     const [profileKey, setProfileKey] = useState('SIAC64_V03_RPC');
     const profile = getAuProfile(profileKey);
     const isLineDelimited = profile.streamMode === 'lineDelimited';
@@ -352,10 +356,6 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             setPortHint('Web Serial is not available. Use Chrome or Edge on HTTPS or localhost, and allow the port when prompted.');
             return;
         }
-        if (profile.disabled || !profile.parseLine) {
-            setPortHint('This device profile is not available yet.');
-            return;
-        }
         setScanning(true);
         try {
             await disconnectPort();
@@ -376,37 +376,33 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 const key = `${base}-${i}`;
                 const vidPid = fmtVidPid(port.getInfo?.() || {});
                 map.set(key, port);
-                const rpcProbeRaw = profile.rpcShell?.probePayload;
-                const rpcProbe = typeof rpcProbeRaw === 'function' ? rpcProbeRaw() : (rpcProbeRaw ?? null);
-                const { sn, error: probeError } = isLineDelimited
-                    ? await scanProbeGen3AuPort(port, serialOpenOpts)
-                    : await scanProbeSerialPort(
-                          port,
-                          serialOpenOpts,
-                          undefined,
-                          rpcProbe,
-                          profile.isFormatCompatible
-                      );
-                
-                if (sn) {
-                    rows.push({
-                        key,
-                        sn,
-                        vidPid,
-                        error: probeError,
-                    });
-                }
+                const auto = await scanProbeAuPortAuto(port);
+                rows.push({
+                    key,
+                    sn: auto.sn || null,
+                    vidPid,
+                    detectedProfileKey: auto.detectedProfileKey,
+                    error: auto.error,
+                });
             }
 
             portByKeyRef.current = map;
             setDiscovered(rows);
 
-            if (rows.length === 0) {
-                setPortHint(`No compatible ${profile.label} devices found. Ensure the correct hardware profile is selected and the unit is actively streaming.`);
+            const known = rows.filter((r) => r.detectedProfileKey !== 'UNKNOWN');
+            const unknown = rows.filter((r) => r.detectedProfileKey === 'UNKNOWN');
+            if (known.length === 0 && unknown.length > 0) {
+                setPortHint(
+                    'No SiAC32, SiAC64, or GEN3 stream detected on linked ports. Use the Serial tab to log raw data, or ensure devices are streaming.'
+                );
+            } else if (known.length > 0) {
+                setPortHint(
+                    `Found ${known.length} recognized unit(s)${unknown.length ? ` and ${unknown.length} unknown` : ''}. Tap a row to connect — the hardware profile updates to match that port.`
+                );
             }
 
-            // Auto-select if exactly one port is linked and not already connected
-            if (rows.length === 1 && !connected) {
+            // Auto-select when there is only one linked port and it was recognized
+            if (rows.length === 1 && known.length === 1 && !connected) {
                 selectDiscoveredDevice(rows[0]).catch(() => {});
             }
         } catch (e) {
@@ -416,17 +412,6 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
         }
     };
 
-    // Auto-scan any unverified or linked ports when the user switches model profile
-    useEffect(() => {
-        if (recording || scanning || discovered.length === 0) return;
-
-        // Use a small timeout to avoid double-firing if the profile was set during a scan
-        const id = setTimeout(() => {
-            runDeviceScan().catch(() => {});
-        }, 500);
-        return () => clearTimeout(id);
-    }, [profileKey]);
-
     const linkNewUsbDevice = async () => {
         setError('');
         setSavedOk('');
@@ -434,10 +419,6 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             setError(
                 'Web Serial is not available. Use Chrome or Edge on HTTPS or localhost, and allow the port when prompted.'
             );
-            return;
-        }
-        if (profile.disabled || !profile.parseLine) {
-            setError('This device profile is not available yet.');
             return;
         }
         try {
@@ -456,14 +437,34 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
     const selectDiscoveredDevice = async (row) => {
         setError('');
         setSavedOk('');
-        if (!webSerialSupported() || profile.disabled || !profile.parseLine || recording) return;
+        if (!webSerialSupported() || recording) return;
+        if (row.detectedProfileKey === 'UNKNOWN') {
+            setPortHint(
+                'This port did not match SiAC32, SiAC64, or GEN3. Use the Serial tab in the sidebar to log raw bytes, then compare with Telemetry.md.'
+            );
+            return;
+        }
+        const targetProfile = AU_DEVICE_PROFILES[row.detectedProfileKey];
+        if (!targetProfile?.parseLine || targetProfile.disabled) {
+            setError('This device type is not supported for AU capture yet.');
+            return;
+        }
         const port = portByKeyRef.current.get(row.key);
         if (!port) {
             setError('That port is no longer available. Run Scan again.');
             return;
         }
+        const openOpts = {
+            baudRate: targetProfile.baudRate,
+            dataBits: 8,
+            stopBits: 1,
+            parity: 'none',
+            flowControl: 'none',
+        };
         try {
             await disconnectPort();
+            setProfileKey(row.detectedProfileKey);
+            setBaudRate(targetProfile.baudRate);
             const t = getSerialPlatformTiming();
             try {
                 await port.close();
@@ -471,20 +472,20 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 /* ignore */
             }
             await serialDelay(t.postCloseBeforeOpenMs);
-            await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
-            await primeSerialPortForSiAcRead(port, { txPing: !profile.readOnly });
+            await openSerialPortForSiAc(port, openOpts, captureOpenExtra);
+            await primeSerialPortForSiAcRead(port, { txPing: !targetProfile.readOnly });
             portRef.current = port;
             setConnected(true);
             setSelectedKey(row.key);
             if (row.sn) {
-                setPortHint(`AU ID: ${row.sn} · ${profile.baudRate} baud (${row.vidPid})`);
+                setPortHint(`AU ID: ${row.sn} · ${targetProfile.label} @ ${targetProfile.baudRate} baud (${row.vidPid})`);
             } else if (row.error) {
                 setPortHint(
-                    `Connected @ ${profile.baudRate} baud (${row.vidPid}) — scan issue: ${row.error}. Try capture if the unit is streaming.`
+                    `Connected @ ${targetProfile.baudRate} baud (${row.vidPid}) — ${row.error}. Try Start capture if the unit is streaming.`
                 );
             } else {
                 setPortHint(
-                    `Connected @ ${profile.baudRate} baud (${row.vidPid}) — AU ID not read during scan; use Start capture when the unit is sending JSON.`
+                    `Connected @ ${targetProfile.baudRate} baud (${row.vidPid}) — AU ID not read during scan; use Start capture when data is flowing.`
                 );
             }
         } catch (e) {
@@ -629,18 +630,48 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
             return schedule[schedule.length - 1].name;
         };
 
-        const parseLine = profile.parseLine;
+        let captureProfile = profile;
+        let parseLine = profile.parseLine;
 
         if (multiAuCapture) {
-            if (isLineDelimited) {
-                setError('GEN3 AU is receive-only single-port capture. Turn off Multi-AU, connect one device, then start.');
-                return;
-            }
             const keys = [...selectedKeysForMulti];
             if (keys.length === 0) {
                 setError('Select one or more AUs (checkboxes) for simultaneous capture, or turn off multi-AU mode and connect one port.');
                 return;
             }
+            const rowsForKeys = keys
+                .map((k) => discovered.find((d) => d.key === k))
+                .filter(Boolean);
+            if (rowsForKeys.length !== keys.length) {
+                setError('Selected port(s) are missing from the scan list — run Scan again.');
+                return;
+            }
+            if (rowsForKeys.some((r) => r.detectedProfileKey === 'UNKNOWN')) {
+                setError(
+                    'Remove unidentified ports from the selection. Use the Serial tab for unknown hardware, then scan again.'
+                );
+                return;
+            }
+            const unifiedTypes = new Set(rowsForKeys.map((r) => r.detectedProfileKey));
+            if (unifiedTypes.size !== 1) {
+                setError(
+                    'Multi-AU capture requires every selected device to be the same type (e.g. all SiAC64 or all SiAC32-V2).'
+                );
+                return;
+            }
+            const unifiedPk = [...unifiedTypes][0];
+            captureProfile = AU_DEVICE_PROFILES[unifiedPk];
+            if (!captureProfile?.parseLine || captureProfile.disabled) {
+                setError('Selected device type is not supported for AU capture.');
+                return;
+            }
+            if (captureProfile.streamMode === 'lineDelimited') {
+                setError('GEN3 AU is receive-only single-port capture. Turn off Multi-AU, connect one device, then start.');
+                return;
+            }
+            parseLine = captureProfile.parseLine;
+            setProfileKey(unifiedPk);
+            setBaudRate(captureProfile.baudRate);
 
             rowsRef.current = [];
             setLineCount(0);
@@ -678,11 +709,18 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                             /* ignore */
                         }
                         await serialDelay(t.postCloseBeforeOpenMs);
-                        await openSerialPortForSiAc(port, serialOpenOpts, captureOpenExtra);
-                        await primeSerialPortForSiAcRead(port, { txPing: !profile.readOnly });
-                        if (profile.rpcShell) {
+                        const multiOpenOpts = {
+                            baudRate: captureProfile.baudRate,
+                            dataBits: 8,
+                            stopBits: 1,
+                            parity: 'none',
+                            flowControl: 'none',
+                        };
+                        await openSerialPortForSiAc(port, multiOpenOpts, captureOpenExtra);
+                        await primeSerialPortForSiAcRead(port, { txPing: !captureProfile.readOnly });
+                        if (captureProfile.rpcShell) {
                             const periodMs = clampTelemetryPeriodMs(parseInt(telemetryPeriodMsStr, 10));
-                            const startPayloadRaw = profile.rpcShell.captureStartPayload;
+                            const startPayloadRaw = captureProfile.rpcShell.captureStartPayload;
                             const startPayload = typeof startPayloadRaw === 'function' ? startPayloadRaw(periodMs) : startPayloadRaw;
                             await writeSiac64RpcLine(port, startPayload);
                             await serialDelay(t.win ? 200 : 100);
@@ -718,7 +756,8 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                 let bytesIn = 0;
                 let orphanTail = '';
                 const lineCarryRef = { current: '' };
-                const skipFirstPhysicalLineRef = isLineDelimited ? { current: true } : null;
+                const multiLineDelimited = captureProfile.streamMode === 'lineDelimited';
+                const skipFirstPhysicalLineRef = multiLineDelimited ? { current: true } : null;
                 try {
                     const pushRowMulti = (row) => {
                         const elapsedMs = captureProgressWindowRef.current
@@ -746,7 +785,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         setLastParseHint(`${msg} — sample: ${bit}${String(sample).length > 120 ? '…' : ''}`);
                     };
 
-                    if (isLineDelimited) {
+                    if (multiLineDelimited) {
                         const r = await readSiAcPortUtf8Until(port, {
                             endAt,
                             shouldStop: () => stopRef.current,
@@ -840,9 +879,11 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     serialLines.flush();
                     const t = getSerialPlatformTiming();
                     await serialDelay(t.afterReaderReleasedMs);
-                    if (profile.rpcShell?.captureStopPayload) {
+                    if (captureProfile.rpcShell?.captureStopPayload) {
                         try {
-                            await writeSiac64RpcLine(port, profile.rpcShell.captureStopPayload);
+                            const stopPayloadRaw = captureProfile.rpcShell.captureStopPayload;
+                            const stopPayload = typeof stopPayloadRaw === 'function' ? stopPayloadRaw() : stopPayloadRaw;
+                            await writeSiac64RpcLine(port, stopPayload);
                         } catch {
                             /* ignore */
                         }
@@ -923,18 +964,18 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                         const b = res.bytesIn ?? 0;
                         if (res.parseErrors > 0) {
                             failures.push(
-                                `${who}: ${b} byte(s), no valid rows (${res.parseErrors} parse errors). Check profile/firmware or baud ${profile.baudRate}.`
+                                `${who}: ${b} byte(s), no valid rows (${res.parseErrors} parse errors). Check profile/firmware or baud ${captureProfile.baudRate}.`
                             );
                         } else if (b === 0) {
                             failures.push(
-                                `${who}: 0 bytes in this window — Chrome read nothing from that COM port. Check ${profile.baudRate} baud, cable/USB, and that no other app uses the port; try one AU only to rule out hub/driver limits.`
+                                `${who}: 0 bytes in this window — Chrome read nothing from that COM port. Check ${captureProfile.baudRate} baud, cable/USB, and that no other app uses the port; try one AU only to rule out hub/driver limits.`
                             );
                         } else {
                             const rawPrev = describePartialSerialBuffer(res.orphanTail || '');
                             const seen = rawPrev ? ` Unparsed tail: ${rawPrev}.` : '';
                             if (b <= 16) {
                                 failures.push(
-                                    `${who}: only ${b} raw byte(s) in the whole window — stream never delivered a full JSON object.${seen} Typical causes: another program using the same COM port, USB hub power, wrong baud (${profile.label} uses ${profile.baudRate}), or capturing several AUs at once on Windows starving one port. Try one AU, close other serial tools, longer window, or a different USB socket.`
+                                    `${who}: only ${b} raw byte(s) in the whole window — stream never delivered a full JSON object.${seen} Typical causes: another program using the same COM port, USB hub power, wrong baud (${captureProfile.label} uses ${captureProfile.baudRate}), or capturing several AUs at once on Windows starving one port. Try one AU, close other serial tools, longer window, or a different USB socket.`
                                 );
                             } else {
                                 failures.push(
@@ -1280,6 +1321,9 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                     <h3>Step 1: Connection</h3>
                     <div className="au-field">
                         <label htmlFor="au-profile">Hardware Profile</label>
+                        <p className="au-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+                            <strong>Scan for units</strong> probes each linked USB port at 115200 (SiAC32 / SiAC64 JSON) and 9600 (GEN3 CSV) and sets the profile when you connect. Use <strong>Hardware Profile</strong> only if you need to override manually.
+                        </p>
                         <div className="au-model-baud-row">
                             <select
                                 id="au-profile"
@@ -1329,7 +1373,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 type="button"
                                 className="au-btn au-btn-secondary"
                                 onClick={linkNewUsbDevice}
-                                disabled={recording || scanning || !webSerialSupported() || profile.disabled}
+                                disabled={recording || scanning || !webSerialSupported()}
                             >
                                 <Plug size={16} /> Link USB device…
                             </button>
@@ -1337,7 +1381,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 type="button"
                                 className="au-btn au-btn-secondary"
                                 onClick={runDeviceScan}
-                                disabled={recording || scanning || !webSerialSupported() || profile.disabled}
+                                disabled={recording || scanning || !webSerialSupported()}
                             >
                                 <ScanSearch size={16} /> {scanning ? 'Scanning…' : 'Scan for units'}
                             </button>
@@ -1349,7 +1393,14 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                 </div>
                                 <div className="au-device-list-items">
                                 {discovered.map((res) => {
+                                    const pk = res.detectedProfileKey ?? 'UNKNOWN';
+                                    const isUnknown = pk === 'UNKNOWN';
                                     const isSel = multiAuCapture ? selectedKeysForMulti.includes(res.key) : selectedKey === res.key;
+                                    const typeBadge = (
+                                        <span className={`au-device-type-badge${isUnknown ? ' au-device-type-badge--unknown' : ''}`}>
+                                            {detectedProfileLabel(pk)}
+                                        </span>
+                                    );
                                     const body = (
                                         <>
                                             <div className="au-device-row-main">
@@ -1359,29 +1410,60 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace }) {
                                                             type="checkbox"
                                                             checked={isSel}
                                                             onChange={() => toggleMultiKey(res.key)}
-                                                            disabled={recording}
+                                                            disabled={recording || isUnknown}
                                                             className="au-multi-checkbox"
                                                         />
                                                     )}
+                                                    {typeBadge}
                                                     {res.sn ? (
                                                         <div className="au-device-sn">
-                                                            {res.sn} <span className="au-device-port-muted">({res.key.split('-').pop()})</span>
+                                                            {res.sn}{' '}
+                                                            <span className="au-device-port-muted">({res.key.split('-').pop()})</span>
                                                         </div>
                                                     ) : (
                                                         <div className="au-device-sn au-device-sn--muted">
-                                                            Hardware Port {res.key.split('-').pop()} (SN not read yet)
+                                                            {isUnknown
+                                                                ? `Port ${res.key.split('-').pop()} — not identified`
+                                                                : `Hardware Port ${res.key.split('-').pop()} (SN not read yet)`}
                                                         </div>
                                                     )}
                                                 </div>
+                                                {isUnknown && res.error ? (
+                                                    <div className="au-device-sub" style={{ marginTop: 6 }}>
+                                                        {res.error}
+                                                    </div>
+                                                ) : null}
+                                                {isUnknown && !multiAuCapture ? (
+                                                    <div className="au-btn-row" style={{ marginTop: 8 }}>
+                                                        <button
+                                                            type="button"
+                                                            className="au-btn au-btn-secondary au-btn-compact"
+                                                            onClick={() => onOpenSerialTab?.()}
+                                                        >
+                                                            Open Serial tab
+                                                        </button>
+                                                    </div>
+                                                ) : null}
                                             </div>
                                         </>
                                     );
 
                                     if (multiAuCapture) {
                                         return (
-                                            <label key={res.key} className={`au-device-row au-device-row--multi${isSel ? ' au-device-row--checked' : ''}`}>
+                                            <label
+                                                key={res.key}
+                                                className={`au-device-row au-device-row--multi${isSel ? ' au-device-row--checked' : ''}${isUnknown ? ' au-device-row--unknown' : ''}`}
+                                            >
                                                 <div className="au-device-row-body">{body}</div>
                                             </label>
+                                        );
+                                    }
+
+                                    if (isUnknown) {
+                                        return (
+                                            <div key={res.key} className="au-device-row au-device-row--unknown-panel">
+                                                {body}
+                                            </div>
                                         );
                                     }
 

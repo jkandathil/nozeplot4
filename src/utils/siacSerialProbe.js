@@ -2,6 +2,7 @@ import {
     drainJsonObjectsFromBuffer,
     extractAuSerialNumberFromParsedJson,
     parseGen3AuDelimitedLine,
+    classifyAuJsonTelemetryObject,
 } from './siacDeviceProfiles.js';
 import { writeSiac64RpcLine, sanitizeSiacFirmwareJsonText } from './siac64RpcSerial.js';
 
@@ -180,6 +181,105 @@ export async function readAuSerialFromOpenPort(port, timeoutMs = 2000, externalA
 }
 
 /**
+ * Like {@link readAuSerialFromOpenPort} but returns the first JSON object that matches SiAC32 or SiAC64 shape and yields `sn`.
+ * @returns {Promise<{ sn: string, profileKey: 'SIAC32_V2'|'SIAC64_V03_RPC' }|null>}
+ */
+export async function readAuSerialClassifyFromOpenPort(port, timeoutMs = 2000, externalAbortSignal = null) {
+    if (!port?.readable) return null;
+
+    let reader;
+    try {
+        reader = port.readable.getReader();
+    } catch {
+        return null;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    /** @type {{ sn: string, profileKey: 'SIAC32_V2'|'SIAC64_V03_RPC' }|null} */
+    let found = null;
+
+    const onExternalAbort = () => {
+        reader?.cancel().catch(() => {});
+    };
+    if (externalAbortSignal) {
+        if (externalAbortSignal.aborted) {
+            try {
+                reader.releaseLock();
+            } catch {
+                /* ignore */
+            }
+            return null;
+        }
+        externalAbortSignal.addEventListener('abort', onExternalAbort);
+    }
+
+    const timer = setTimeout(() => {
+        reader?.cancel().catch(() => {});
+    }, timeoutMs);
+
+    const tryConsumeChunks = (chunks) => {
+        for (const jsonStr of chunks) {
+            try {
+                const obj = JSON.parse(sanitizeSiacFirmwareJsonText(jsonStr));
+                const profileKey = classifyAuJsonTelemetryObject(obj);
+                if (!profileKey) continue;
+                const sn = extractAuSerialNumberFromParsedJson(obj);
+                if (sn) {
+                    found = { sn, profileKey };
+                    return true;
+                }
+            } catch {
+                /* skip */
+            }
+        }
+        return false;
+    };
+
+    try {
+        while (!found) {
+            let readResult;
+            try {
+                readResult = await reader.read();
+            } catch {
+                break;
+            }
+            const { value, done } = readResult;
+            if (done) break;
+            if (value?.byteLength) {
+                buffer += decoder.decode(value, { stream: true });
+            }
+            const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
+            buffer = rest;
+            if (tryConsumeChunks(chunks)) break;
+        }
+        if (!found) {
+            buffer += decoder.decode();
+            const { chunks, rest } = drainJsonObjectsFromBuffer(buffer);
+            tryConsumeChunks(chunks);
+            buffer = rest;
+        }
+    } finally {
+        clearTimeout(timer);
+        if (externalAbortSignal) {
+            externalAbortSignal.removeEventListener('abort', onExternalAbort);
+        }
+        try {
+            await reader.cancel();
+        } catch {
+            /* ignore */
+        }
+        try {
+            reader.releaseLock();
+        } catch {
+            /* ignore */
+        }
+    }
+
+    return found;
+}
+
+/**
  * Wall-clock fallback: abort read (releases reader); optionally port.close() if the read never completes.
  * @param {boolean} closePortOnBust - false on Windows first scan pass so a second read can run on the same open.
  */
@@ -203,6 +303,37 @@ async function readAuSerialWithWatchdog(port, readTimeoutMs, bustAfterMs, closeP
                 settled = true;
                 clearTimeout(bustTimer);
                 resolve(sn ?? null);
+            })
+            .catch(() => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(bustTimer);
+                resolve(null);
+            });
+    });
+}
+
+/** @returns {Promise<{ sn: string, profileKey: 'SIAC32_V2'|'SIAC64_V03_RPC' }|null>} */
+async function readAuSerialClassifyWithWatchdog(port, readTimeoutMs, bustAfterMs, closePortOnBust = true) {
+    const ac = new AbortController();
+    let bustTimer;
+    let settled = false;
+    return new Promise((resolve) => {
+        bustTimer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            ac.abort();
+            if (closePortOnBust && typeof port.close === 'function') {
+                port.close().catch(() => {});
+            }
+            resolve(null);
+        }, bustAfterMs);
+        readAuSerialClassifyFromOpenPort(port, readTimeoutMs, ac.signal)
+            .then((res) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(bustTimer);
+                resolve(res ?? null);
             })
             .catch(() => {
                 if (settled) return;
@@ -441,6 +572,166 @@ export async function scanProbeGen3AuPort(port, openOpts) {
             /* ignore */
         }
         await delay(t.postCloseAfterProbeMs);
+    }
+}
+
+const GEN3_SCAN_OPEN_OPTS = {
+    baudRate: 9600,
+    dataBits: 8,
+    stopBits: 1,
+    parity: 'none',
+    flowControl: 'none',
+};
+
+/**
+ * After 115200 JSON detection fails, try GEN3 CSV at 9600; otherwise UNKNOWN.
+ * @param {string|null} prefix
+ */
+async function finishAuAutoScanWithGen3Fallback(port, prefix) {
+    const g3 = await scanProbeGen3AuPort(port, GEN3_SCAN_OPEN_OPTS);
+    if (g3.sn) {
+        return { sn: g3.sn, detectedProfileKey: 'GEN3_AU', error: null };
+    }
+    const parts = [prefix, g3.error].filter(Boolean);
+    return {
+        sn: null,
+        detectedProfileKey: 'UNKNOWN',
+        error:
+            parts.join(' ').trim() ||
+            'Could not identify SiAC32, SiAC64, or GEN3. Open the Serial tab to capture raw data.',
+    };
+}
+
+/**
+ * Auto-detect aroma unit on one port: 115200 JSON (SiAC32 vs SiAC64, with TELEMETRY RPC probe), then 9600 GEN3 CSV.
+ * @returns {Promise<{ sn: string|null, detectedProfileKey: 'SIAC32_V2'|'SIAC64_V03_RPC'|'GEN3_AU'|'UNKNOWN', error: string|null }>}
+ */
+export async function scanProbeAuPortAuto(port) {
+    const t = getSerialPlatformTiming();
+    const readMs = Math.max(t.scanReadTimeoutMs, 3000);
+    const bustAfterMs = readMs + t.bustExtraMs;
+    const base115 = {
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+    };
+    const openWithFlow = serialOpenOptsForPlatform(base115, true);
+    const teleProbe = { method: 'TELEMETRY', params: { period: 1000, outputFormat: 0 } };
+
+    try {
+        try {
+            await port.close();
+        } catch {
+            /* ignore */
+        }
+        await delay(t.postCloseBeforeOpenMs);
+        try {
+            await port.open(openWithFlow);
+        } catch (e) {
+            if (t.win && openWithFlow.bufferSize) {
+                const { bufferSize: _b, ...rest } = openWithFlow;
+                await port.open(rest);
+            } else {
+                throw e;
+            }
+        }
+
+        await applySerialPortWakeSignals(port);
+        await delay(t.postWakeSignalsMs);
+        if (t.preReadAfterOpenMs > 0) {
+            await delay(t.preReadAfterOpenMs);
+        }
+
+        const okReadable = await waitForReadable(port, t.readableWaitAttempts, t.readableWaitStepMs);
+        if (!okReadable) {
+            try {
+                await port.close();
+            } catch {
+                /* ignore */
+            }
+            await delay(t.postCloseAfterProbeMs);
+            return finishAuAutoScanWithGen3Fallback(port, 'No readable stream at 115200.');
+        }
+
+        await trySiAcStreamWakeWrite(port, t);
+        await delay(t.afterWritablePingMs);
+
+        const closeOnFirstBust = !t.win;
+        let classified = await readAuSerialClassifyWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+
+        if (!classified) {
+            try {
+                await writeSiac64RpcLine(port, teleProbe, {
+                    alsoSendRawJson: true,
+                    postWriteDelayMs: 25,
+                });
+                await delay(t.win ? 520 : 380);
+            } catch {
+                /* ignore */
+            }
+            classified = await readAuSerialClassifyWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+        }
+
+        if (!classified) {
+            try {
+                await writeSiac64RpcLine(port, teleProbe, {
+                    alsoSendRawJson: true,
+                    postWriteDelayMs: 25,
+                });
+                await delay(t.win ? 520 : 400);
+            } catch {
+                /* ignore */
+            }
+            classified = await readAuSerialClassifyWithWatchdog(port, readMs, bustAfterMs, closeOnFirstBust);
+        }
+
+        if (!classified && t.win) {
+            await applyAlternateWindowsSerialSignals(port);
+            await trySiAcStreamWakeWrite(port, t);
+            await delay(t.afterWritablePingMs);
+            try {
+                await writeSiac64RpcLine(port, teleProbe, {
+                    alsoSendRawJson: true,
+                    postWriteDelayMs: 25,
+                });
+                await delay(420);
+            } catch {
+                /* ignore */
+            }
+            const secondMs = t.scanSecondReadMs;
+            classified = await readAuSerialClassifyWithWatchdog(port, secondMs, secondMs + 5000, true);
+        }
+
+        try {
+            await port.close();
+        } catch {
+            /* ignore */
+        }
+        await delay(t.postCloseAfterProbeMs);
+
+        if (classified?.sn && classified?.profileKey) {
+            return { sn: classified.sn, detectedProfileKey: classified.profileKey, error: null };
+        }
+
+        return finishAuAutoScanWithGen3Fallback(port, null);
+    } catch (e) {
+        try {
+            await port.close();
+        } catch {
+            /* ignore */
+        }
+        await delay(t.postCloseAfterProbeMs);
+        const g3 = await scanProbeGen3AuPort(port, GEN3_SCAN_OPEN_OPTS);
+        if (g3.sn) {
+            return { sn: g3.sn, detectedProfileKey: 'GEN3_AU', error: null };
+        }
+        return {
+            sn: null,
+            detectedProfileKey: 'UNKNOWN',
+            error: e?.message || g3.error || 'Scan failed',
+        };
     }
 }
 

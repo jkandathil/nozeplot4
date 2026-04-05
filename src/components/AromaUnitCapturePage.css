@@ -430,6 +430,39 @@
     background: rgba(16, 185, 129, 0.08);
 }
 
+.au-device-type-badge {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(56, 189, 248, 0.15);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.au-device-type-badge--unknown {
+    background: rgba(251, 191, 36, 0.12);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.35);
+}
+
+.au-device-row--unknown-panel {
+    border-style: dashed;
+    cursor: default;
+}
+
+.au-device-row--unknown .au-device-sn-line {
+    flex-wrap: wrap;
+}
+
+.au-btn-compact {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
 /* Collection progress */
 .au-collection-progress {
     margin-top: 14px;

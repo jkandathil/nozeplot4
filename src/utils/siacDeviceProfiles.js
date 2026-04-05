@@ -549,6 +549,24 @@ export function getAuProfile(profileKey) {
     return AU_DEVICE_PROFILES[profileKey] || AU_DEVICE_PROFILES.SIAC32_V2;
 }
 
+/**
+ * Classify a parsed JSON UART object as SiAC32 vs SiAC64 (TELEMETRY / jsonrpc).
+ * @param {unknown} obj
+ * @returns {'SIAC32_V2'|'SIAC64_V03_RPC'|null}
+ */
+export function classifyAuJsonTelemetryObject(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    const s32 = AU_DEVICE_PROFILES.SIAC32_V2.isFormatCompatible(obj);
+    const s64 = AU_DEVICE_PROFILES.SIAC64_V03_RPC.isFormatCompatible(obj);
+    if (!s32 && !s64) return null;
+    if (s32 && s64) {
+        if (obj.jsonrpc != null || obj.method != null) return 'SIAC64_V03_RPC';
+        return 'SIAC32_V2';
+    }
+    if (s32) return 'SIAC32_V2';
+    return 'SIAC64_V03_RPC';
+}
+
 /** Workspace folder name for one physical AU (matches device `sn` field). */
 export function auDeviceFolderNameFromSn(sn) {
     const t = String(sn ?? '').trim();

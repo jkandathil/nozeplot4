@@ -1227,7 +1227,10 @@ function App() {
               style={{ display: activePage === 'aromaUnitCapture' ? 'block' : 'none' }}
               aria-hidden={activePage !== 'aromaUnitCapture'}
             >
-              <AromaUnitCapturePage onSaveToWorkspace={handleAromaUnitCaptureSave} />
+              <AromaUnitCapturePage
+                onSaveToWorkspace={handleAromaUnitCaptureSave}
+                onOpenSerialTab={() => setActivePage('serialMonitor')}
+              />
             </div>
 
             {activePage !== 'aromaUnitCapture' && (

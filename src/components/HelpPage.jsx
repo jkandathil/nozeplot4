@@ -22,6 +22,7 @@ import {
     Blend,
     Usb,
     Layers,
+    Terminal,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -1222,20 +1223,61 @@ const GUIDE_SECTIONS = [
         title: 'AU capture',
         subtitle: 'Real-Time Hardware Interfacing',
         intro:
-            'Live data acquisition directly from the sensor hardware. This section bridges the gap between physical sensors and digital data.',
+            'Live data acquisition directly from aroma-unit (AU) hardware over USB serial. Supports multiple device generations — from compact SiAC32 units to the 64-sensor SiAC64 and the passive GEN3 CSV-streaming AU — all within the browser via the Web Serial API (Chrome / Edge only).',
         fundamentals: [
-            '**Serial Communication (UART):** Data is streamed bit-by-bit from the device over USB.',
-            '**Parsing Heuristics:** The app identifies JSON packets or byte-streams and maps them to a spreadsheet-like CSV format in real-time.',
-            '**Sampling Rate:** The "heartbeat" of your data. High sampling (e.g. 10Hz) captures fast kinetics but creates larger files.',
+            '**Device profiles:** the app ships with four profiles — `SiAC32-V2` (JSON stream, 115200 baud), `SiAC64 v0.3 RPC` (TELEMETRY JSON-RPC, 115200 baud, with piezo pump control), and `GEN3 AU` (passive CSV/TSV stream, fixed 9600 baud). Select the profile that matches your hardware before connecting.',
+            '**Auto-scan / probe:** clicking "Scan for AU" sends a lightweight telemetry probe to every linked port and classifies the response automatically — no manual profile guessing needed for SiAC32/SiAC64 devices.',
+            '**Stream modes:** SiAC32 and SiAC64 devices emit newline-delimited JSON objects; GEN3 AU emits raw comma- or tab-delimited CSV rows. The parser switches automatically based on the selected profile.',
+            '**Capture sequence:** define a named sequence of timed events (e.g. Baseline 60 s → FeNOMeasurement 120 s → Recovery 60 s). Each row is tagged with its `event_name` so the file integrates directly with Aroma analysis and ML Studio.',
+            '**Pump control (SiAC64):** set the piezo pump flow rate (CCM) and telemetry period (ms) from the UI without needing a separate serial terminal.',
+            '**Multi-device capture:** link and record from several AUs simultaneously; each device saves to its own folder named after its serial number.',
         ],
         implemented: [
-            'Web Serial API integration for browser-based USB capture',
-            'Support for multi-device parallel recording',
-            'Real-time data streaming and auto-save to workspace',
+            'Web Serial API integration (Chrome / Edge)',
+            'Device profiles: SiAC32-V2 · SiAC64 v0.3 RPC · GEN3 AU (9600 baud CSV)',
+            'Auto-scan port probe with automatic SiAC32 / SiAC64 classification',
+            'Configurable named capture sequence with per-event durations',
+            'Multi-AU parallel recording — each AU saved to its own workspace subfolder',
+            'SiAC64 piezo pump flow and telemetry-period control via RPC',
+            'Real-time row preview and parse-error counter during capture',
+            'Auto-save CSV to workspace on capture end; custom event-name library',
         ],
         steps: [
-            'Connect device, pick the UART profile, and click **Connect**.',
-            'Set the duration and watch the live plot stream into your workspace.',
+            'Click **Link USB device** to grant browser access to the port, then select the matching **Device profile** (or leave on SiAC64 and click **Scan for AU** to auto-detect).',
+            'Build your **capture sequence**: add events, set each duration, name them (e.g. Baseline, FeNOMeasurement).',
+            'For SiAC64: optionally set the **telemetry period** (ms) and **pump flow** (CCM) before starting.',
+            'Click **Start capture** — data streams in real time; the file is saved automatically to the device\'s workspace subfolder when the sequence ends.',
+            'To record from several devices at once, link all ports first, then enable **Multi-AU capture** and select the units to include.',
+        ],
+    },
+    {
+        id: 'serial-monitor',
+        icon: Terminal,
+        title: 'Serial monitor',
+        subtitle: 'General-Purpose USB Serial Terminal',
+        intro:
+            'A lightweight, browser-based serial terminal for any USB device — not just aroma units. Useful for debugging firmware, logging raw UART output, or sending commands to embedded systems, all without leaving the app.',
+        fundamentals: [
+            '**Web Serial API:** runs entirely in the browser (Chrome / Edge); no drivers or native apps required. The browser prompts the user to select a port; the app then reads and writes bytes directly.',
+            '**Port identification:** once a device is linked, the monitor shows its USB Vendor ID (VID) and Product ID (PID) so you can confirm you\'ve picked the right port.',
+            '**Baud rate flexibility:** supports the eight most common UART rates — 9600, 19200, 38400, 57600, 115200, 230400, 460800, and 921600 bps — selectable before connecting.',
+            '**Send & receive:** type any text into the send panel and append no extra bytes, a line feed (LF), or CR+LF — matching whatever your device expects. Keyboard shortcut Ctrl/⌘+Enter sends immediately.',
+            '**Timestamped log:** every incoming line is captured with an ISO-8601 timestamp. The buffer holds up to 4000 lines; older lines are trimmed automatically to stay responsive.',
+        ],
+        implemented: [
+            'Web Serial API port linking, refresh, connect, and disconnect',
+            'VID / PID display for connected USB devices',
+            'Baud rate selector: 9600 · 19200 · 38400 · 57600 · 115200 · 230400 · 460800 · 921600',
+            'UART send panel with configurable line ending (none / LF / CRLF)',
+            'Live scrolling log with up to 4000 timestamped lines',
+            'Save log as **CSV** (timestamp column + one column per delimited field) or **TXT** (tab-separated timestamp + raw line)',
+            'Clear log and status indicator (connected baud rate / disconnected)',
+        ],
+        steps: [
+            'Click **Link USB device** and select the port in the browser dialog. Click **Refresh** if the device was plugged in after the page loaded.',
+            'Choose the correct **Baud rate** for your device, then click **Connect**.',
+            'Incoming data appears in the log panel in real time. To send a command, type it in the send box and press **Send** (or Ctrl/⌘+Enter). Choose the line ending your firmware expects.',
+            'After disconnecting, click **Save CSV** or **Save TXT** to export the timestamped log to your workspace.',
         ],
     },
     {
