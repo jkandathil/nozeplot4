@@ -4,6 +4,12 @@
 import * as tf from '@tensorflow/tfjs';
 import { PCA } from 'ml-pca';
 import { Matrix } from 'ml-matrix';
+import { ridgeFitWithIntercept } from './mlEngines/ridgeFit.js';
+import {
+    ML_ENGINE_RIDGE_PCA,
+    ML_ENGINE_TF_MLP,
+    TRANSFORMERS_EMBED_MODEL_ID,
+} from './mlEngines/registry.js';
 
 const SENSOR_COLS = Array.from({ length: 8 }, (_, r) => 'ABCDEFGH'[r])
     .flatMap((row) => Array.from({ length: 8 }, (_, c) => `${row}${c + 1}`));
@@ -42,22 +48,44 @@ function rowsWhereEventEquals(data, eventName) {
     return (data || []).filter((r) => String(r?.event_name ?? '').trim() === eventName);
 }
 
-/** Extracts the same feature dict as fenose_predict.py for one CSV dataset already parsed into rows. */
+/**
+ * Extracts the feature dict for one CSV dataset already parsed into rows.
+ *
+ * Baseline phase: **BreathSampleCollection** — the breath matrix delivered to
+ * the sensor array before the analyte measurement begins.  Normalising against
+ * BSC (rather than AmbientSamplingRFC / room air) removes the large humidity
+ * and temperature shift between ambient air and exhaled breath, isolating the
+ * true analyte (NO) response in the delta and normalised-delta features.
+ *
+ * Signal phases: **FeNOMeasurement** and **FeNOWindow** — the analyte is
+ * actively present on the sensor array during these events.
+ *
+ * Excluded: **recoveryOff** — post-measurement sensor recovery is not part of
+ * the analyte signal and must not contribute to features or environmental
+ * averages.
+ *
+ * Falls back to AmbientSamplingRFC when BreathSampleCollection is absent
+ * (legacy files / cleaning runs) so older datasets still load.
+ */
 export function extractFenoseFeaturesFromRows(data) {
-    const ambient = rowsWhereEventEquals(data, 'AmbientSamplingRFC');
+    /* ── baseline: prefer BreathSampleCollection, fall back to AmbientSamplingRFC ─ */
+    let baseline = rowsWhereEventEquals(data, 'BreathSampleCollection');
+    if (!baseline.length) {
+        baseline = rowsWhereEventEquals(data, 'AmbientSamplingRFC');
+    }
     const feno = rowsWhereEventEquals(data, 'FeNOMeasurement');
     const window = rowsWhereEventEquals(data, 'FeNOWindow');
-    if (!ambient.length || !feno.length) {
-        throw new Error('Missing AmbientSamplingRFC or FeNOMeasurement phases (event_name column required).');
+    if (!baseline.length || !feno.length) {
+        throw new Error('Missing BreathSampleCollection (or AmbientSamplingRFC) or FeNOMeasurement phases (event_name column required).');
     }
 
-    const ambMean = {};
+    const blMean = {};   // baseline (BSC) mean per sensor
     const fenoMean = {};
     const fenoStd = {};
     const windowMean = {};
 
     for (const s of SENSOR_COLS) {
-        ambMean[s] = meanOf(ambient.map((r) => safeNumber(r?.[s])));
+        blMean[s] = meanOf(baseline.map((r) => safeNumber(r?.[s])));
         const fVals = feno.map((r) => safeNumber(r?.[s])).filter((v) => v !== null);
         fenoMean[s] = meanOf(fVals);
         fenoStd[s] = stdOf(fVals);
@@ -74,18 +102,29 @@ export function extractFenoseFeaturesFromRows(data) {
     const nds = [];
 
     for (const s of SENSOR_COLS) {
-        const delta = fenoMean[s] - ambMean[s];
-        const nd = delta / (Math.abs(ambMean[s]) + 1e-6);
+        const delta = fenoMean[s] - blMean[s];
+        const nd = delta / (Math.abs(blMean[s]) + 1e-6);
         feats[`d_${s}`] = delta;
         feats[`nd_${s}`] = nd;
         feats[`fs_${s}`] = fenoStd[s] || 0;
-        feats[`wd_${s}`] = window.length ? (windowMean[s] - ambMean[s]) : 0;
+        feats[`wd_${s}`] = window.length ? (windowMean[s] - blMean[s]) : 0;
         deltas.push(delta);
         nds.push(nd);
     }
 
+    /* ── environmental features from non-recovery rows only ─────────────────── */
+    const nonRecovery = (data || []).filter(
+        (r) => String(r?.event_name ?? '').trim() !== 'recoveryOff'
+    );
     for (const e of ['AQT0', 'AQH0', 'AQP0']) {
-        feats[`env_${e}`] = meanOf((data || []).map((r) => safeNumber(r?.[e])));
+        feats[`env_${e}`] = meanOf(nonRecovery.map((r) => safeNumber(r?.[e])));
+    }
+
+    /* ── environmental delta: BSC conditions vs FeNO conditions ─────────────── */
+    for (const e of ['AQT0', 'AQH0', 'AQP0']) {
+        const blEnv = meanOf(baseline.map((r) => safeNumber(r?.[e])));
+        const fenoEnv = meanOf(feno.map((r) => safeNumber(r?.[e])));
+        feats[`env_d_${e}`] = fenoEnv - blEnv;
     }
 
     feats.delta_mean = meanOf(deltas);
@@ -157,6 +196,31 @@ export function buildFenoseDatasetFromFiles(files) {
     const X = rows.map((r) => featCols.map((k) => (Number.isFinite(r.feats[k]) ? r.feats[k] : 0)));
     const y = rows.map((r) => r.y);
     return { rows, featCols, X, y };
+}
+
+function mergeFeatColsFromRows(rows) {
+    return Array.from(
+        rows.reduce((s, r) => {
+            Object.keys(r.feats || {}).forEach((k) => s.add(k));
+            return s;
+        }, new Set())
+    ).sort((a, b) => a.localeCompare(b));
+}
+
+function matrixFromRows(rows, featCols) {
+    return rows.map((r) => featCols.map((k) => (Number.isFinite(r.feats[k]) ? r.feats[k] : 0)));
+}
+
+async function augmentRowsTextEmbeddings(rows, dims, onProgress) {
+    const { embedMiniLmSlice } = await import('./mlEngines/textEmbedAugment.js');
+    for (let i = 0; i < rows.length; i++) {
+        const text = `${rows[i].deviceId}|${rows[i].fileName}`;
+        const emb = await embedMiniLmSlice(text, dims);
+        for (let j = 0; j < dims; j++) {
+            rows[i].feats[`txt_e_${j}`] = emb[j];
+        }
+        onProgress?.({ phase: 'txt_embed', index: i + 1, total: rows.length });
+    }
 }
 
 function corrAbs(Xcol, y) {
@@ -372,10 +436,29 @@ export async function trainFenoseV1FromFiles(
 
 export async function trainFenoseV2FromFiles(
     files,
-    { topK = 300, nPca = 50, testFrac = 0.2, seed = 0, epochs = 300, lr = 1e-3, h1 = 64, h2 = 32 } = {},
+    {
+        topK = 300,
+        nPca = 50,
+        testFrac = 0.2,
+        seed = 0,
+        epochs = 300,
+        lr = 1e-3,
+        h1 = 64,
+        h2 = 32,
+        mlEngine = ML_ENGINE_TF_MLP,
+        ridgeLambda = 0.05,
+        textEmbeddingAugment = false,
+        textEmbeddingDims = 8,
+    } = {},
     onProgress = null
 ) {
-    const { rows, featCols, X, y } = buildFenoseDatasetFromFiles(files);
+    let { rows, featCols, X, y } = buildFenoseDatasetFromFiles(files);
+    if (textEmbeddingAugment) {
+        const td = Math.max(2, Math.min(32, Math.floor(Number(textEmbeddingDims) || 8)));
+        await augmentRowsTextEmbeddings(rows, td, onProgress);
+        featCols = mergeFeatColsFromRows(rows);
+        X = matrixFromRows(rows, featCols);
+    }
     const rowsWithX = rows.map((r, i) => ({ ...r, x: X[i] }));
 
     // Build good_mask: select Top-K by abs corr with raw ppb (simple, deterministic)
@@ -418,18 +501,52 @@ export async function trainFenoseV2FromFiles(
     const yTrainScaled = split.train.map((r) => r.y / yMax);
     const yTest = split.test.map((r) => r.y);
 
-    const model = await tfTrainMlp(XtrainPca, yTrainScaled, { epochs, lr, h1, h2 }, onProgress);
-    const predScaled = tf.tidy(() =>
-        model.predict(tf.tensor2d(XtestPca, [XtestPca.length, XtestPca[0].length], 'float32')).dataSync()
-    );
-    const predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.min(yMax, v * yMax)));
-    const validationPoints = split.test.map((r, i) => ({
-        actual: yTest[i],
-        predicted: predPpb[i],
-        label: trainingSampleLabel(r),
-    }));
+    const embedDimsUsed =
+        textEmbeddingAugment
+            ? Math.max(2, Math.min(32, Math.floor(Number(textEmbeddingDims) || 8)))
+            : 0;
 
-    const weights = await denseWeightsToFenoseJson(model);
+    /** @type {object} */
+    let weights;
+    /** @type {number[]} */
+    let predPpb;
+    /** @type {Array<{ actual: number, predicted: number, label: string }>} */
+    let validationPoints;
+
+    if (mlEngine === ML_ENGINE_RIDGE_PCA) {
+        const lam = Math.max(1e-8, Number(ridgeLambda) || 0.05);
+        const { coef, intercept } = ridgeFitWithIntercept(XtrainPca, yTrainScaled, lam);
+        predPpb = XtestPca.map((row) => {
+            let s = intercept;
+            for (let j = 0; j < coef.length; j++) s += (row[j] ?? 0) * (coef[j] ?? 0);
+            return Math.max(0, Math.min(yMax, s * yMax));
+        });
+        validationPoints = split.test.map((r, i) => ({
+            actual: yTest[i],
+            predicted: predPpb[i],
+            label: trainingSampleLabel(r),
+        }));
+        weights = { engine: ML_ENGINE_RIDGE_PCA, coef, intercept };
+        const yTrainPred = XtrainPca.map((row) => {
+            let s = intercept;
+            for (let j = 0; j < coef.length; j++) s += (row[j] ?? 0) * (coef[j] ?? 0);
+            return s;
+        });
+        onProgress?.({ epoch: 1, loss: mse(yTrainScaled, yTrainPred), phase: 'ridge' });
+    } else {
+        const model = await tfTrainMlp(XtrainPca, yTrainScaled, { epochs, lr, h1, h2 }, onProgress);
+        const predScaled = tf.tidy(() =>
+            model.predict(tf.tensor2d(XtestPca, [XtestPca.length, XtestPca[0].length], 'float32')).dataSync()
+        );
+        predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.min(yMax, v * yMax)));
+        validationPoints = split.test.map((r, i) => ({
+            actual: yTest[i],
+            predicted: predPpb[i],
+            label: trainingSampleLabel(r),
+        }));
+        weights = await denseWeightsToFenoseJson(model);
+        weights.engine = ML_ENGINE_TF_MLP;
+    }
 
     // Store V_pca in *full feature space* like the inference code expects (it indexes with good_mask)
     const Vfull = featCols.map(() => new Array(V[0].length).fill(0));
@@ -453,6 +570,12 @@ export async function trainFenoseV2FromFiles(
         feat_std: featStdFull,
         V_pca: Vfull,
         y_max: yMax,
+        ml_engine: mlEngine === ML_ENGINE_RIDGE_PCA ? ML_ENGINE_RIDGE_PCA : ML_ENGINE_TF_MLP,
+        ridge_lambda: mlEngine === ML_ENGINE_RIDGE_PCA ? Math.max(1e-8, Number(ridgeLambda) || 0.05) : undefined,
+        text_embedding_augment:
+            textEmbeddingAugment && embedDimsUsed > 0
+                ? { dims: embedDimsUsed, model_id: TRANSFORMERS_EMBED_MODEL_ID }
+                : undefined,
     };
 
     return {
@@ -464,8 +587,82 @@ export async function trainFenoseV2FromFiles(
             MAE_ppb: mae(yTest, predPpb),
             RMSE_ppb: rmse(yTest, predPpb),
             validationPoints,
+            mlEngine: preprocessing.ml_engine,
         },
     };
+}
+
+/**
+ * Build the PCA feature vector (length n_components) for FeNOse v2 / ONNX, including optional text embeddings.
+ * @param {object[]} dataRows
+ * @param {object} p — v2 preprocessing JSON
+ * @param {{ fileName?: string, deviceId?: string }} [predictContext]
+ * @returns {Promise<Float32Array>}
+ */
+export async function buildFenoseV2PcaFloat32Vector(dataRows, p, predictContext = {}) {
+    const feats = extractFenoseFeaturesFromRows(dataRows);
+    const aug = p?.text_embedding_augment;
+    if (aug && aug.dims > 0) {
+        const dims = aug.dims;
+        const { embedMiniLmSlice } = await import('./mlEngines/textEmbedAugment.js');
+        const fn = predictContext.fileName || '';
+        if (fn) {
+            const dev = predictContext.deviceId || parseFenoseDeviceIdFromFilename(fn);
+            const emb = await embedMiniLmSlice(`${dev}|${fn}`, dims);
+            for (let j = 0; j < dims; j++) {
+                feats[`txt_e_${j}`] = emb[j];
+            }
+        } else {
+            for (let j = 0; j < dims; j++) {
+                feats[`txt_e_${j}`] = 0;
+            }
+        }
+    }
+
+    const featCols = Array.isArray(p?.feat_cols) ? p.feat_cols : [];
+    const goodMask = Array.isArray(p?.good_mask) ? p.good_mask : null;
+    const featMean = Array.isArray(p?.feat_mean) ? p.feat_mean : null;
+    const featStd = Array.isArray(p?.feat_std) ? p.feat_std : null;
+    const Vpca = Array.isArray(p?.V_pca) ? p.V_pca : null;
+
+    if (!featCols.length || !goodMask || !featMean || !featStd || !Vpca) {
+        throw new Error('Preprocessing JSON missing feat_cols/good_mask/feat_mean/feat_std/V_pca.');
+    }
+
+    const goodIdx = [];
+    for (let i = 0; i < goodMask.length; i++) if (goodMask[i]) goodIdx.push(i);
+    if (!goodIdx.length) throw new Error('good_mask selects 0 features.');
+
+    const Xfull = featCols.map((c) => {
+        const v = feats[c];
+        return Number.isFinite(v) ? v : 0;
+    });
+
+    const Xg = goodIdx.map((i) => Xfull[i] ?? 0);
+    const mu = goodIdx.map((i) => featMean[i] ?? 0);
+    const sd = goodIdx.map((i) => featStd[i] ?? 1);
+
+    const Xsc = Xg.map((v, i) => (v - mu[i]) / ((sd[i] || 0) + 1e-8));
+
+    const nGood = Xsc.length;
+    const nPca = Array.isArray(Vpca[0]) ? Vpca[0].length : 0;
+    if (nPca <= 0) throw new Error('V_pca has invalid shape.');
+    if (Vpca.length !== goodMask.length) {
+        if (Vpca.length !== nGood) throw new Error(`V_pca rows (${Vpca.length}) mismatch good features (${nGood}).`);
+    }
+
+    const Vgood = Vpca.length === nGood ? Vpca : goodIdx.map((i) => Vpca[i]);
+
+    const Xpca = new Array(nPca).fill(0);
+    for (let j = 0; j < nPca; j++) {
+        let s = 0;
+        for (let i = 0; i < nGood; i++) {
+            s += Xsc[i] * (Vgood[i][j] ?? 0);
+        }
+        Xpca[j] = s;
+    }
+
+    return new Float32Array(Xpca);
 }
 
 /**
@@ -550,7 +747,15 @@ export async function predictFenosePpbV1FromRows(
 
 export async function predictFenosePpbV2FromRows(
     dataRows,
-    { weightsUrl, preprocessingUrl, weightsUrls, preprocessingUrls, weights, preprocessing } = {}
+    {
+        weightsUrl,
+        preprocessingUrl,
+        weightsUrls,
+        preprocessingUrls,
+        weights,
+        preprocessing,
+        predictContext = {},
+    } = {}
 ) {
     const [w, p] = weights && preprocessing
         ? [weights, preprocessing]
@@ -559,58 +764,34 @@ export async function predictFenosePpbV2FromRows(
               fetchJsonFirstOk(preprocessingUrls || preprocessingUrl, 'preprocessing'),
           ]);
 
-    const feats = extractFenoseFeaturesFromRows(dataRows);
-    const featCols = Array.isArray(p?.feat_cols) ? p.feat_cols : [];
-    const goodMask = Array.isArray(p?.good_mask) ? p.good_mask : null;
-    const featMean = Array.isArray(p?.feat_mean) ? p.feat_mean : null;
-    const featStd = Array.isArray(p?.feat_std) ? p.feat_std : null;
-    const Vpca = Array.isArray(p?.V_pca) ? p.V_pca : null;
     const yMax = typeof p?.y_max === 'number' ? p.y_max : (Array.isArray(p?.y_max) ? Number(p.y_max[0]) : null);
-
-    if (!featCols.length || !goodMask || !featMean || !featStd || !Vpca || !Number.isFinite(yMax)) {
-        throw new Error('Preprocessing JSON missing feat_cols/good_mask/feat_mean/feat_std/V_pca/y_max.');
-    }
-    if (!w?.W1 || !w?.b1 || !w?.W2 || !w?.b2 || !w?.W3 || !w?.b3) {
-        throw new Error('Weights JSON missing W1/b1/W2/b2/W3/b3.');
+    if (!Number.isFinite(yMax)) {
+        throw new Error('Preprocessing JSON missing y_max.');
     }
 
-    const Xfull = featCols.map((c) => {
-        const v = feats[c];
-        return Number.isFinite(v) ? v : 0;
-    });
+    const Xpca = await buildFenoseV2PcaFloat32Vector(dataRows, p, predictContext);
+    const xArr = Array.from(Xpca);
 
-    const goodIdx = [];
-    for (let i = 0; i < goodMask.length; i++) if (goodMask[i]) goodIdx.push(i);
-    if (!goodIdx.length) throw new Error('good_mask selects 0 features.');
-
-    const Xg = goodIdx.map((i) => Xfull[i] ?? 0);
-    const mu = goodIdx.map((i) => featMean[i] ?? 0);
-    const sd = goodIdx.map((i) => featStd[i] ?? 1);
-
-    const Xsc = Xg.map((v, i) => (v - mu[i]) / ((sd[i] || 0) + 1e-8));
-
-    // V_pca is expected to be [n_good x n_pca] (per training app.py)
-    const nGood = Xsc.length;
-    const nPca = Array.isArray(Vpca[0]) ? Vpca[0].length : 0;
-    if (nPca <= 0) throw new Error('V_pca has invalid shape.');
-    if (Vpca.length !== goodMask.length) {
-        // Some exports may already be sliced; handle both.
-        if (Vpca.length !== nGood) throw new Error(`V_pca rows (${Vpca.length}) mismatch good features (${nGood}).`);
-    }
-
-    const Vgood = (Vpca.length === nGood) ? Vpca : goodIdx.map((i) => Vpca[i]);
-
-    const Xpca = new Array(nPca).fill(0);
-    for (let j = 0; j < nPca; j++) {
-        let s = 0;
-        for (let i = 0; i < nGood; i++) {
-            s += Xsc[i] * (Vgood[i][j] ?? 0);
+    const isRidge = w?.engine === ML_ENGINE_RIDGE_PCA;
+    if (isRidge) {
+        if (!Array.isArray(w.coef) || !Number.isFinite(w.intercept)) {
+            throw new Error('Ridge weights JSON missing coef[] or intercept.');
         }
-        Xpca[j] = s;
+        if (w.coef.length !== xArr.length) {
+            throw new Error(`Ridge coef length (${w.coef.length}) does not match PCA dim (${xArr.length}).`);
+        }
+        let s = w.intercept;
+        for (let j = 0; j < w.coef.length; j++) s += xArr[j] * (w.coef[j] ?? 0);
+        const ppbR = Math.max(0, Math.min(yMax, s * yMax));
+        return Math.round(ppbR * 100) / 100;
+    }
+
+    if (!w?.W1 || !w?.b1 || !w?.W2 || !w?.b2 || !w?.W3 || !w?.b3) {
+        throw new Error('Weights JSON missing W1/b1/W2/b2/W3/b3 (TensorFlow MLP head).');
     }
 
     const raw = tf.tidy(() => {
-        const x = tf.tensor2d([Xpca], [1, Xpca.length], 'float32');
+        const x = tf.tensor2d([xArr], [1, xArr.length], 'float32');
         const W1 = tf.tensor2d(w.W1, undefined, 'float32');
         const b1 = tf.tensor1d(w.b1, 'float32');
         const W2 = tf.tensor2d(w.W2, undefined, 'float32');

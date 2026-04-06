@@ -44,17 +44,28 @@ def parse_ppb_from_filename(name: str) -> float | None:
 
 
 def extract_features_from_df(df: pd.DataFrame) -> Dict[str, float]:
-    ambient = df[df["event_name"] == "AmbientSamplingRFC"]
+    """
+    Extract ML features using BreathSampleCollection as baseline.
+
+    Baseline: BreathSampleCollection — breath matrix on the sensor array before
+    analyte measurement begins.  Falls back to AmbientSamplingRFC for legacy files.
+    Signal:   FeNOMeasurement + FeNOWindow — analyte actively present.
+    Exclude:  recoveryOff — post-measurement sensor recovery.
+    """
+    # Prefer BreathSampleCollection; fall back to AmbientSamplingRFC for legacy data
+    baseline = df[df["event_name"] == "BreathSampleCollection"]
+    if len(baseline) == 0:
+        baseline = df[df["event_name"] == "AmbientSamplingRFC"]
     feno = df[df["event_name"] == "FeNOMeasurement"]
     window = df[df["event_name"] == "FeNOWindow"]
-    if len(feno) == 0 or len(ambient) == 0:
-        raise ValueError("Missing AmbientSamplingRFC or FeNOMeasurement phases")
+    if len(baseline) == 0 or len(feno) == 0:
+        raise ValueError("Missing BreathSampleCollection (or AmbientSamplingRFC) or FeNOMeasurement phases")
 
-    amb_mean = ambient[SENSOR_COLS].mean()
+    bl_mean = baseline[SENSOR_COLS].mean()
     feno_mean = feno[SENSOR_COLS].mean()
     feno_std = feno[SENSOR_COLS].std().fillna(0)
-    delta = feno_mean - amb_mean
-    norm_d = delta / (amb_mean.abs() + 1e-6)
+    delta = feno_mean - bl_mean
+    norm_d = delta / (bl_mean.abs() + 1e-6)
 
     feats: Dict[str, float] = {}
     for s in SENSOR_COLS:
@@ -63,15 +74,23 @@ def extract_features_from_df(df: pd.DataFrame) -> Dict[str, float]:
         feats[f"fs_{s}"] = float(feno_std[s])
 
     if len(window) > 0:
-        wd = window[SENSOR_COLS].mean() - amb_mean
+        wd = window[SENSOR_COLS].mean() - bl_mean
         for s in SENSOR_COLS:
             feats[f"wd_{s}"] = float(wd[s])
     else:
         for s in SENSOR_COLS:
             feats[f"wd_{s}"] = 0.0
 
+    # Environmental features from non-recovery rows only
+    non_recovery = df[df["event_name"] != "recoveryOff"]
     for e in ENV_COLS:
-        feats[f"env_{e}"] = float(df[e].mean()) if e in df.columns else 0.0
+        feats[f"env_{e}"] = float(non_recovery[e].mean()) if e in non_recovery.columns else 0.0
+
+    # Environmental delta: BSC conditions vs FeNO conditions
+    for e in ENV_COLS:
+        bl_env = float(baseline[e].mean()) if e in baseline.columns else 0.0
+        feno_env = float(feno[e].mean()) if e in feno.columns else 0.0
+        feats[f"env_d_{e}"] = feno_env - bl_env
 
     feats["delta_mean"] = float(delta.mean())
     feats["delta_max"] = float(delta.max())

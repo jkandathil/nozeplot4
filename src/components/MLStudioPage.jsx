@@ -1,5 +1,16 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Brain, PlayCircle, FileText, Download, Loader2, Upload, FolderInput, Sparkles, FolderOpen } from 'lucide-react';
+import {
+    Brain,
+    PlayCircle,
+    FileText,
+    Download,
+    Loader2,
+    Upload,
+    FolderInput,
+    Sparkles,
+    FolderOpen,
+    ChevronDown,
+} from 'lucide-react';
 import {
     XAxis,
     YAxis,
@@ -33,6 +44,12 @@ import {
     formatBytes,
     getDeviceMemoryGb,
 } from '../utils/browserCapacityHints.js';
+import {
+    FENOSE_V2_TRAINING_ENGINES,
+    ML_ENGINE_TF_MLP,
+    ML_ENGINE_RIDGE_PCA,
+    ONNX_INFERENCE_HINT,
+} from '../utils/mlEngines/registry.js';
 import './MLStudioPage.css';
 
 function looksLikeFenoseLabelledTabular(name) {
@@ -147,6 +164,10 @@ const MLStudioPage = ({
     const [fenoseTrainLr, setFenoseTrainLr] = useState(0.001);
     const [fenoseTrainFrac, setFenoseTrainFrac] = useState(20);
     const [fenoseTrainSeed, setFenoseTrainSeed] = useState(0);
+    const [fenoseV2TrainEngine, setFenoseV2TrainEngine] = useState(ML_ENGINE_TF_MLP);
+    const [fenoseV2RidgeLambda, setFenoseV2RidgeLambda] = useState('0.05');
+    const [fenoseV2TextEmbed, setFenoseV2TextEmbed] = useState(false);
+    const [fenoseV2TextEmbedDims, setFenoseV2TextEmbedDims] = useState('8');
     const [fenoseTrainBusy, setFenoseTrainBusy] = useState(false);
     const [fenoseTrainProgress, setFenoseTrainProgress] = useState(null); // {epoch, loss}
     const [fenoseTrainOut, setFenoseTrainOut] = useState(null); // {weights, preprocessing, metrics}
@@ -462,7 +483,14 @@ const MLStudioPage = ({
             const predicted =
                 m.version === 'v1'
                     ? await predictFenosePpbV1FromRows(sel.data, { weights, preprocessing })
-                    : await predictFenosePpbV2FromRows(sel.data, { weights, preprocessing });
+                    : await predictFenosePpbV2FromRows(sel.data, {
+                          weights,
+                          preprocessing,
+                          predictContext: {
+                              fileName: sel.fileName,
+                              deviceId: parseFenoseDeviceIdFromFilename(sel.fileName),
+                          },
+                      });
             const actual = parseFenosePpbFromFilename(sel.fileName);
             const absErr = actual != null ? Math.abs(predicted - actual) : null;
             setFenoseResults([{ fileName: sel.fileName, predictedPpb: predicted, actualPpb: actual, absErr }]);
@@ -518,7 +546,14 @@ const MLStudioPage = ({
                 const predicted =
                     m.version === 'v1'
                         ? await predictFenosePpbV1FromRows(data, { weights, preprocessing })
-                        : await predictFenosePpbV2FromRows(data, { weights, preprocessing });
+                        : await predictFenosePpbV2FromRows(data, {
+                              weights,
+                              preprocessing,
+                              predictContext: {
+                                  fileName: wf.name,
+                                  deviceId: parseFenoseDeviceIdFromFilename(wf.name),
+                              },
+                          });
                 const absErr = actualPpb != null && Number.isFinite(actualPpb) ? Math.abs(predicted - actualPpb) : null;
                 out.push({
                     fileName: wf.name,
@@ -644,6 +679,7 @@ const MLStudioPage = ({
             };
             const onProgress = (p) => {
                 setFenoseTrainProgress(p);
+                if (p?.phase === 'txt_embed') return;
                 if (p && typeof p.epoch === 'number' && p.loss != null) {
                     setFenoseTrainLossHistory((prev) => [...prev, { epoch: p.epoch, loss: Number(p.loss) }]);
                 }
@@ -664,6 +700,10 @@ const MLStudioPage = ({
                               ...common,
                               topK: Math.max(20, Number(fenoseTrainTopK) || 300),
                               nPca: Math.max(2, Number(fenoseTrainPca) || 50),
+                              mlEngine: fenoseV2TrainEngine,
+                              ridgeLambda: Number(fenoseV2RidgeLambda) || 0.05,
+                              textEmbeddingAugment: fenoseV2TextEmbed,
+                              textEmbeddingDims: Number(fenoseV2TextEmbedDims) || 8,
                           },
                           onProgress
                       );
@@ -760,19 +800,26 @@ const MLStudioPage = ({
                                     type="button"
                                     className="ml-fenose-import-toggle"
                                     aria-expanded={fenoseImportOpen}
+                                    aria-controls="fenose-import-model-panel"
+                                    aria-label={`Import model — saves JSON under ${FENOSE_MODEL_FOLDER_NAME}`}
                                     onClick={() => setFenoseImportOpen((o) => !o)}
                                 >
-                                    <FolderInput size={18} aria-hidden />
-                                    <span>Import model JSON into {FENOSE_MODEL_FOLDER_NAME}/</span>
-                                    <span className="ml-fenose-import-toggle-chevron" aria-hidden>
-                                        {fenoseImportOpen ? '▼' : '▶'}
+                                    <span className="ml-fenose-import-toggle__icon" aria-hidden>
+                                        <FolderInput size={20} strokeWidth={1.75} />
                                     </span>
+                                    <span className="ml-fenose-import-toggle__label">Import model</span>
+                                    <ChevronDown
+                                        size={20}
+                                        strokeWidth={2}
+                                        className={`ml-fenose-import-toggle__chev${fenoseImportOpen ? ' ml-fenose-import-toggle__chev--open' : ''}`}
+                                        aria-hidden
+                                    />
                                 </button>
                             </div>
                         ) : null}
 
                         {onUploadModelJsonToWorkspace && fenoseImportOpen ? (
-                            <div className="ml-fenose-model-import">
+                            <div id="fenose-import-model-panel" className="ml-fenose-model-import">
                                 <div className="ml-fenose-model-import__header">
                                     <div className="ml-fenose-model-import__icon" aria-hidden>
                                         <FolderInput size={22} strokeWidth={1.75} />
@@ -905,7 +952,7 @@ const MLStudioPage = ({
                                 }}
                             >
                                 No complete FeNOse model yet. Train on the <strong>Training</strong> tab (saves to{' '}
-                                <code>{FENOSE_MODEL_FOLDER_NAME}/</code>) or open <strong>Import model JSON</strong> and upload both{' '}
+                                <code>{FENOSE_MODEL_FOLDER_NAME}/</code>) or use <strong>Import model</strong> and upload both{' '}
                                 <code>{'{name}_{v1|v2}_weights.json'}</code> and <code>{'{name}_{v1|v2}_preprocessing.json'}</code>.{' '}
                                 <code>metrics.json</code> is optional.
                             </div>
@@ -1551,11 +1598,32 @@ const MLStudioPage = ({
                                     </div>
                                     <div className="ml-fenose-param">
                                         <label className="ml-fenose-label" htmlFor="fenose-train-epochs">Epochs</label>
-                                        <input id="fenose-train-epochs" className="text-input ml-fenose-input-full" type="number" value={fenoseTrainEpochs} onChange={(e) => setFenoseTrainEpochs(e.target.value)} disabled={fenoseTrainBusy} />
+                                        <input
+                                            id="fenose-train-epochs"
+                                            className="text-input ml-fenose-input-full"
+                                            type="number"
+                                            value={fenoseTrainEpochs}
+                                            onChange={(e) => setFenoseTrainEpochs(e.target.value)}
+                                            disabled={
+                                                fenoseTrainBusy ||
+                                                (fenoseTrainVersion === 'v2' && fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA)
+                                            }
+                                        />
                                     </div>
                                     <div className="ml-fenose-param">
                                         <label className="ml-fenose-label" htmlFor="fenose-train-lr">Learning rate</label>
-                                        <input id="fenose-train-lr" className="text-input ml-fenose-input-full" type="number" step="0.0001" value={fenoseTrainLr} onChange={(e) => setFenoseTrainLr(e.target.value)} disabled={fenoseTrainBusy} />
+                                        <input
+                                            id="fenose-train-lr"
+                                            className="text-input ml-fenose-input-full"
+                                            type="number"
+                                            step="0.0001"
+                                            value={fenoseTrainLr}
+                                            onChange={(e) => setFenoseTrainLr(e.target.value)}
+                                            disabled={
+                                                fenoseTrainBusy ||
+                                                (fenoseTrainVersion === 'v2' && fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA)
+                                            }
+                                        />
                                     </div>
                                     <div className="ml-fenose-param">
                                         <label className="ml-fenose-label" htmlFor="fenose-train-testpct">Test %</label>
@@ -1568,14 +1636,103 @@ const MLStudioPage = ({
                                 </div>
                             </fieldset>
 
+                            {fenoseTrainVersion === 'v2' ? (
+                                <fieldset className="ml-fenose-params-fieldset">
+                                    <legend className="ml-fenose-params-legend">v2 engine &amp; optional embeddings</legend>
+                                    <div className="ml-fenose-train-params">
+                                        <div className="ml-fenose-param ml-fenose-param--wide">
+                                            <label className="ml-fenose-label" htmlFor="fenose-v2-engine">
+                                                Training head
+                                            </label>
+                                            <select
+                                                id="fenose-v2-engine"
+                                                className="text-input ml-fenose-input-full"
+                                                value={fenoseV2TrainEngine}
+                                                onChange={(e) => setFenoseV2TrainEngine(e.target.value)}
+                                                disabled={fenoseTrainBusy}
+                                            >
+                                                {FENOSE_V2_TRAINING_ENGINES.map((eng) => (
+                                                    <option key={eng.id} value={eng.id}>
+                                                        {eng.label}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <p className="ml-fenose-hint" style={{ marginTop: 6 }}>
+                                                {FENOSE_V2_TRAINING_ENGINES.find((e) => e.id === fenoseV2TrainEngine)?.description}
+                                            </p>
+                                        </div>
+                                        <div className="ml-fenose-param">
+                                            <label className="ml-fenose-label" htmlFor="fenose-v2-ridge-lambda">
+                                                Ridge λ
+                                            </label>
+                                            <input
+                                                id="fenose-v2-ridge-lambda"
+                                                className="text-input ml-fenose-input-full"
+                                                type="number"
+                                                step="0.001"
+                                                min="1e-8"
+                                                value={fenoseV2RidgeLambda}
+                                                onChange={(e) => setFenoseV2RidgeLambda(e.target.value)}
+                                                disabled={fenoseTrainBusy || fenoseV2TrainEngine !== ML_ENGINE_RIDGE_PCA}
+                                            />
+                                        </div>
+                                        <div className="ml-fenose-param ml-fenose-param--wide">
+                                            <label className="ml-fenose-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={fenoseV2TextEmbed}
+                                                    onChange={(e) => setFenoseV2TextEmbed(e.target.checked)}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                                Augment with Transformers.js text embeddings (device + filename → MiniLM slice)
+                                            </label>
+                                            <p className="ml-fenose-hint" style={{ marginTop: 4 }}>
+                                                Uses a small WASM model; first run downloads weights. Keep slice dimensions low (e.g. 8–16) for bundle and memory.
+                                            </p>
+                                        </div>
+                                        <div className="ml-fenose-param">
+                                            <label className="ml-fenose-label" htmlFor="fenose-v2-embed-dims">
+                                                Embed dims
+                                            </label>
+                                            <input
+                                                id="fenose-v2-embed-dims"
+                                                className="text-input ml-fenose-input-full"
+                                                type="number"
+                                                min="2"
+                                                max="32"
+                                                value={fenoseV2TextEmbedDims}
+                                                onChange={(e) => setFenoseV2TextEmbedDims(e.target.value)}
+                                                disabled={fenoseTrainBusy || !fenoseV2TextEmbed}
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="ml-fenose-hint" style={{ marginTop: 10, marginBottom: 0 }}>
+                                        <strong>ONNX Runtime Web:</strong> {ONNX_INFERENCE_HINT}
+                                    </p>
+                                </fieldset>
+                            ) : null}
+
                             <div className="ml-fenose-train-run-row">
                                 <button type="button" className="btn-primary" onClick={runFenoseTraining} disabled={fenoseTrainBusy || fenoseTrainHydrateStatus === 'loading' || fenoseTrainEffectiveSelectionCount < 3}>
                                     {fenoseTrainBusy ? <Loader2 className="spinner" size={16} /> : <Brain size={16} />} Train FeNOse ({fenoseTrainVersion})
                                 </button>
                                 {fenoseTrainProgress ? (
                                     <div className="ml-fenose-train-progress">
-                                        Epoch {fenoseTrainProgress.epoch}
-                                        {fenoseTrainProgress.loss != null ? ` · loss ${Number(fenoseTrainProgress.loss).toFixed(4)}` : ''}
+                                        {fenoseTrainProgress.phase === 'txt_embed' ? (
+                                            <>
+                                                Text embeddings{' '}
+                                                {fenoseTrainProgress.index}/{fenoseTrainProgress.total}
+                                            </>
+                                        ) : fenoseTrainProgress.phase === 'ridge' ? (
+                                            <>Ridge fit (closed-form)</>
+                                        ) : (
+                                            <>
+                                                Epoch {fenoseTrainProgress.epoch}
+                                                {fenoseTrainProgress.loss != null
+                                                    ? ` · loss ${Number(fenoseTrainProgress.loss).toFixed(4)}`
+                                                    : ''}
+                                            </>
+                                        )}
                                     </div>
                                 ) : null}
                             </div>

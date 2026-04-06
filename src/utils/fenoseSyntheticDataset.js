@@ -3,7 +3,7 @@ import { parseFenoseDeviceIdFromFilename } from './fenoseModel.js';
 /**
  * Synthetic FeNOse-style tabular rows for workspace training / demos.
  * Phases and columns match extractFenoseFeaturesFromRows:
- * AmbientSamplingRFC, FeNOMeasurement, optional FeNOWindow; A1–H8; AQT0, AQH0, AQP0.
+ * AmbientSamplingRFC, BreathSampleCollection (baseline), FeNOMeasurement, optional FeNOWindow; A1–H8; AQT0, AQH0, AQP0.
  *
  * Temporal behaviour (wash-in, recovery, drift) is designed so ML features (means, feno std,
  * window deltas) resemble real captures, not IID plateaus per phase.
@@ -164,22 +164,24 @@ export function computeCalibrationFromFiles(files) {
         const data = f.data;
         if (!Array.isArray(data) || data.length === 0) continue;
 
-        const ambient = _rowsOfPhase(data, 'AmbientSamplingRFC');
+        /* Baseline: prefer BreathSampleCollection; fall back to AmbientSamplingRFC */
+        let baseline = _rowsOfPhase(data, 'BreathSampleCollection');
+        if (baseline.length < 3) baseline = _rowsOfPhase(data, 'AmbientSamplingRFC');
         const feno    = _rowsOfPhase(data, 'FeNOMeasurement');
-        if (ambient.length < 5 || feno.length < 5) continue;
+        if (baseline.length < 3 || feno.length < 5) continue;
 
         const sample = { ppb };
         let found = 0;
         for (const s of SENSOR_COLS) {
-            const av = ambient.map((r) => _safeNum(r?.[s])).filter((v) => v !== null);
-            const fv = feno.map((r)    => _safeNum(r?.[s])).filter((v) => v !== null);
-            if (av.length < 3 || fv.length < 3) continue;
-            const am = _mean(av); const fm = _mean(fv);
-            if (Math.abs(am) < 1e-6) continue;
+            const bv = baseline.map((r) => _safeNum(r?.[s])).filter((v) => v !== null);
+            const fv = feno.map((r)      => _safeNum(r?.[s])).filter((v) => v !== null);
+            if (bv.length < 3 || fv.length < 3) continue;
+            const bm = _mean(bv); const fm = _mean(fv);
+            if (Math.abs(bm) < 1e-6) continue;
             sample[s] = {
-                ambMean: am,
-                nd:      (fm - am) / Math.abs(am),
-                noiseCv: _std(av) / Math.abs(am),
+                ambMean: bm,
+                nd:      (fm - bm) / Math.abs(bm),
+                noiseCv: _std(bv) / Math.abs(bm),
             };
             found++;
         }
@@ -373,6 +375,7 @@ function _clampSynthCount(v, fallback, lo, hi) {
  * @param {number}  opts.ppb
  * @param {number}  [opts.seed=42]
  * @param {number}  [opts.nAmbient=100]
+ * @param {number}  [opts.nBsc=27]         — BreathSampleCollection rows (breath matrix, no analyte)
  * @param {number}  [opts.nFeno=100]
  * @param {number}  [opts.nWindow=15]
  * @param {object}  [opts.calibration]  — from computeCalibrationFromFiles / mergeCalibration
@@ -381,6 +384,7 @@ export function generateSyntheticFenoseRows({
     ppb,
     seed     = 42,
     nAmbient = 100,
+    nBsc     = 27,
     nFeno    = 100,
     nWindow  = 15,
     calibration = null,
@@ -391,6 +395,7 @@ export function generateSyntheticFenoseRows({
     }
 
     const rowsAmbient = _clampSynthCount(nAmbient, 100, 8, 120);
+    const rowsBsc = _clampSynthCount(nBsc, 27, 0, 60);
     const rowsFeno = _clampSynthCount(nFeno, 100, 8, 120);
     const rowsWindow = _clampSynthCount(nWindow, 15, 0, 80);
 
@@ -428,15 +433,34 @@ export function generateSyntheticFenoseRows({
     const rippleAmp = (0.025 + 0.035 * rnd()) * Math.min(1, y / (y + 15));
 
     const driftAmb = samplePhaseDriftCoeffs(rnd);
+    const driftBsc = samplePhaseDriftCoeffs(rnd);
     const driftFeno = samplePhaseDriftCoeffs(rnd);
     const driftWin = samplePhaseDriftCoeffs(rnd);
 
+    /* ── Ambient (room air) environmental conditions ────────────────────────── */
     const aqt0 = 22 + randNormal(rnd, 0, 1.5);
     const aqh0 = 45 + randNormal(rnd, 0, 8);
     const aqp0 = 990 + randNormal(rnd, 0, 5);
     const aqtSlope = randNormal(rnd, 0, 0.04);
     const aqhSlope = randNormal(rnd, 0, 0.35);
     const aqpSlope = randNormal(rnd, 0, 0.55);
+
+    /* ── Breath-matrix shift: exhaled breath raises humidity and temperature ── */
+    const breathTempShift  = 10 + randNormal(rnd, 0, 2);       // ~+10 °C from body heat
+    const breathHumShift   = 35 + randNormal(rnd, 0, 6);       // ~+35 %RH saturated exhaled air
+    const breathPresShift  = randNormal(rnd, 0, 1.5);          // ~neutral pressure shift
+
+    /**
+     * Breath-matrix multiplier per sensor:
+     * Exhaled breath changes the environment around the sensor (warm, humid).
+     * Each MOx sensor shifts slightly due to the new humidity/temperature even
+     * with zero analyte.  Model as a small proportional baseline shift, drawn
+     * per-sensor so the model can learn to subtract it.
+     */
+    const bscBaselineShift = {};
+    for (const s of SENSOR_COLS) {
+        bscBaselineShift[s] = randNormal(rnd, 0, 0.008);  // ±0.8% typical breath-matrix shift
+    }
 
     const rows = [];
 
@@ -458,6 +482,26 @@ export function generateSyntheticFenoseRows({
         rows.push(row);
     }
 
+    // ── BreathSampleCollection (breath matrix on sensor, NO analyte yet) ────
+    if (rowsBsc > 0) {
+        for (let i = 0; i < rowsBsc; i++) {
+            const t01 = rowsBsc <= 1 ? 0 : i / (rowsBsc - 1);
+            const driftM = phaseDriftMultiplierFromCoeffs(driftBsc, t01);
+            const row = {
+                event_name: 'BreathSampleCollection',
+                AQT0: aqt0 + breathTempShift * (0.6 + 0.4 * t01) + randNormal(rnd, 0, 0.06),
+                AQH0: aqh0 + breathHumShift  * (0.5 + 0.5 * t01) + randNormal(rnd, 0, 0.6),
+                AQP0: aqp0 + breathPresShift + randNormal(rnd, 0, 0.6),
+            };
+            const cm = 1 + randNormal(rnd, 0, 0.0020);
+            for (const s of SENSOR_COLS) {
+                const base = ambBase[s] * driftM * (1 + bscBaselineShift[s]);
+                row[s] = cm * (base + randNormal(rnd, 0, noiseSig[s]));
+            }
+            rows.push(row);
+        }
+    }
+
     // ── FeNOMeasurement (reaction / wash-in + elevated transient noise) ──────
     let lastRise = 0;
     for (let i = 0; i < rowsFeno; i++) {
@@ -468,14 +512,15 @@ export function generateSyntheticFenoseRows({
         const transient = transientNoiseBoost * (1 - rise);
         const row = {
             event_name: 'FeNOMeasurement',
-            AQT0: aqt0 + 0.25 + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.03),
-            AQH0: aqh0 + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.3),
-            AQP0: aqp0 + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
+            /* env during FeNO: breath matrix (warm, humid) + slight drift */
+            AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.04),
+            AQH0: aqh0 + breathHumShift  + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
+            AQP0: aqp0 + breathPresShift  + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
         };
         const cm = 1 + randNormal(rnd, 0, 0.0022);
         for (const s of SENSOR_COLS) {
             const ndResp = effNdSlope[s] * yNd * rise;
-            const ndTot = ndResp + zeroOffset[s];
+            const ndTot = bscBaselineShift[s] + ndResp + zeroOffset[s];
             const base = ambBase[s] * driftM * (1 + ndTot);
             const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
             row[s] = cm * (base + randNormal(rnd, 0, sig));
@@ -490,19 +535,20 @@ export function generateSyntheticFenoseRows({
             const driftM = phaseDriftMultiplierFromCoeffs(driftWin, t01);
             const row = {
                 event_name: 'FeNOWindow',
-                AQT0: aqt0 + 0.42 + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, 0.03),
-                AQH0: aqh0 + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.3),
-                AQP0: aqp0 + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, 0.5),
+                /* env during window: still in breath matrix, slight decay toward ambient */
+                AQT0: aqt0 + breathTempShift * (0.9 - 0.15 * t01) + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, 0.04),
+                AQH0: aqh0 + breathHumShift  * (0.9 - 0.15 * t01) + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.4),
+                AQP0: aqp0 + breathPresShift + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, 0.5),
             };
             const cm = 1 + randNormal(rnd, 0, 0.0018);
             for (const s of SENSOR_COLS) {
-                const ndPlateau = effNdSlope[s] * yNd * lastRise + zeroOffset[s];
-                const excess0 = ndPlateau - zeroOffset[s];
+                const ndPlateau = bscBaselineShift[s] + effNdSlope[s] * yNd * lastRise + zeroOffset[s];
+                const excess0 = ndPlateau - bscBaselineShift[s] - zeroOffset[s];
                 const tr = tauRecover[s];
                 const decay = Math.exp(-j / tr);
                 const ripple =
                     rippleAmp * Math.sin((j + 0.7) * 0.95) * decay * Math.abs(excess0);
-                const ndTot = zeroOffset[s] + excess0 * decay + ripple;
+                const ndTot = bscBaselineShift[s] + zeroOffset[s] + excess0 * decay + ripple;
                 const base = ambBase[s] * driftM * (1 + ndTot);
                 const relax = 0.35 + 0.65 * (1 - decay);
                 const sig = noiseSig[s] * Math.sqrt(Math.max(0.2, relax));

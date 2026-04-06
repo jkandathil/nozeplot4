@@ -78,28 +78,40 @@ function MLStudioDeepDive() {
             {/* ── 2. Capture phases ────────────────────────────────────── */}
             <hr className="ml-section-sep" />
             <h3 className="help-subheading">Measurement phases</h3>
-            <p className="help-eq-para">Every FeNOse capture contains three labeled phases:</p>
+            <p className="help-eq-para">Every FeNOse capture contains up to five labeled phases. The <strong>recoveryOff</strong> phase is excluded from all feature computation.</p>
             <div className="ml-phase-grid">
                 <div className="ml-phase-card ml-phase-ambient">
                     <span className="ml-phase-badge">Phase 1</span>
                     <strong className="ml-phase-name">AmbientSamplingRFC</strong>
-                    <p className="ml-phase-desc">~100 rows in ambient room air. Establishes each sensor's resting resistance before any breath gas reaches the array.</p>
+                    <p className="ml-phase-desc">~100 rows in ambient room air. Records the sensor array&apos;s resting state before the breath test begins. Not used as the ML baseline.</p>
+                </div>
+                <span className="ml-phase-arrow">→</span>
+                <div className="ml-phase-card ml-phase-ambient">
+                    <span className="ml-phase-badge">Phase 2 — BASELINE</span>
+                    <strong className="ml-phase-name">BreathSampleCollection</strong>
+                    <p className="ml-phase-desc">~27 rows while the patient breathes into the device <strong>before</strong> analyte measurement. Captures the breath matrix (humidity, temperature, CO₂) without the target analyte — the correct normalisation baseline for isolating the NO signal.</p>
                 </div>
                 <span className="ml-phase-arrow">→</span>
                 <div className="ml-phase-card ml-phase-feno">
-                    <span className="ml-phase-badge">Phase 2</span>
+                    <span className="ml-phase-badge">Phase 3 — SIGNAL</span>
                     <strong className="ml-phase-name">FeNOMeasurement</strong>
-                    <p className="ml-phase-desc">~100 rows during active exhalation. Sensors respond to NO and other trace gases present in the breath sample.</p>
+                    <p className="ml-phase-desc">~100 rows during active analyte measurement. Sensors respond to NO on top of the breath matrix. The delta from BSC isolates the true NO response.</p>
                 </div>
                 <span className="ml-phase-arrow">→</span>
                 <div className="ml-phase-card ml-phase-window">
-                    <span className="ml-phase-badge">Phase 3</span>
+                    <span className="ml-phase-badge">Phase 4 — SIGNAL</span>
                     <strong className="ml-phase-name">FeNOWindow</strong>
                     <p className="ml-phase-desc">~15 rows of steady-state plateau. Captures the most stable NO signal with the lowest row-to-row noise — the key diagnostic window.</p>
                 </div>
+                <span className="ml-phase-arrow">→</span>
+                <div className="ml-phase-card" style={{ borderColor: 'rgba(148, 163, 184, 0.3)', background: 'rgba(30, 41, 59, 0.25)' }}>
+                    <span className="ml-phase-badge">Phase 5 — EXCLUDED</span>
+                    <strong className="ml-phase-name">recoveryOff</strong>
+                    <p className="ml-phase-desc">~200 rows of post-measurement sensor recovery. Excluded from all feature extraction and environmental averages.</p>
+                </div>
             </div>
             <div className="ml-callout ml-callout-tip">
-                <strong>Why separate phases?</strong> Absolute sensor resistances drift with temperature and humidity. Measuring the <em>relative change</em> from ambient to breath (not the raw value) makes the feature independent of slow environmental drift and device-to-device baseline differences.
+                <strong>Why BreathSampleCollection as baseline?</strong> Using BSC rather than room-air ambient removes the large humidity and temperature shift between room air and exhaled breath. The delta (FeNO − BSC) then reflects <em>only</em> the analyte (NO) response, not the breath-matrix effect — which would otherwise dominate at low concentrations (0–10 ppb) and vary between patients.
             </div>
 
             {/* ── 3. Feature extraction ────────────────────────────────── */}
@@ -121,33 +133,33 @@ function MLStudioDeepDive() {
                     <tbody>
                         <tr>
                             <td><code>nd_*</code></td>
-                            <td>Ambient → FeNO</td>
-                            <td>(FeNO mean − amb mean) / amb mean</td>
-                            <td><strong>Normalised delta</strong> — fractional change from baseline; the primary NO-sensitivity signal</td>
+                            <td>BSC → FeNO</td>
+                            <td>(FeNO mean − BSC mean) / BSC mean</td>
+                            <td><strong>Normalised delta</strong> — fractional change from BreathSampleCollection baseline; isolates the NO-sensitivity signal from the breath matrix</td>
                         </tr>
                         <tr>
                             <td><code>d_*</code></td>
-                            <td>Ambient → FeNO</td>
-                            <td>FeNO mean − amb mean (Ω)</td>
-                            <td><strong>Raw delta</strong> — absolute resistance change; complements nd_ for sensors with very high or low baseline</td>
+                            <td>BSC → FeNO</td>
+                            <td>FeNO mean − BSC mean (Ω)</td>
+                            <td><strong>Raw delta</strong> — absolute resistance change from BSC; complements nd_ for sensors with very high or low baseline</td>
                         </tr>
                         <tr>
                             <td><code>fs_*</code></td>
-                            <td>FeNOWindow std</td>
-                            <td>Std dev of window-phase rows</td>
-                            <td><strong>FeNO window noise</strong> — sensor stability during the plateau; high values indicate noisy or partially saturated sensors</td>
+                            <td>FeNOMeasurement std</td>
+                            <td>Std dev of FeNO-phase rows</td>
+                            <td><strong>FeNO phase noise</strong> — sensor stability during measurement; high values indicate noisy or partially saturated sensors</td>
                         </tr>
                         <tr>
                             <td><code>wd_*</code></td>
-                            <td>Window − Ambient</td>
-                            <td>Window phase mean − ambient mean</td>
-                            <td><strong>Window delta</strong> — plateau-level response; cross-validates nd_ using only the most stable rows</td>
+                            <td>Window − BSC</td>
+                            <td>Window phase mean − BSC mean</td>
+                            <td><strong>Window delta</strong> — plateau-level response relative to BSC; cross-validates nd_ using only the most stable rows</td>
                         </tr>
                     </tbody>
                 </table>
             </div>
             <p className="help-eq-para">
-                Global features include the mean <code>nd_</code> across all 64 sensors, mean raw delta, and four cross-sensor spread statistics. Environmental features (<code>AQT0</code> temperature, <code>AQH0</code> humidity, <code>AQP0</code> pressure) help the model account for ambient conditions that shift sensor baselines.
+                Global features include the mean <code>nd_</code> across all 64 sensors, mean raw delta, and four cross-sensor spread statistics. Environmental features (<code>AQT0</code> temperature, <code>AQH0</code> humidity, <code>AQP0</code> pressure) are averaged over <strong>non-recovery</strong> rows only. Additionally, <code>env_d_AQT0</code>, <code>env_d_AQH0</code>, and <code>env_d_AQP0</code> capture the <strong>environmental shift</strong> between the BSC baseline and the FeNO measurement phase — helping the model account for changing breath conditions.
             </p>
 
             {/* ── 4. Training pipelines ────────────────────────────────── */}
@@ -882,8 +894,8 @@ function TSNEExplorerHelpDeepDive() {
             <h3 className="help-subheading">Feature extraction — every sensor element (A1–H8)</h3>
             <p className="help-eq-para">
                 For each eligible CSV, the app parses rows and groups them by <code>event_name</code>, using the same phase model as ML Studio:{' '}
-                <strong>AmbientSamplingRFC</strong> (ambient baseline), <strong>FeNOMeasurement</strong> (breath / challenge phase), and optionally{' '}
-                <strong>FeNOWindow</strong> (short steady plateau). If ambient or FeNO phases are missing, that file is skipped.
+                <strong>BreathSampleCollection</strong> (breath-matrix baseline; falls back to AmbientSamplingRFC for legacy files), <strong>FeNOMeasurement</strong> (analyte challenge phase), and optionally{' '}
+                <strong>FeNOWindow</strong> (short steady plateau). The <strong>recoveryOff</strong> phase is excluded. If baseline or FeNO phases are missing, that file is skipped.
             </p>
             <p className="help-eq-para">
                 For <strong>each</strong> of the 64 grid cells <code>A1</code> through <code>H8</code>:
