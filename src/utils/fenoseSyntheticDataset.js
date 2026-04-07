@@ -9,10 +9,14 @@ import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fen
  * Temporal behaviour (wash-in, FeNO window decay, drift) is designed so ML features (means, feno std,
  * window deltas) resemble real captures, not IID plateaus per phase.
  *
- * **No hardware recovery phase:** outputs are only AmbientSamplingRFC → BreathSampleCollection →
- * FeNOMeasurement → FeNOWindow (same phase order as real FeNOse captures). Rows with `recoveryOff`
- * or any `event_name` containing `recovery` are never emitted (and would be stripped if introduced
- * by mistake).
+ * **No hardware recovery phase.** Rows with `recoveryOff` or any `event_name` containing
+ * `recovery` are never emitted.
+ *
+ * Phase order (chronological, matching real FeNOse captures):
+ *   AmbientSamplingRFC → BreathSampleCollection → FeNOWindow → FeNOMeasurement
+ *
+ * When `windowBeforeMeasurement` is false (legacy / alternate), the order is
+ * RFC → BSC → FeNOMeasurement → FeNOWindow instead.
  *
  * RFC vs BSC levels (critical for Aroma / ALAAC plots)
  * ────────────────────────────────────────────────────
@@ -368,6 +372,7 @@ export const SYNTH_DEFAULT_PHASE_COUNTS = {
     nBsc: 27,
     nFeno: 85,
     nWindow: 15,
+    windowBeforeMeasurement: true,
 };
 
 /** Synthetic FeNOse must not include post-capture hardware recovery (`recoveryOff`, etc.). */
@@ -457,16 +462,29 @@ function _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts) {
     for (const L of layouts) {
         if (L.feNoStart > template.feNoStart) template = L;
     }
+    const wbmCount = layouts.filter((L) => L.windowBeforeMeasurement).length;
+    const wbm = wbmCount > layouts.length / 2;
     const durs = layouts
-        .map((L) => L.windowStart - L.feNoStart)
-        .filter((d) => Number.isFinite(d) && d >= 3);
+        .map((L) => wbm ? (L.feNoStart - L.windowStart) : (L.windowStart - L.feNoStart))
+        .filter((d) => Number.isFinite(d) && d >= 1);
     if (durs.length === 0) return null;
+    if (wbm) {
+        const nWindow = Math.max(1, Math.min(120, Math.min(...durs)));
+        return {
+            nAmbient: Math.max(8, template.nAmbient),
+            nBsc: Math.max(0, Math.min(80, template.nBsc)),
+            nFeno: Math.max(8, Math.min(220, _medianInt(layouts.map((L) => L.nFeno)))),
+            nWindow,
+            windowBeforeMeasurement: true,
+        };
+    }
     const nFeno = Math.max(8, Math.min(220, Math.min(...durs)));
     return {
         nAmbient: Math.max(8, template.nAmbient),
         nBsc: Math.max(0, Math.min(80, template.nBsc)),
         nFeno,
         nWindow: Math.max(1, _medianInt(layouts.map((L) => L.nWindow))),
+        windowBeforeMeasurement: false,
     };
 }
 
@@ -490,17 +508,50 @@ export function buildAromaAlignedPhaseCountsFromFiles(files) {
     const layouts = [];
     for (const f of files || []) {
         const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
-        if (!L || L.windowBeforeMeasurement) continue;
-        if (!(L.windowStart > L.feNoStart)) continue;
+        if (!L) continue;
         layouts.push(L);
     }
     if (layouts.length === 0) return null;
 
+    /* Detect dominant phase order from real files. */
+    const wbmCount = layouts.filter((L) => L.windowBeforeMeasurement).length;
+    const windowBeforeMeasurement = wbmCount > layouts.length / 2;
+
     const minAmbient = Math.min(...layouts.map((L) => L.nAmbient));
+    const nAmbientEff = Math.max(8, Math.floor(minAmbient));
+
+    if (windowBeforeMeasurement) {
+        /* Real capture order: RFC → BSC → FeNOWindow → FeNOMeasurement.
+         * windowStart < feNoStart; third-phase ref line = min(windowStart). */
+        const minWindowStart = Math.min(...layouts.map((L) => L.windowStart));
+        const minFeNoStart = Math.min(...layouts.map((L) => L.feNoStart));
+
+        let nBsc = minWindowStart - nAmbientEff;
+        if (!Number.isFinite(nBsc) || nBsc < 0 || nBsc > 80) {
+            return _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts);
+        }
+        nBsc = Math.floor(nBsc);
+
+        let nWindow = minFeNoStart - minWindowStart;
+        if (!Number.isFinite(nWindow) || nWindow < 1) {
+            return _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts);
+        }
+        nWindow = Math.max(1, Math.min(120, Math.floor(nWindow)));
+
+        return {
+            nAmbient: nAmbientEff,
+            nBsc,
+            nFeno: Math.max(8, Math.min(220, _medianInt(layouts.map((L) => L.nFeno)))),
+            nWindow,
+            windowBeforeMeasurement: true,
+        };
+    }
+
+    /* Alternate order: RFC → BSC → FeNOMeasurement → FeNOWindow.
+     * feNoStart < windowStart; third-phase ref line = min(feNoStart). */
     const minFeNoStart = Math.min(...layouts.map((L) => L.feNoStart));
     const minWindowStart = Math.min(...layouts.map((L) => L.windowStart));
 
-    const nAmbientEff = Math.max(8, Math.floor(minAmbient));
     let nBsc = minFeNoStart - nAmbientEff;
     if (!Number.isFinite(nBsc) || nBsc < 0 || nBsc > 80) {
         return _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts);
@@ -518,14 +569,15 @@ export function buildAromaAlignedPhaseCountsFromFiles(files) {
         nBsc,
         nFeno,
         nWindow: Math.max(1, _medianInt(layouts.map((L) => L.nWindow))),
+        windowBeforeMeasurement: false,
     };
 }
 
-function _pickMedianTotalPhaseCounts(rows) {
+function _pickMedianTotalPhaseCounts(rows, windowBeforeMeasurement) {
     if (!rows || rows.length === 0) return null;
     if (rows.length === 1) {
         const x = rows[0];
-        return { nAmbient: x.nAmbient, nBsc: x.nBsc, nFeno: x.nFeno, nWindow: x.nWindow };
+        return { nAmbient: x.nAmbient, nBsc: x.nBsc, nFeno: x.nFeno, nWindow: x.nWindow, windowBeforeMeasurement };
     }
     const sorted = [...rows].sort((a, b) => {
         const ta = a.nAmbient + a.nBsc + a.nFeno + a.nWindow;
@@ -539,6 +591,7 @@ function _pickMedianTotalPhaseCounts(rows) {
         nBsc: pick.nBsc,
         nFeno: pick.nFeno,
         nWindow: pick.nWindow,
+        windowBeforeMeasurement,
     };
 }
 
@@ -553,9 +606,11 @@ function _pickMedianTotalPhaseCounts(rows) {
  */
 export function pickRepresentativePhaseCountsFromFiles(files) {
     const trimRows = [];
+    let wbmCount = 0;
     for (const f of files || []) {
         const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
         if (L) {
+            if (L.windowBeforeMeasurement) wbmCount++;
             trimRows.push({
                 nAmbient: L.nAmbient,
                 nBsc: L.nBsc,
@@ -564,7 +619,8 @@ export function pickRepresentativePhaseCountsFromFiles(files) {
             });
         }
     }
-    const fromTrim = _pickMedianTotalPhaseCounts(trimRows);
+    const wbm = wbmCount > trimRows.length / 2;
+    const fromTrim = _pickMedianTotalPhaseCounts(trimRows, wbm);
     if (fromTrim) return fromTrim;
 
     const rawRows = [];
@@ -572,7 +628,7 @@ export function pickRepresentativePhaseCountsFromFiles(files) {
         const c = countPhasesOneFile(f?.data);
         if (c) rawRows.push({ ...c });
     }
-    return _pickMedianTotalPhaseCounts(rawRows);
+    return _pickMedianTotalPhaseCounts(rawRows, wbm);
 }
 
 /**
@@ -673,6 +729,7 @@ export function resolveSyntheticPhaseCounts(devFiles, pooledPhaseCounts, opts = 
         nBsc: pick('nBsc', 0, 80),
         nFeno: pick('nFeno', 8, 220),
         nWindow: pick('nWindow', 1, 120),
+        windowBeforeMeasurement: src?.windowBeforeMeasurement ?? true,
     };
 }
 
@@ -768,6 +825,7 @@ function _clampSynthCount(v, fallback, lo, hi) {
  * @param {number}  [opts.nBsc=27]         — BreathSampleCollection rows (breath matrix, no analyte)
  * @param {number}  [opts.nFeno=100]
  * @param {number}  [opts.nWindow=15]
+ * @param {boolean} [opts.windowBeforeMeasurement=true] — true = real order (RFC→BSC→Window→Measurement)
  * @param {object}  [opts.calibration]  — from computeCalibrationFromFiles / mergeCalibration
  */
 export function generateSyntheticFenoseRows({
@@ -777,6 +835,7 @@ export function generateSyntheticFenoseRows({
     nBsc     = 27,
     nFeno    = 100,
     nWindow  = 15,
+    windowBeforeMeasurement = true,
     calibration = null,
 }) {
     const y = Number(ppb);
@@ -905,33 +964,39 @@ export function generateSyntheticFenoseRows({
         }
     }
 
-    // ── FeNOMeasurement (reaction / wash-in + elevated transient noise) ──────
-    let lastRise = 0;
-    for (let i = 0; i < rowsFeno; i++) {
-        const rise = 1 - Math.exp(-i / riseTauClamped);
-        lastRise = rise;
-        const t01 = rowsFeno <= 1 ? 1 : i / (rowsFeno - 1);
-        const driftM = phaseDriftMultiplierFromCoeffs(driftFeno, t01);
-        const transient = transientNoiseBoost * (1 - rise);
-        const row = {
-            event_name: 'FeNOMeasurement',
-            AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.04),
-            AQH0: aqh0 + breathHumShift + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
-            AQP0: aqp0 + breathPresShift + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
-        };
-        const cm = 1 + randNormal(rnd, 0, 0.0022);
-        for (const s of SENSOR_COLS) {
-            const ndResp = effNdSlope[s] * yNd * rise;
-            const ndTot = bscBaselineShift[s] + ndResp + zeroOffset[s];
-            const base = bscBase[s] * driftM * (1 + ndTot);
-            const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
-            row[s] = cm * (base + randNormal(rnd, 0, sig));
+    // ── Phase 3 & 4: order depends on windowBeforeMeasurement ─────────────
+    // Real captures: FeNOWindow (breath-level baseline) → FeNOMeasurement (analyte wash-in)
+    // Alternate:     FeNOMeasurement → FeNOWindow
+
+    function _emitFeNOMeasurement() {
+        let lastRise = 0;
+        for (let i = 0; i < rowsFeno; i++) {
+            const rise = 1 - Math.exp(-i / riseTauClamped);
+            lastRise = rise;
+            const t01 = rowsFeno <= 1 ? 1 : i / (rowsFeno - 1);
+            const driftM = phaseDriftMultiplierFromCoeffs(driftFeno, t01);
+            const transient = transientNoiseBoost * (1 - rise);
+            const row = {
+                event_name: 'FeNOMeasurement',
+                AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.04),
+                AQH0: aqh0 + breathHumShift + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
+                AQP0: aqp0 + breathPresShift + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
+            };
+            const cm = 1 + randNormal(rnd, 0, 0.0022);
+            for (const s of SENSOR_COLS) {
+                const ndResp = effNdSlope[s] * yNd * rise;
+                const ndTot = bscBaselineShift[s] + ndResp + zeroOffset[s];
+                const base = bscBase[s] * driftM * (1 + ndTot);
+                const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
+                row[s] = cm * (base + randNormal(rnd, 0, sig));
+            }
+            rows.push(row);
         }
-        rows.push(row);
+        return lastRise;
     }
 
-    // ── FeNOWindow (ND decay toward baseline + mild damped ripple; not recoveryOff) ─
-    if (rowsWindow > 0) {
+    function _emitFeNOWindow(lastRise) {
+        if (rowsWindow <= 0) return;
         for (let j = 0; j < rowsWindow; j++) {
             const t01 = rowsWindow <= 1 ? 0 : j / (rowsWindow - 1);
             const driftM = phaseDriftMultiplierFromCoeffs(driftWin, t01);
@@ -957,6 +1022,16 @@ export function generateSyntheticFenoseRows({
             }
             rows.push(row);
         }
+    }
+
+    if (windowBeforeMeasurement) {
+        /* Real order: RFC → BSC → FeNOWindow → FeNOMeasurement */
+        _emitFeNOWindow(0);           // Window at breath baseline (no prior wash-in)
+        _emitFeNOMeasurement();       // Measurement with analyte wash-in
+    } else {
+        /* Alternate: RFC → BSC → FeNOMeasurement → FeNOWindow */
+        const lastRise = _emitFeNOMeasurement();
+        _emitFeNOWindow(lastRise);    // Window decays from wash-in plateau
     }
 
     return rows.filter((r) => !isRecoveryLikeEventName(r?.event_name));

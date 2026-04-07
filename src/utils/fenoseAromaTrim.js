@@ -187,7 +187,7 @@ export function getFeNOseAromaTrimPhaseLayout(fileData, options = {}) {
     let nWindowBlock;
 
     if (!windowBeforeMeasurement) {
-        /* Real captures: FeNOMeasurement → FeNOWindow */
+        /* Alternate: FeNOMeasurement → FeNOWindow */
         feNoStart = firstM;
         windowStart = firstW;
         nFenoBlock = firstW - firstM;
@@ -199,7 +199,7 @@ export function getFeNOseAromaTrimPhaseLayout(fileData, options = {}) {
             nWindowBlock++;
         }
     } else {
-        /* Synthetic / alternate: FeNOWindow → FeNOMeasurement */
+        /* Real captures: FeNOWindow → FeNOMeasurement */
         windowStart = firstW;
         feNoStart = firstM;
         nWindowBlock = firstM - firstW;

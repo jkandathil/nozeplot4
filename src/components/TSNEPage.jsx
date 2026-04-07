@@ -873,6 +873,7 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
               nBsc: phases.nBsc,
               nFeno: phases.nFeno,
               nWindow: phases.nWindow,
+              windowBeforeMeasurement: phases.windowBeforeMeasurement ?? true,
               calibration,
             });
             const feats = extractFenoseFeaturesFromRows(rows);
