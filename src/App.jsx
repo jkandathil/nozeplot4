@@ -569,6 +569,7 @@ function App() {
             nBsc: phases.nBsc,
             nFeno: phases.nFeno,
             nWindow: phases.nWindow,
+            windowBeforeMeasurement: phases.windowBeforeMeasurement ?? true,
             calibration,
           });
           const name = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });
