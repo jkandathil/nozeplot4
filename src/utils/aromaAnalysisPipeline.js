@@ -1,9 +1,5 @@
-import { shouldRemoveRecoveryBlock } from './recoveryEventFilter.js';
-import {
-    findPlotEventColumn,
-    FENO_MEASUREMENT_BLOCK_SUBSTRINGS,
-    isUnknownOrCleaningPhaseNorm,
-} from './normalizePlotRowFilter.js';
+import { trimFeNOseRowsForAromaPlot } from './fenoseAromaTrim.js';
+import { findPlotEventColumn } from './normalizePlotRowFilter.js';
 import { rawDeviceRoleFromFilename, parseConcentrationMetaFromFile } from './workspaceFilename.js';
 
 // Core mathematical constants for Absolute Humidity calculation (Magnus formula)
@@ -106,71 +102,14 @@ export const processAromaBatchCore = async (filesArray, config) => {
             hColsArr.some(prefix => k.toLowerCase().includes(prefix.toLowerCase()))
         );
 
-        // 1.5 ALAAC Smart Truncation
+        // 1.5 ALAAC Smart Truncation (shared with synthetic phase alignment — fenoseAromaTrim.js)
         const originalData = [...fileData];
         if (removeRecoveryEvents || fenoTruncateSeconds > 0 || filterUnknown) {
-            const eventCol =
-                findPlotEventColumn(fileData[0]) ||
-                sampleKeys.find((col) => {
-                    const l = col.toLowerCase();
-                    return (
-                        l === 'event_name' ||
-                        l === 'phase' ||
-                        l === 'mode' ||
-                        l === 'state' ||
-                        (l.includes('event') && !l.includes('reference'))
-                    );
-                });
-            if (eventCol) {
-                const blocks = [];
-                let currentBlock = null;
-                fileData.forEach((r, idx) => {
-                    const ev = String(r[eventCol] || '').toLowerCase().replace(/\s+/g, '');
-                    if (currentBlock && currentBlock.event === ev) {
-                        currentBlock.endIdx = idx;
-                        currentBlock.endRow = r;
-                    } else {
-                        if (currentBlock) blocks.push(currentBlock);
-                        currentBlock = { event: ev, startIdx: idx, endIdx: idx, startRow: r, endRow: r };
-                    }
-                });
-                if (currentBlock) blocks.push(currentBlock);
-
-                const rowsToRemove = new Set();
-                            const allowedPlots = FENO_MEASUREMENT_BLOCK_SUBSTRINGS;
-                            const hasBreathEvents = blocks.some((b) =>
-                                allowedPlots.some((p) => b.event.includes(p))
-                            );
-
-                            blocks.forEach((b) => {
-                                if (hasBreathEvents) {
-                                    const isAllowedPLOT = allowedPlots.some((p) => b.event.includes(p));
-                                    if (!isAllowedPLOT && b.event !== '') {
-                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
-                                    } else if (
-                                        fenoTruncateSeconds > 0 &&
-                                        (b.event.includes('feno') || b.event.includes('breath'))
-                                    ) {
-                                        const allowedRows = fenoTruncateSeconds * 3;
-                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++)
-                                            rowsToRemove.add(i);
-                                    }
-                                } else {
-                                    if (removeRecoveryEvents && shouldRemoveRecoveryBlock(b.event)) {
-                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
-                                    }
-                                    if (filterUnknown && isUnknownOrCleaningPhaseNorm(b.event)) {
-                                        for (let i = b.startIdx; i <= b.endIdx; i++) rowsToRemove.add(i);
-                                    }
-                                    if (fenoTruncateSeconds > 0 && (b.event.includes('feno') || b.event.includes('breath'))) {
-                                        const allowedRows = fenoTruncateSeconds * 3;
-                                        for (let i = b.startIdx + allowedRows; i <= b.endIdx; i++)
-                                            rowsToRemove.add(i);
-                                    }
-                                }
-                            });
-                fileData = fileData.filter((_, idx) => !rowsToRemove.has(idx));
-            }
+            fileData = trimFeNOseRowsForAromaPlot(fileData, {
+                removeRecoveryEvents,
+                fenoTruncateSeconds,
+                filterUnknown,
+            });
         }
 
         let detectedEvents = [];
@@ -435,10 +374,20 @@ export const generatePlotsFromBatch = (processedBatch, COLORS) => {
         }
     });
 
-    const eventCol = files[0]?.data.length > 0 ? Object.keys(files[0].data[0]).find(k => {
-        const str = k.toLowerCase();
-        return str === 'event' || str.includes('event_name') || str.includes('phase') || str.includes('mode') || str.includes('annotation');
-    }) : null;
+    const eventCol =
+        files[0]?.data.length > 0
+            ? findPlotEventColumn(files[0].data[0]) ||
+              Object.keys(files[0].data[0]).find((k) => {
+                  const str = k.toLowerCase();
+                  return (
+                      str === 'event' ||
+                      str.includes('event_name') ||
+                      str.includes('phase') ||
+                      str.includes('mode') ||
+                      str.includes('annotation')
+                  );
+              })
+            : null;
 
     const combinedData = [];
     for (let i = 0; i < maxLen; i++) {

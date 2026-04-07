@@ -30,7 +30,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [sidebarWidth, setSidebarWidth] = useState(348);
+    const [sidebarWidth, setSidebarWidth] = useState(392);
     const [expandedFolders, setExpandedFolders] = useState(new Set());
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
     

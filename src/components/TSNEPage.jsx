@@ -32,8 +32,10 @@ import { FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace';
 import {
   generateSyntheticFenoseRows,
   computeCalibrationFromFiles,
+  resolvePooledSyntheticPhaseCountsForDeviceKey,
   groupFenoseCalibrationFilesByDevice,
   resolveSyntheticCalibration,
+  resolveSyntheticPhaseCounts,
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
   buildSyntheticFenoseFileName,
@@ -41,10 +43,6 @@ import {
 
 /** Must match App.jsx handleAddSyntheticFenoseToWorkspace seed progression for identical synth rows. */
 const SYNTH_SEED_MULT = 9973;
-/** Default row counts per phase — same as ML Studio / App synthetic path. */
-const SYNTH_N_AMBIENT = 100;
-const SYNTH_N_FENO = 100;
-const SYNTH_N_WINDOW = 15;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Constants & Pure Helpers
@@ -860,7 +858,9 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     let k = 0;
     for (const { key: deviceKey, files: devFiles } of deviceJobs) {
       if (cancelRef.current) break;
+      const phasePool = resolvePooledSyntheticPhaseCountsForDeviceKey(deviceKey, parsedForCal);
       const calibration = resolveSyntheticCalibration(devFiles, pooledCalibration);
+      const phases = resolveSyntheticPhaseCounts(devFiles, phasePool, {});
       const deviceSuffix = deviceSuffixForSyntheticFile(deviceKey);
       for (const ppb of concs) {
         for (let r = 0; r < nPerConc; r++) {
@@ -869,9 +869,10 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
             const rows = generateSyntheticFenoseRows({
               ppb,
               seed: (baseSeed + k * SYNTH_SEED_MULT) >>> 0,
-              nAmbient: SYNTH_N_AMBIENT,
-              nFeno: SYNTH_N_FENO,
-              nWindow: SYNTH_N_WINDOW,
+              nAmbient: phases.nAmbient,
+              nBsc: phases.nBsc,
+              nFeno: phases.nFeno,
+              nWindow: phases.nWindow,
               calibration,
             });
             const feats = extractFenoseFeaturesFromRows(rows);

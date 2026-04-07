@@ -79,9 +79,16 @@ export function extractFenoseFeaturesFromRows(data) {
         throw new Error('Missing BreathSampleCollection (or AmbientSamplingRFC) or FeNOMeasurement phases (event_name column required).');
     }
 
+    /* Steady-state: last 30% of FeNOMeasurement rows (post wash-in plateau).
+     * Minimum 3 rows so we always have a meaningful mean even for very short captures. */
+    const fenoSsStart = Math.max(0, feno.length - Math.max(3, Math.ceil(feno.length * 0.30)));
+    const fenoSs = feno.slice(fenoSsStart);
+
     const blMean = {};   // baseline (BSC) mean per sensor
     const fenoMean = {};
     const fenoStd = {};
+    const fenoSsMean = {};
+    const fenoSsStd = {};
     const windowMean = {};
 
     for (const s of SENSOR_COLS) {
@@ -89,6 +96,10 @@ export function extractFenoseFeaturesFromRows(data) {
         const fVals = feno.map((r) => safeNumber(r?.[s])).filter((v) => v !== null);
         fenoMean[s] = meanOf(fVals);
         fenoStd[s] = stdOf(fVals);
+
+        const ssVals = fenoSs.map((r) => safeNumber(r?.[s])).filter((v) => v !== null);
+        fenoSsMean[s] = meanOf(ssVals);
+        fenoSsStd[s] = stdOf(ssVals);
 
         if (window.length) {
             windowMean[s] = meanOf(window.map((r) => safeNumber(r?.[s])));
@@ -100,8 +111,11 @@ export function extractFenoseFeaturesFromRows(data) {
     const feats = {};
     const deltas = [];
     const nds = [];
+    const ssDeltas = [];
+    const ssNds = [];
 
     for (const s of SENSOR_COLS) {
+        // Whole-phase features (retained for backward compat)
         const delta = fenoMean[s] - blMean[s];
         const nd = delta / (Math.abs(blMean[s]) + 1e-6);
         feats[`d_${s}`] = delta;
@@ -110,6 +124,15 @@ export function extractFenoseFeaturesFromRows(data) {
         feats[`wd_${s}`] = window.length ? (windowMean[s] - blMean[s]) : 0;
         deltas.push(delta);
         nds.push(nd);
+
+        // Steady-state features (post-transient plateau — primary signal)
+        const ssDelta = fenoSsMean[s] - blMean[s];
+        const ssNd = ssDelta / (Math.abs(blMean[s]) + 1e-6);
+        feats[`ss_d_${s}`] = ssDelta;
+        feats[`ss_nd_${s}`] = ssNd;
+        feats[`ss_fs_${s}`] = fenoSsStd[s] || 0;
+        ssDeltas.push(ssDelta);
+        ssNds.push(ssNd);
     }
 
     /* ── environmental features from non-recovery rows only ─────────────────── */
@@ -133,6 +156,15 @@ export function extractFenoseFeaturesFromRows(data) {
     feats.delta_std = stdOf(deltas);
     feats.nd_mean = meanOf(nds);
     feats.nd_std = stdOf(nds);
+
+    // Steady-state aggregate features
+    feats.ss_delta_mean = meanOf(ssDeltas);
+    feats.ss_delta_max = ssDeltas.length ? Math.max(...ssDeltas) : 0;
+    feats.ss_delta_min = ssDeltas.length ? Math.min(...ssDeltas) : 0;
+    feats.ss_delta_std = stdOf(ssDeltas);
+    feats.ss_nd_mean = meanOf(ssNds);
+    feats.ss_nd_std = stdOf(ssNds);
+    feats.ss_frac = fenoSs.length / Math.max(1, feno.length); // sanity diagnostic
 
     return feats;
 }
@@ -162,6 +194,19 @@ export function parseFenoseDeviceIdFromFilename(name) {
     return (asu || found[0]).toUpperCase();
 }
 
+/**
+ * Returns true only for Aroma Unit (ASU) device IDs.
+ * Only ASU captures are valid for FeNOse model training and validation.
+ * Other device roles (VAL = validation instrument, OMS, …) are reference instruments,
+ * not 64-element sensor arrays, and must never be used as training data.
+ *
+ * @param {string} deviceId — result of parseFenoseDeviceIdFromFilename()
+ * @returns {boolean}
+ */
+export function isAromaUnitDeviceId(deviceId) {
+    return /-asu-nz$/i.test(String(deviceId || ''));
+}
+
 function trainingSampleLabel(row) {
     const b = String(row?.fileName || row?.name || '').split(/[/\\]/).pop() || '';
     if (!b) return 'sample';
@@ -174,17 +219,31 @@ export function buildFenoseDatasetFromFiles(files) {
         if (!f?.data?.length) continue;
         const y = parseFenosePpbFromFilename(f.fileName || f.name || '');
         if (!Number.isFinite(y)) continue;
+        // Only Aroma Unit (ASU) captures are valid training / validation data.
+        // VAL, OMS and other non-ASU devices are reference instruments — skip them.
+        const deviceId = parseFenoseDeviceIdFromFilename(f.fileName || f.name || '');
+        if (!isAromaUnitDeviceId(deviceId)) {
+            console.warn(
+                `[FeNOse training] Skipping non-ASU file "${f.fileName || f.name}" (device: ${deviceId}). ` +
+                'Only files from Aroma Unit devices (##########-####-asu-nz) are used for training/validation.'
+            );
+            continue;
+        }
         const feats = extractFenoseFeaturesFromRows(f.data);
         rows.push({
             id: f.id || f.fileName || f.name,
             fileName: f.fileName || f.name || '',
-            deviceId: parseFenoseDeviceIdFromFilename(f.fileName || f.name || ''),
+            deviceId,
             y,
             feats,
         });
     }
     if (!rows.length) {
-        throw new Error('No valid training samples found. Need multiple curated CSVs with `event_name` and `...ppb...` in filename.');
+        throw new Error(
+            'No valid ASU training samples found. ' +
+            'Ensure your CSV files come from Aroma Unit devices (filename must contain ##########-####-asu-nz) ' +
+            'and include `...ppb...` in the filename and an `event_name` column.'
+        );
     }
     const featCols = Array.from(
         rows.reduce((s, r) => {
@@ -331,12 +390,23 @@ function shuffleInPlace(arr, rng) {
     }
 }
 
-async function tfTrainMlp(X, y, { epochs = 200, lr = 1e-3, h1 = 64, h2 = 32 } = {}, onProgress = null) {
+async function tfTrainMlp(X, y, { epochs = 200, lr = 1e-3, h1 = 64, h2 = 32, l2 = 0.001, dropoutRate = 0.2 } = {}, onProgress = null) {
     const n = X.length;
     const d = X[0]?.length || 0;
+    const reg = tf.regularizers.l2({ l2 });
     const model = tf.sequential();
-    model.add(tf.layers.dense({ units: h1, inputShape: [d], activation: 'relu' }));
-    model.add(tf.layers.dense({ units: h2, activation: 'relu' }));
+    model.add(tf.layers.dense({
+        units: h1,
+        inputShape: [d],
+        activation: 'relu',
+        kernelRegularizer: reg,
+    }));
+    model.add(tf.layers.dropout({ rate: dropoutRate }));
+    model.add(tf.layers.dense({
+        units: h2,
+        activation: 'relu',
+        kernelRegularizer: reg,
+    }));
     model.add(tf.layers.dense({ units: 1, activation: 'linear' }));
     model.compile({ optimizer: tf.train.adam(lr), loss: 'meanSquaredError' });
     const xs = tf.tensor2d(X, [n, d], 'float32');
@@ -360,7 +430,13 @@ async function tfTrainMlp(X, y, { epochs = 200, lr = 1e-3, h1 = 64, h2 = 32 } = 
 }
 
 async function denseWeightsToFenoseJson(model) {
-    const [l1, l2, l3] = model.layers;
+    // Filter to parametric layers only (Dense) so Dropout / BatchNorm layers
+    // inserted between dense blocks don't break the destructuring.
+    const denseLayers = model.layers.filter((l) => l.getWeights().length > 0);
+    if (denseLayers.length < 3) {
+        throw new Error(`denseWeightsToFenoseJson: expected ≥3 parametric layers, got ${denseLayers.length}. Layer names: ${model.layers.map((l) => l.name).join(', ')}`);
+    }
+    const [l1, l2, l3] = denseLayers;
     const [W1, b1] = l1.getWeights();
     const [W2, b2] = l2.getWeights();
     const [W3, b3] = l3.getWeights();
@@ -461,8 +537,11 @@ export async function trainFenoseV2FromFiles(
     }
     const rowsWithX = rows.map((r, i) => ({ ...r, x: X[i] }));
 
-    // Build good_mask: select Top-K by abs corr with raw ppb (simple, deterministic)
-    const scores = featCols.map((_, j) => corrAbs(rowsWithX.map((r) => r.x[j]), y));
+    // Build good_mask: select Top-K by abs corr with log1p(ppb).
+    // Using the log-transformed target improves selection of sensors that
+    // are discriminative at low concentrations (non-linear response).
+    const yLog = y.map((v) => Math.log1p(Math.max(0, v)));
+    const scores = featCols.map((_, j) => corrAbs(rowsWithX.map((r) => r.x[j]), yLog));
     const goodIdx = scores
         .map((s, j) => ({ s, j }))
         .sort((a, b) => b.s - a.s)
@@ -471,7 +550,6 @@ export async function trainFenoseV2FromFiles(
     const goodMask = featCols.map((_, j) => goodIdx.includes(j));
 
     const split = trainTestSplitStratifiedByY(rowsWithX, testFrac, seed);
-    const yMax = Math.max(...split.train.map((r) => r.y), 1);
 
     const XtrainG = split.train.map((r) => goodIdx.map((j) => r.x[j] ?? 0));
     const XtestG = split.test.map((r) => goodIdx.map((j) => r.x[j] ?? 0));
@@ -483,7 +561,7 @@ export async function trainFenoseV2FromFiles(
     // PCA: TensorFlow.js does not expose tf.linalg.svd in the browser bundle; use ml-pca (SVD) instead.
     const nTrain = XtrainSc.length;
     const nFeat = XtrainSc[0]?.length || 0;
-    const k = Math.max(1, Math.min(Math.max(1, Number(nPca) || 50), nFeat, Math.max(1, nTrain)));
+    const k = Math.max(1, Math.min(Math.max(1, Number(nPca) || 20), nFeat, Math.max(1, nTrain)));
     const Mtrain = new Matrix(XtrainSc);
     const pca = new PCA(Mtrain, { center: false, scale: false, method: 'SVD' });
     const U = pca.getEigenvectors();
@@ -498,7 +576,10 @@ export async function trainFenoseV2FromFiles(
     const Mtest = new Matrix(XtestSc);
     const XtestPca = pca.predict(Mtest, { nComponents: nComp }).to2DArray();
 
-    const yTrainScaled = split.train.map((r) => r.y / yMax);
+    // Target: log1p(ppb). Training is done in log-space for uniform relative-error
+    // minimisation across the full ppb range. Predictions are inverted with expm1.
+    const yLogMax = Math.max(...split.train.map((r) => Math.log1p(Math.max(0, r.y))), 1);
+    const yTrainScaled = split.train.map((r) => Math.log1p(Math.max(0, r.y)) / yLogMax);
     const yTest = split.test.map((r) => r.y);
 
     const embedDimsUsed =
@@ -519,7 +600,8 @@ export async function trainFenoseV2FromFiles(
         predPpb = XtestPca.map((row) => {
             let s = intercept;
             for (let j = 0; j < coef.length; j++) s += (row[j] ?? 0) * (coef[j] ?? 0);
-            return Math.max(0, Math.min(yMax, s * yMax));
+            // Invert log-target: s is in [0,1] log-space; s * yLogMax gives log1p(ppb).
+            return Math.max(0, Math.expm1(Math.max(0, s * yLogMax)));
         });
         validationPoints = split.test.map((r, i) => ({
             actual: yTest[i],
@@ -538,7 +620,8 @@ export async function trainFenoseV2FromFiles(
         const predScaled = tf.tidy(() =>
             model.predict(tf.tensor2d(XtestPca, [XtestPca.length, XtestPca[0].length], 'float32')).dataSync()
         );
-        predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.min(yMax, v * yMax)));
+        // Invert log-target: predScaled is in [0,1] log-space
+        predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.expm1(Math.max(0, v * yLogMax))));
         validationPoints = split.test.map((r, i) => ({
             actual: yTest[i],
             predicted: predPpb[i],
@@ -569,7 +652,11 @@ export async function trainFenoseV2FromFiles(
         feat_mean: featMeanFull,
         feat_std: featStdFull,
         V_pca: Vfull,
-        y_max: yMax,
+        // y_log_max replaces y_max: training target was log1p(ppb) / y_log_max.
+        // y_max is kept as an alias for older inference code compatibility.
+        y_log_max: yLogMax,
+        y_max: yLogMax, // alias: inference reads y_max; now stores log-space max
+        log_target: true, // flag: inference must apply expm1 to un-scale predictions
         ml_engine: mlEngine === ML_ENGINE_RIDGE_PCA ? ML_ENGINE_RIDGE_PCA : ML_ENGINE_TF_MLP,
         ridge_lambda: mlEngine === ML_ENGINE_RIDGE_PCA ? Math.max(1e-8, Number(ridgeLambda) || 0.05) : undefined,
         text_embedding_augment:
@@ -768,6 +855,9 @@ export async function predictFenosePpbV2FromRows(
     if (!Number.isFinite(yMax)) {
         throw new Error('Preprocessing JSON missing y_max.');
     }
+    // log_target flag: models trained with log1p target store y_log_max in y_max.
+    // Models without the flag used raw linear scaling (yMax = max raw ppb).
+    const logTarget = p?.log_target === true;
 
     const Xpca = await buildFenoseV2PcaFloat32Vector(dataRows, p, predictContext);
     const xArr = Array.from(Xpca);
@@ -782,7 +872,9 @@ export async function predictFenosePpbV2FromRows(
         }
         let s = w.intercept;
         for (let j = 0; j < w.coef.length; j++) s += xArr[j] * (w.coef[j] ?? 0);
-        const ppbR = Math.max(0, Math.min(yMax, s * yMax));
+        const ppbR = logTarget
+            ? Math.max(0, Math.expm1(Math.max(0, s * yMax)))
+            : Math.max(0, Math.min(yMax, s * yMax));
         return Math.round(ppbR * 100) / 100;
     }
 
@@ -804,7 +896,9 @@ export async function predictFenosePpbV2FromRows(
         return out.dataSync()[0];
     });
 
-    const ppb = Math.max(0, Math.min(yMax, raw * yMax));
+    const ppb = logTarget
+        ? Math.max(0, Math.expm1(Math.max(0, raw * yMax)))
+        : Math.max(0, Math.min(yMax, raw * yMax));
     return Math.round(ppb * 100) / 100;
 }
 

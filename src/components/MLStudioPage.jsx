@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
     Brain,
     PlayCircle,
@@ -10,6 +10,8 @@ import {
     Sparkles,
     FolderOpen,
     ChevronDown,
+    Eye,
+    EyeOff,
 } from 'lucide-react';
 import {
     XAxis,
@@ -19,6 +21,7 @@ import {
     ResponsiveContainer,
     LineChart,
     Line,
+    ComposedChart,
     ScatterChart,
     Scatter,
     BarChart,
@@ -34,6 +37,7 @@ import {
     trainFenoseV2FromFiles,
     parseFenosePpbFromFilename,
     parseFenoseDeviceIdFromFilename,
+    isAromaUnitDeviceId,
 } from '../utils/fenoseModel.js';
 import { FENOSE_SYNTH_UNKNOWN_KEY, parseConcentrationsList } from '../utils/fenoseSyntheticDataset.js';
 import { parseFile } from '../utils/fileParser.js';
@@ -63,6 +67,20 @@ function looksLikeFenoseLabelledTabular(name) {
 /** Must match App.jsx FENOSE_MODEL_JSON_RE */
 const FENOSE_MODEL_FILE_RE = /^(.*)_(v1|v2)_(weights|preprocessing|metrics)\.json$/i;
 
+/** Recharts wraps custom tooltip content in a box — keep it transparent for `.ml-fenose-batch-tooltip`. */
+const ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL = {
+    wrapperStyle: { outline: 'none' },
+    contentStyle: {
+        background: 'transparent',
+        border: 'none',
+        boxShadow: 'none',
+        padding: 0,
+    },
+};
+
+/** Workspace files with no `folderId` — bucket key for folder-scoped training */
+const FENOSE_TRAIN_ROOT_FOLDER_KEY = '__workspace_root__';
+
 function isWorkspaceTabularFile(f) {
     if (!f || f.isFolder) return false;
     const n = String(f.name || '').toLowerCase();
@@ -71,6 +89,42 @@ function isWorkspaceTabularFile(f) {
 
 function basenameOnly(p) {
     return String(p || '').split(/[/\\]/).pop() || '';
+}
+
+/** Signed % vs actual: 100×(pred−actual)/actual when |actual| is meaningful. */
+function fenoseSignedPctVsActual(actual, predicted) {
+    if (!Number.isFinite(actual) || !Number.isFinite(predicted)) return null;
+    if (Math.abs(actual) < 1e-9) return null;
+    return (100 * (predicted - actual)) / actual;
+}
+
+function FenoseScatterPpbTooltipContent({ payload }) {
+    const p = payload?.[0]?.payload;
+    if (!p) return null;
+    const signedPct = fenoseSignedPctVsActual(p.actual, p.predicted);
+    const absErr =
+        Number.isFinite(p.actual) && Number.isFinite(p.predicted) ? Math.abs(p.predicted - p.actual) : null;
+    return (
+        <div className="ml-fenose-batch-tooltip">
+            <div className="ml-fenose-batch-tooltip-name">{p.label}</div>
+            <div>Actual: {Number.isFinite(p.actual) ? `${Number(p.actual)} ppb` : '—'}</div>
+            <div>Predicted: {Number.isFinite(p.predicted) ? `${Number(p.predicted)} ppb` : '—'}</div>
+            {absErr != null ? <div>|Error|: {absErr.toFixed(2)} ppb</div> : null}
+            {signedPct != null ? (
+                <>
+                    <div className="ml-fenose-batch-tooltip-pct">
+                        Percentage error: <strong>{Math.abs(signedPct).toFixed(1)}%</strong> of actual
+                    </div>
+                    <div className="ml-fenose-batch-tooltip-pct-note">
+                        ({signedPct >= 0 ? '+' : ''}
+                        {signedPct.toFixed(1)}% vs actual — {signedPct >= 0 ? 'predicted high' : 'predicted low'})
+                    </div>
+                </>
+            ) : Number.isFinite(p.actual) && Math.abs(p.actual) < 1e-9 ? (
+                <div className="ml-fenose-batch-tooltip-pct-note">% vs actual: — (actual is 0 ppb)</div>
+            ) : null}
+        </div>
+    );
 }
 
 const MLStudioPage = ({
@@ -98,18 +152,87 @@ const MLStudioPage = ({
         return arr;
     }, [data, fileName, compareDataList]);
 
-    // FeNOse labelled tabular files in workspace (uploaded files usually have a File blob but no `data` until parsed).
+    // FeNOse labelled tabular files in workspace — ASU devices only.
+    // VAL (validation instruments) and other non-ASU roles are excluded from training/validation.
     const fenosePpbWorkspaceEntries = useMemo(() => {
-        return (workspaceFiles || []).filter((f) => !f?.isFolder && looksLikeFenoseLabelledTabular(f?.name || f?.fileName));
+        return (workspaceFiles || []).filter((f) => {
+            if (f?.isFolder) return false;
+            if (!looksLikeFenoseLabelledTabular(f?.name || f?.fileName)) return false;
+            const deviceId = parseFenoseDeviceIdFromFilename(f?.name || f?.fileName || '');
+            return isAromaUnitDeviceId(deviceId);
+        });
     }, [workspaceFiles]);
+
+    /** Folders (and root) that contain ≥1 trainable file — for “train from these folders only” */
+    const fenoseTrainFolderOptions = useMemo(() => {
+        const folderNameById = new Map();
+        for (const w of workspaceFiles || []) {
+            if (w?.isFolder && w.id != null) folderNameById.set(String(w.id), w.name || 'Folder');
+        }
+        const counts = new Map();
+        for (const f of fenosePpbWorkspaceEntries) {
+            const key = f.folderId != null && String(f.folderId) !== '' ? String(f.folderId) : FENOSE_TRAIN_ROOT_FOLDER_KEY;
+            counts.set(key, (counts.get(key) || 0) + 1);
+        }
+        const rows = [];
+        for (const [id, fileCount] of counts) {
+            const name =
+                id === FENOSE_TRAIN_ROOT_FOLDER_KEY
+                    ? 'Workspace root (no folder)'
+                    : folderNameById.get(id) || `Folder ${id}`;
+            rows.push({ id, name, fileCount });
+        }
+        rows.sort((a, b) => a.name.localeCompare(b.name));
+        return rows;
+    }, [workspaceFiles, fenosePpbWorkspaceEntries]);
+
+    /** `all` = every eligible file; `picked` = only files whose folder is checked (two or more folders can be checked). */
+    const [fenoseTrainFolderScopeMode, setFenoseTrainFolderScopeMode] = useState('all');
+
+    /** Folder ids to include when {@link fenoseTrainFolderScopeMode} is `picked`. */
+    const [fenoseTrainFolderFilter, setFenoseTrainFolderFilter] = useState([]);
+
+    const fenoseTrainAllFolderIds = useMemo(() => fenoseTrainFolderOptions.map((o) => o.id), [fenoseTrainFolderOptions]);
+
+    const fenosePpbScopedEntries = useMemo(() => {
+        if (fenoseTrainFolderScopeMode === 'all') return fenosePpbWorkspaceEntries;
+        if (!fenoseTrainFolderFilter.length) return [];
+        const allow = new Set(fenoseTrainFolderFilter);
+        return fenosePpbWorkspaceEntries.filter((f) => {
+            const key = f.folderId != null && String(f.folderId) !== '' ? String(f.folderId) : FENOSE_TRAIN_ROOT_FOLDER_KEY;
+            return allow.has(key);
+        });
+    }, [fenosePpbWorkspaceEntries, fenoseTrainFolderScopeMode, fenoseTrainFolderFilter]);
+
+    useEffect(() => {
+        if (fenoseTrainFolderScopeMode !== 'picked') return;
+        const valid = new Set(fenoseTrainAllFolderIds);
+        setFenoseTrainFolderFilter((prev) => {
+            const next = prev.filter((id) => valid.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [fenoseTrainFolderScopeMode, fenoseTrainAllFolderIds]);
 
     const [trainingCandidates, setTrainingCandidates] = useState([]);
     const [fenoseTrainHydrateStatus, setFenoseTrainHydrateStatus] = useState('idle'); // idle | loading | done
     const [fenoseTrainSelectedIds, setFenoseTrainSelectedIds] = useState([]);
 
+    const setTrainFolderIncluded = useCallback((folderId, checked) => {
+        if (fenoseTrainFolderScopeMode !== 'picked') return;
+        setFenoseTrainFolderFilter((prev) => {
+            if (checked) return prev.includes(folderId) ? prev : [...prev, folderId];
+            return prev.filter((id) => id !== folderId);
+        });
+    }, [fenoseTrainFolderScopeMode]);
+
+    const trainFolderRowChecked = (folderId) => {
+        if (fenoseTrainFolderScopeMode === 'all') return true;
+        return fenoseTrainFolderFilter.includes(folderId);
+    };
+
     useEffect(() => {
         let cancelled = false;
-        const entries = fenosePpbWorkspaceEntries;
+        const entries = fenosePpbScopedEntries;
         if (entries.length === 0) {
             setTrainingCandidates([]);
             setFenoseTrainHydrateStatus('done');
@@ -147,7 +270,7 @@ const MLStudioPage = ({
         return () => {
             cancelled = true;
         };
-    }, [fenosePpbWorkspaceEntries]);
+    }, [fenosePpbScopedEntries]);
 
     const fenoseTrainEffectiveSelectionCount =
         fenoseTrainSelectedIds.length > 0 ? fenoseTrainSelectedIds.length : trainingCandidates.length;
@@ -159,7 +282,7 @@ const MLStudioPage = ({
     const [fenoseResults, setFenoseResults] = useState(null); // [{fileName, predictedPpb, actualPpb, absErr}]
     const [fenoseTrainVersion, setFenoseTrainVersion] = useState('v2');
     const [fenoseTrainTopK, setFenoseTrainTopK] = useState(300);
-    const [fenoseTrainPca, setFenoseTrainPca] = useState(50);
+    const [fenoseTrainPca, setFenoseTrainPca] = useState(20);
     const [fenoseTrainEpochs, setFenoseTrainEpochs] = useState(300);
     const [fenoseTrainLr, setFenoseTrainLr] = useState(0.001);
     const [fenoseTrainFrac, setFenoseTrainFrac] = useState(20);
@@ -186,7 +309,7 @@ const MLStudioPage = ({
     const [fenoseSynthMsg, setFenoseSynthMsg] = useState(null); // { type, text }
     const [fenoseSynthSelectedAuKeys, setFenoseSynthSelectedAuKeys] = useState([]);
 
-    /** Labelled FeNOse-like workspace files → distinct AU ids (excludes FeNOse_synthetic/). */
+    /** Labelled FeNOse-like workspace files → distinct AU ids (ASU only; excludes FeNOse_synthetic/ and non-ASU devices). */
     const fenoseSynthAuOptions = useMemo(() => {
         const synthFolder = (workspaceFiles || []).find(
             (f) => f.isFolder && String(f.name).toLowerCase() === FENOSE_SYNTHETIC_FOLDER_NAME.toLowerCase()
@@ -198,6 +321,9 @@ const MLStudioPage = ({
             if (synthId && String(f.folderId) === synthId) continue;
             if (!looksLikeFenoseLabelledTabular(f.name)) continue;
             const raw = parseFenoseDeviceIdFromFilename(f.name);
+            // Only ASU devices are valid calibration sources for synthetic generation.
+            // VAL and other non-ASU tokens are skipped here.
+            if (!isAromaUnitDeviceId(raw)) continue;
             const key = raw === 'UNKNOWN' ? FENOSE_SYNTH_UNKNOWN_KEY : String(raw).toUpperCase();
             if (!byKey.has(key)) {
                 byKey.set(key, {
@@ -261,6 +387,8 @@ const MLStudioPage = ({
     const [fenoseBatchResults, setFenoseBatchResults] = useState(null);
     const [fenoseBatchRunning, setFenoseBatchRunning] = useState(false);
     const [fenoseBatchProgress, setFenoseBatchProgress] = useState(null);
+    /** Semi-transparent diagonal band on actual vs predicted (batch inference scatter). */
+    const [fenoseInferShowErrorBand, setFenoseInferShowErrorBand] = useState(false);
 
     const fenoseBatchSelectionSig = useMemo(() => {
         const ids = [workspaceSelectedFileId, ...(workspaceCompareFileIds || [])].filter(Boolean);
@@ -394,6 +522,52 @@ const MLStudioPage = ({
             { x: d[1].actual, y: d[1].predicted },
         ];
     }, [fenoseBatchIdentityLineData]);
+
+    /** Half-width (ppb) of inference error ribbon: model metrics if present, else batch MAE / spread. */
+    const fenoseInferErrorBandHalfWidth = useMemo(() => {
+        const pts = fenoseBatchScatterChartData;
+        const metricsJson = selectedInferModel?.metrics?.data;
+        let fromModel = null;
+        if (metricsJson && typeof metricsJson === 'object') {
+            const mae = Number(metricsJson.MAE_ppb);
+            const rmse = Number(metricsJson.RMSE_ppb);
+            if (Number.isFinite(mae) && mae > 0) fromModel = mae;
+            if (Number.isFinite(rmse) && rmse > 0) {
+                const blended = Math.max(fromModel ?? 0, rmse * 0.72);
+                fromModel = fromModel == null ? blended : Math.max(fromModel, rmse * 0.72);
+            }
+        }
+        if (fromModel != null && fromModel > 0) return Math.max(0.5, fromModel);
+
+        if (pts.length >= 2) {
+            const resid = pts.map((p) => p.predicted - p.actual);
+            const abs = resid.map((r) => Math.abs(r));
+            const maeB = abs.reduce((a, b) => a + b, 0) / abs.length;
+            const mean = resid.reduce((a, b) => a + b, 0) / resid.length;
+            const varRes =
+                resid.length > 1
+                    ? resid.reduce((s, x) => s + (x - mean) ** 2, 0) / (resid.length - 1)
+                    : 0;
+            const sig = Math.sqrt(Math.max(0, varRes));
+            return Math.max(1, maeB, sig * 0.85);
+        }
+        if (pts.length === 1) {
+            return Math.max(1, Math.abs(pts[0].predicted - pts[0].actual));
+        }
+        return 5;
+    }, [fenoseBatchScatterChartData, selectedInferModel]);
+
+    /** Pixel-ish stroke for ribbon: scales slightly with ppb width (chart-agnostic heuristic). */
+    const fenoseInferErrorBandStrokeWidth = useMemo(() => {
+        const w = fenoseInferErrorBandHalfWidth;
+        return Math.min(44, Math.max(12, 10 + w * 0.38));
+    }, [fenoseInferErrorBandHalfWidth]);
+
+    const fenoseInferBandUsesSavedMetrics = useMemo(() => {
+        const m = selectedInferModel?.metrics?.data;
+        if (!m || typeof m !== 'object') return false;
+        return Number.isFinite(Number(m.MAE_ppb)) || Number.isFinite(Number(m.RMSE_ppb));
+    }, [selectedInferModel]);
 
     const fenoseBatchBarChartData = useMemo(() => {
         const rows = (fenoseBatchResults || []).filter((r) => !r.error && r.predictedPpb != null);
@@ -665,8 +839,16 @@ const MLStudioPage = ({
             fenoseTrainSelectedIds.length > 0
                 ? trainingCandidates.filter((f) => fenoseTrainSelectedIds.includes(f.id))
                 : trainingCandidates;
+        if (fenoseTrainFolderScopeMode === 'picked' && fenoseTrainFolderFilter.length === 0) {
+            setFenoseTrainErr(
+                '“Only selected folders” is on but no folders are checked. Check one or more folders, or switch to “All workspace folders”.'
+            );
+            return;
+        }
         if (!selectedTrainingFiles || selectedTrainingFiles.length < 3) {
-            setFenoseTrainErr('Select at least 3 curated CSV files to train (use the Training Data picker).');
+            setFenoseTrainErr(
+                'Select at least 3 curated CSV files to train (adjust folder scope and/or use the file checkboxes).'
+            );
             return;
         }
         setFenoseTrainBusy(true);
@@ -1130,12 +1312,37 @@ const MLStudioPage = ({
                             <div className="ml-fenose-batch-output">
                                 {!fenoseBatchRunning && fenoseBatchScatterChartData.length >= 2 ? (
                                     <div className="ml-fenose-batch-chart-wrap ml-fenose-chart-surface">
-                                        <div className="ml-fenose-batch-chart-title">Actual vs predicted (ppb)</div>
+                                        <div className="ml-fenose-batch-chart-title-row">
+                                            <div className="ml-fenose-batch-chart-title">Actual vs predicted (ppb)</div>
+                                            <button
+                                                type="button"
+                                                className={`ml-fenose-infer-band-toggle ${fenoseInferShowErrorBand ? 'ml-fenose-infer-band-toggle--on' : ''}`}
+                                                onClick={() => setFenoseInferShowErrorBand((v) => !v)}
+                                                aria-pressed={fenoseInferShowErrorBand}
+                                                title={
+                                                    fenoseInferShowErrorBand
+                                                        ? 'Hide translucent spread along the ideal line'
+                                                        : 'Show ± error spread band along y = x'
+                                                }
+                                            >
+                                                {fenoseInferShowErrorBand ? <Eye size={16} aria-hidden /> : <EyeOff size={16} aria-hidden />}
+                                                <span>{fenoseInferShowErrorBand ? 'Error band on' : 'Error band off'}</span>
+                                            </button>
+                                        </div>
                                         <p className="ml-fenose-batch-chart-sub">
                                             Hover points for details. Gray dashed line is ideal (y = x). Use the brush below to zoom the actual-ppb range.
+                                            {fenoseInferShowErrorBand ? (
+                                                <>
+                                                    {' '}
+                                                    <strong>Band</strong> ≈ ±{fenoseInferErrorBandHalfWidth.toFixed(1)} ppb along the ideal line
+                                                    {fenoseInferBandUsesSavedMetrics
+                                                        ? ' (from saved model metrics).'
+                                                        : ' (from this batch’s errors — add *_metrics.json to Model/ to use training MAE/RMSE).'}
+                                                </>
+                                            ) : null}
                                         </p>
                                         <ResponsiveContainer width="100%" height={380}>
-                                            <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+                                            <ComposedChart margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
                                                 <XAxis
                                                     type="number"
@@ -1153,21 +1360,29 @@ const MLStudioPage = ({
                                                     label={{ value: 'Predicted (ppb)', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
                                                 />
                                                 <Tooltip
+                                                    {...ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL}
                                                     cursor={{ strokeDasharray: '4 4' }}
-                                                    content={({ active, payload }) => {
-                                                        if (!active || !payload?.length) return null;
-                                                        const p = payload[0]?.payload;
-                                                        if (!p) return null;
-                                                        return (
-                                                            <div className="ml-fenose-batch-tooltip">
-                                                                <div className="ml-fenose-batch-tooltip-name">{p.label}</div>
-                                                                <div>Actual: {p.actual} ppb</div>
-                                                                <div>Predicted: {p.predicted} ppb</div>
-                                                            </div>
-                                                        );
-                                                    }}
+                                                    content={({ active, payload }) =>
+                                                        !active || !payload?.length ? null : (
+                                                            <FenoseScatterPpbTooltipContent payload={payload} />
+                                                        )
+                                                    }
                                                 />
                                                 <Legend wrapperStyle={{ fontSize: 12 }} />
+                                                {fenoseInferShowErrorBand && fenoseBatchIdentityLineData.length >= 2 ? (
+                                                    <Line
+                                                        data={fenoseBatchIdentityLineData}
+                                                        type="linear"
+                                                        dataKey="predicted"
+                                                        stroke="rgba(56, 189, 248, 0.24)"
+                                                        strokeLinecap="round"
+                                                        strokeWidth={fenoseInferErrorBandStrokeWidth}
+                                                        dot={false}
+                                                        isAnimationActive={false}
+                                                        name="Error spread"
+                                                        legendType="none"
+                                                    />
+                                                ) : null}
                                                 {fenoseBatchIdentitySegment ? (
                                                     <ReferenceLine
                                                         segment={fenoseBatchIdentitySegment}
@@ -1187,7 +1402,7 @@ const MLStudioPage = ({
                                                 {fenoseBatchScatterChartData.length > 4 ? (
                                                     <Brush dataKey="actual" height={24} stroke="#38bdf8" travellerWidth={10} fill="rgba(15,23,42,0.5)" />
                                                 ) : null}
-                                            </ScatterChart>
+                                            </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>
                                 ) : !fenoseBatchRunning && fenoseBatchScatterChartData.length === 1 ? (
@@ -1216,6 +1431,7 @@ const MLStudioPage = ({
                                                     label={{ value: 'Predicted (ppb)', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
                                                 />
                                                 <Tooltip
+                                                    {...ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL}
                                                     cursor={{ fill: 'rgba(56, 189, 248, 0.12)' }}
                                                     content={({ active, payload }) => {
                                                         if (!active || !payload?.length) return null;
@@ -1494,18 +1710,110 @@ const MLStudioPage = ({
                         <div className="ml-fenose-train-layout">
                             <div className="ml-fenose-train-data-block">
                                 <label className="ml-fenose-label">Training data (workspace)</label>
+                                {fenoseTrainFolderOptions.length > 0 ? (
+                                    <div className="ml-fenose-train-folder-scope">
+                                        <fieldset className="ml-fenose-train-folder-mode-fieldset">
+                                            <legend className="ml-fenose-train-folder-mode-legend">Load training files from</legend>
+                                            <label className="ml-fenose-train-folder-mode-row">
+                                                <input
+                                                    type="radio"
+                                                    name="fenose-train-folder-scope"
+                                                    checked={fenoseTrainFolderScopeMode === 'all'}
+                                                    onChange={() => setFenoseTrainFolderScopeMode('all')}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                                <span>All workspace folders (every eligible ASU file)</span>
+                                            </label>
+                                            <label className="ml-fenose-train-folder-mode-row">
+                                                <input
+                                                    type="radio"
+                                                    name="fenose-train-folder-scope"
+                                                    checked={fenoseTrainFolderScopeMode === 'picked'}
+                                                    onChange={() => {
+                                                        setFenoseTrainFolderScopeMode('picked');
+                                                        setFenoseTrainFolderFilter((p) =>
+                                                            p.length > 0 ? p : [...fenoseTrainAllFolderIds]
+                                                        );
+                                                    }}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                                <span>
+                                                    Only selected folders — check <strong>one or more</strong> folders below; only those
+                                                    files are loaded (check two or more to combine batches).
+                                                </span>
+                                            </label>
+                                        </fieldset>
+                                        <p className="ml-fenose-hint" style={{ marginBottom: 8 }}>
+                                            {fenoseTrainFolderScopeMode === 'picked'
+                                                ? 'Uncheck folders to exclude them. The file list and training use only checked folders.'
+                                                : 'Switch to “Only selected folders” to limit training data to specific folders.'}
+                                        </p>
+                                        <div className="ml-fenose-train-folder-grid">
+                                            {fenoseTrainFolderOptions.map((row) => (
+                                                <label
+                                                    key={row.id}
+                                                    className={`ml-fenose-train-folder-row ${fenoseTrainFolderScopeMode === 'all' ? 'ml-fenose-train-folder-row--disabled' : ''}`}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={trainFolderRowChecked(row.id)}
+                                                        onChange={(e) => setTrainFolderIncluded(row.id, e.target.checked)}
+                                                        disabled={fenoseTrainBusy || fenoseTrainFolderScopeMode === 'all'}
+                                                    />
+                                                    <span className="ml-fenose-train-folder-row-label" title={row.name}>
+                                                        {row.name}
+                                                    </span>
+                                                    <span className="ml-fenose-train-folder-row-count">{row.fileCount}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <div className="ml-fenose-train-folder-actions">
+                                            <button
+                                                type="button"
+                                                className="btn-secondary ml-fenose-train-pill-btn"
+                                                onClick={() => {
+                                                    setFenoseTrainFolderScopeMode('picked');
+                                                    setFenoseTrainFolderFilter([...fenoseTrainAllFolderIds]);
+                                                }}
+                                                disabled={fenoseTrainBusy || fenoseTrainAllFolderIds.length === 0}
+                                            >
+                                                Select all folders
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn-secondary ml-fenose-train-pill-btn ml-fenose-train-pill-btn--muted"
+                                                onClick={() => {
+                                                    setFenoseTrainFolderScopeMode('picked');
+                                                    setFenoseTrainFolderFilter([]);
+                                                }}
+                                                disabled={fenoseTrainBusy}
+                                            >
+                                                Clear folder selection
+                                            </button>
+                                        </div>
+                                        {fenoseTrainFolderScopeMode === 'picked' && fenoseTrainFolderFilter.length === 0 ? (
+                                            <p className="ml-fenose-train-folder-warn" role="status">
+                                                No folders checked — training data will be empty until you check at least one folder.
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                ) : null}
                                 <div className="ml-fenose-train-cols">
                                     <div className="ml-fenose-file-list">
                                         {fenoseTrainHydrateStatus === 'loading' ? (
                                             <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                                 <Loader2 className="spinner" size={16} style={{ verticalAlign: 'middle', marginRight: 8 }} />
-                                                Loading rows from workspace ({fenosePpbWorkspaceEntries.length} file{fenosePpbWorkspaceEntries.length === 1 ? '' : 's'})…
+                                                Loading rows from workspace ({fenosePpbScopedEntries.length} file
+                                                {fenosePpbScopedEntries.length === 1 ? '' : 's'}
+                                                {fenoseTrainFolderScopeMode === 'picked' ? ' from selected folders' : ''})…
                                             </div>
                                         ) : trainingCandidates.length === 0 ? (
                                             <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                                 {fenosePpbWorkspaceEntries.length === 0
                                                     ? 'No workspace CSV/Excel files with “ppb” in the name. Upload captures and use names like …5ppb… .'
-                                                    : 'Found labelled files in the sidebar but could not read rows (missing file blob or parse error). Try re-uploading the CSVs.'}
+                                                    : fenoseTrainFolderScopeMode === 'picked' && fenoseTrainFolderFilter.length === 0
+                                                      ? 'No folders checked — select “Only selected folders” and check one or more folders, or use “All workspace folders”.'
+                                                      : 'No files in the current scope, or rows could not be read (missing blob / parse error). Try re-uploading or adjusting folder selection.'}
                                             </div>
                                         ) : (
                                             trainingCandidates.map((f) => (
@@ -1820,19 +2128,13 @@ const MLStudioPage = ({
                                             label={{ value: 'Predicted (ppb)', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
                                         />
                                         <Tooltip
+                                            {...ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL}
                                             cursor={{ strokeDasharray: '4 4' }}
-                                            content={({ active, payload }) => {
-                                                if (!active || !payload?.length) return null;
-                                                const p = payload[0]?.payload;
-                                                if (!p) return null;
-                                                return (
-                                                    <div className="ml-fenose-batch-tooltip">
-                                                        <div className="ml-fenose-batch-tooltip-name">{p.label}</div>
-                                                        <div>Actual: {p.actual} ppb</div>
-                                                        <div>Predicted: {p.predicted} ppb</div>
-                                                    </div>
-                                                );
-                                            }}
+                                            content={({ active, payload }) =>
+                                                !active || !payload?.length ? null : (
+                                                    <FenoseScatterPpbTooltipContent payload={payload} />
+                                                )
+                                            }
                                         />
                                         <Legend wrapperStyle={{ fontSize: 12 }} />
                                         {fenoseTrainValIdentitySegment ? (

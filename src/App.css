@@ -96,7 +96,7 @@
 
 /* Sidebar Styles (moved to component css ideally, but here for now) */
 .sidebar {
-  width: 348px;
+  width: 392px;
   height: 100%;
   min-height: 0;
   align-self: stretch;
