@@ -1,33 +1,49 @@
 import { parseFenoseDeviceIdFromFilename } from './fenoseModel.js';
+import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fenoseAromaTrim.js';
 
 /**
  * Synthetic FeNOse-style tabular rows for workspace training / demos.
  * Phases and columns match extractFenoseFeaturesFromRows:
  * AmbientSamplingRFC, BreathSampleCollection (baseline), FeNOMeasurement, optional FeNOWindow; A1–H8; AQT0, AQH0, AQP0.
  *
- * Temporal behaviour (wash-in, recovery, drift) is designed so ML features (means, feno std,
+ * Temporal behaviour (wash-in, FeNO window decay, drift) is designed so ML features (means, feno std,
  * window deltas) resemble real captures, not IID plateaus per phase.
+ *
+ * **No hardware recovery phase:** outputs are only AmbientSamplingRFC → BreathSampleCollection →
+ * FeNOMeasurement → FeNOWindow (same phase order as real FeNOse captures). Rows with `recoveryOff`
+ * or any `event_name` containing `recovery` are never emitted (and would be stripped if introduced
+ * by mistake).
+ *
+ * RFC vs BSC levels (critical for Aroma / ALAAC plots)
+ * ────────────────────────────────────────────────────
+ * FeNOse ML uses BreathSampleCollection (BSC) as the baseline for deltas. Aroma normalises
+ * traces with the median of **AmbientSamplingRFC** (room air). If synthetic RFC rows were
+ * generated at the **same** raw level as BSC (historical bug: one `amb_med` from BSC only),
+ * RFC-normalised plots look flat: there is almost no room-air → breath → FeNO structure.
+ * We now carry **rfc_med** and **bsc_med** per sensor; RFC phase uses rfc_med, BSC/FeNO/window
+ * use bsc_med for the breath-matrix + ND model (nd_slope still fitted vs BSC-referenced ND).
  *
  * Calibration strategy
  * ─────────────────────
- * Call computeCalibrationFromFiles(parsedRealFiles) to derive all six per-sensor
- * parameters directly from real device captures in the workspace.  Pass the result
+ * Call computeCalibrationFromFiles(parsedRealFiles) to derive per-sensor parameters
+ * (levels + ND statistics) from real device captures in the workspace. Pass the result
  * as the `calibration` argument to generateSyntheticFenoseRows.
  *
  * If real data is unavailable the generator falls back to FALLBACK_CALIBRATION
  * (empirical, device 0000000018-0926-asu-nz, 18-2 batch, 7 ppb levels × 5 reps).
  *
- * Six calibration parameters per sensor
- * ──────────────────────────────────────
- *  amb_med      median ambient reading across all captures  (baseline level)
- *  nd_slope     linear ΔND/Δppb from OLS fit               (sensitivity)
+ * Calibration fields per sensor
+ * ───────────────────────────────
+ *  rfc_med      typical room-air (AmbientSamplingRFC) level — drives synthetic RFC rows
+ *  bsc_med      typical breath-matrix (BreathSampleCollection) level — FeNO/BSC/window
+ *  amb_med      same as bsc_med (legacy alias for ML / merges)
+ *  nd_slope     linear ΔND/Δppb from OLS fit (ND vs BSC or RFC fallback; FeNOse-consistent)
  *  amb_cv       std/mean of ambient across captures         (inter-replicate baseline spread)
  *  noise_cv     within-ambient-phase std / mean             (row-to-row measurement noise)
  *  sens_cv      std(nd@100ppb) / |nd_slope×100|             (capture-to-capture sensitivity variation ~13%)
  *  zero_std_nd  std(nd) at 0 ppb                            (baseline ND offset noise)
  *
- * The first four existed in v1; sens_cv and zero_std_nd are new and critical —
- * they explain the ×10-20 under-dispersion seen in v1 synthetic nd features.
+ * sens_cv and zero_std_nd remain critical for realistic cross-replicate ND spread.
  */
 
 const SENSOR_COLS = Array.from({ length: 8 }, (_, r) => 'ABCDEFGH'[r]).flatMap((row) =>
@@ -146,6 +162,18 @@ const FALLBACK_CALIBRATION = {
     H8: { amb_med:    6100.3, nd_slope:  -1.3984e-05, amb_cv: 0.0064, noise_cv: 0.00011, sens_cv: 0.0942, zero_std_nd: 3.67491e-04 },
 };
 
+/** When only legacy `amb_med` (BSC-typical) exists, RFC room-air is a few % lower on average. */
+const SYNTH_RFC_TO_BSC_RATIO = 0.988;
+
+for (const s of SENSOR_COLS) {
+    const e = FALLBACK_CALIBRATION[s];
+    if (!e) continue;
+    const bsc = e.bsc_med ?? e.amb_med;
+    e.bsc_med = Math.max(1e-6, bsc);
+    e.rfc_med = Math.max(1e-6, bsc * SYNTH_RFC_TO_BSC_RATIO);
+    e.amb_med = e.bsc_med;
+}
+
 // ─── Dynamic calibration ──────────────────────────────────────────────────────
 
 /**
@@ -164,23 +192,39 @@ export function computeCalibrationFromFiles(files) {
         const data = f.data;
         if (!Array.isArray(data) || data.length === 0) continue;
 
-        /* Baseline: prefer BreathSampleCollection; fall back to AmbientSamplingRFC */
-        let baseline = _rowsOfPhase(data, 'BreathSampleCollection');
-        if (baseline.length < 3) baseline = _rowsOfPhase(data, 'AmbientSamplingRFC');
-        const feno    = _rowsOfPhase(data, 'FeNOMeasurement');
+        /* ND / noise for slope fit: BSC if present (matches FeNOse ML), else RFC */
+        const rfcRows = _rowsOfPhase(data, 'AmbientSamplingRFC');
+        const bscRows = _rowsOfPhase(data, 'BreathSampleCollection');
+        let baseline = bscRows.length >= 3 ? bscRows : rfcRows;
+        const feno = _rowsOfPhase(data, 'FeNOMeasurement');
         if (baseline.length < 3 || feno.length < 5) continue;
 
         const sample = { ppb };
         let found = 0;
+        const rowKeys = Object.keys(data[0] || {});
+
         for (const s of SENSOR_COLS) {
-            const bv = baseline.map((r) => _safeNum(r?.[s])).filter((v) => v !== null);
-            const fv = feno.map((r)      => _safeNum(r?.[s])).filter((v) => v !== null);
+            const col = rowKeys.find(
+                (k) =>
+                    k.toUpperCase() === s.toUpperCase() || k.toUpperCase() === ('CHR' + s).toUpperCase()
+            );
+            if (!col) continue;
+
+            const rfcVals = rfcRows.map((r) => _safeNum(r?.[col])).filter((v) => v !== null);
+            const bscVals = bscRows.map((r) => _safeNum(r?.[col])).filter((v) => v !== null);
+            const bv = baseline.map((r) => _safeNum(r?.[col])).filter((v) => v !== null);
+            const fv = feno.map((r) => _safeNum(r?.[col])).filter((v) => v !== null);
             if (bv.length < 3 || fv.length < 3) continue;
-            const bm = _mean(bv); const fm = _mean(fv);
+            const bm = _mean(bv);
+            const fm = _mean(fv);
             if (Math.abs(bm) < 1e-6) continue;
+            const rfcMean = rfcVals.length >= 3 ? _mean(rfcVals) : null;
+            const bscMean = bscVals.length >= 3 ? _mean(bscVals) : null;
             sample[s] = {
                 ambMean: bm,
-                nd:      (fm - bm) / Math.abs(bm),
+                rfcMean,
+                bscMean,
+                nd: (fm - bm) / Math.abs(bm),
                 noiseCv: _std(bv) / Math.abs(bm),
             };
             found++;
@@ -197,13 +241,28 @@ export function computeCalibrationFromFiles(files) {
             calibration[s] = FALLBACK_CALIBRATION[s] ? { ...FALLBACK_CALIBRATION[s] } : null;
             continue;
         }
-        const ambMeans  = ws.map((f) => f[s].ambMean);
-        const amb_med   = _median(ambMeans);
-        const ambAvg    = _mean(ambMeans);
-        const amb_cv    = Math.max(0.001, Math.min(0.15, _std(ambMeans) / (Math.abs(ambAvg) + 1e-9)));
-        const noise_cv  = Math.max(0.0001, Math.min(0.10, _mean(ws.map((f) => f[s].noiseCv))));
+        const ambMeans = ws.map((f) => f[s].ambMean);
+        const amb_med = _median(ambMeans);
+        const ambAvg = _mean(ambMeans);
+        const amb_cv = Math.max(0.001, Math.min(0.15, _std(ambMeans) / (Math.abs(ambAvg) + 1e-9)));
+        const noise_cv = Math.max(0.00005, Math.min(0.05, _mean(ws.map((f) => f[s].noiseCv))));
 
-        const xs = ws.map((f) => f.ppb);
+        const rfcPool = ws.map((f) => f[s].rfcMean).filter((v) => v != null && Number.isFinite(v));
+        const bscPool = ws.map((f) => f[s].bscMean).filter((v) => v != null && Number.isFinite(v));
+        let bsc_med =
+            bscPool.length >= 2
+                ? _median(bscPool)
+                : amb_med;
+        let rfc_med =
+            rfcPool.length >= 2
+                ? _median(rfcPool)
+                : Math.max(1e-6, bsc_med * SYNTH_RFC_TO_BSC_RATIO);
+        if (rfc_med > bsc_med * 1.001) {
+            [rfc_med, bsc_med] = [bsc_med * SYNTH_RFC_TO_BSC_RATIO, bsc_med];
+        }
+
+        // Fit slope ND vs y_effective (saturated) so it's compatible with generator logic
+        const xs = ws.map((f) => effectivePpbForNd(f.ppb, 0));
         const ys = ws.map((f) => f[s].nd);
         const nd_slope = _linregSlope(xs, ys);
 
@@ -218,8 +277,9 @@ export function computeCalibrationFromFiles(files) {
         // sens_cv — prefer replicates at 100 ppb; else variation across any ppb level with ≥2 files
         const nd100 = ws.filter((f) => f.ppb === 100).map((f) => f[s].nd);
         let sens_cv;
-        if (nd100.length >= 2 && Math.abs(nd_slope * 100) > 1e-9) {
-            sens_cv = Math.max(0.01, Math.min(0.35, _std(nd100) / Math.abs(nd_slope * 100)));
+        const eff100 = effectivePpbForNd(100, 0);
+        if (nd100.length >= 2 && Math.abs(nd_slope * eff100) > 1e-9) {
+            sens_cv = Math.max(0.01, Math.min(0.35, _std(nd100) / Math.abs(nd_slope * eff100)));
         } else {
             const byPpb = new Map();
             for (const f of ws) {
@@ -232,7 +292,8 @@ export function computeCalibrationFromFiles(files) {
                 if (arr.length >= 2) maxStd = Math.max(maxStd, _std(arr));
             }
             const refPpb = Math.max(...ws.map((f) => f.ppb), 50);
-            const denom = Math.abs(nd_slope * refPpb) + 1e-12;
+            const effRef = effectivePpbForNd(refPpb, 0);
+            const denom = Math.abs(nd_slope * effRef) + 1e-12;
             if (maxStd > 1e-12) {
                 sens_cv = Math.max(0.01, Math.min(0.35, maxStd / denom));
             } else {
@@ -241,8 +302,10 @@ export function computeCalibrationFromFiles(files) {
         }
 
         calibration[s] = {
-            amb_med:     Math.max(1, amb_med),
-            nd_slope:    Number.isFinite(nd_slope) ? nd_slope : 0,
+            amb_med: Math.max(1, bsc_med),
+            bsc_med: Math.max(1, bsc_med),
+            rfc_med: Math.max(1e-6, rfc_med),
+            nd_slope: Number.isFinite(nd_slope) ? nd_slope : 0,
             amb_cv,
             noise_cv,
             sens_cv,
@@ -299,6 +362,320 @@ export function resolveSyntheticCalibration(devFiles, pooledCalibration) {
     return mergeCalibration(null, null);
 }
 
+/** Default row counts per phase when no workspace template exists. */
+export const SYNTH_DEFAULT_PHASE_COUNTS = {
+    nAmbient: 100,
+    nBsc: 27,
+    nFeno: 85,
+    nWindow: 15,
+};
+
+/** Synthetic FeNOse must not include post-capture hardware recovery (`recoveryOff`, etc.). */
+function isRecoveryLikeEventName(eventName) {
+    const e = String(eventName ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '');
+    return e.includes('recovery');
+}
+
+/**
+ * Map event_name / phase string to a coarse FeNOse stage (recovery-like rows skipped).
+ * Tolerates minor casing/spacing differences vs strict equality.
+ */
+export function classifyFenosePhaseRow(eventName) {
+    if (isRecoveryLikeEventName(eventName)) return null;
+    const e = String(eventName ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '');
+    if (!e) return null;
+    if (e === 'ambientsamplingrfc' || (e.includes('ambient') && e.includes('rfc'))) return 'rfc';
+    if (e.includes('breathsamplecollection')) return 'bsc';
+    if (e.includes('fenowindow')) return 'window';
+    if (e.includes('fenomeasurement')) return 'feno';
+    return null;
+}
+
+/**
+ * Count FeNOse phase rows in one parsed capture.
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number } | null}
+ */
+export function countPhasesOneFile(data) {
+    if (!Array.isArray(data) || data.length < 15 || !data[0]) return null;
+    if (!('event_name' in data[0]) && !('phase' in data[0])) return null;
+    const col = 'event_name' in data[0] ? 'event_name' : 'phase';
+    let nAmbient = 0;
+    let nBsc = 0;
+    let nFeno = 0;
+    let nWindow = 0;
+    for (const r of data) {
+        const kind = classifyFenosePhaseRow(r?.[col]);
+        if (kind === 'rfc') nAmbient++;
+        else if (kind === 'bsc') nBsc++;
+        else if (kind === 'feno') nFeno++;
+        else if (kind === 'window') nWindow++;
+    }
+    if (nAmbient < 3 || nFeno < 5) return null;
+    return { nAmbient, nBsc, nFeno, nWindow };
+}
+
+/**
+ * Pick phase row counts from the **single real file** with the longest RFC+BSC prefix (legacy helper).
+ *
+ * @param {Array<{ data?: object[] }>} files
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number } | null}
+ */
+export function pickPhaseRowCountsTemplateFromFiles(files) {
+    let best = null;
+    let bestPrefix = -1;
+    for (const f of files || []) {
+        const c = countPhasesOneFile(f?.data);
+        if (!c) continue;
+        const prefix = c.nAmbient + c.nBsc;
+        if (prefix > bestPrefix) {
+            bestPrefix = prefix;
+            best = { ...c };
+        }
+    }
+    return best;
+}
+
+function _medianInt(arr) {
+    const s = [...arr].filter(Number.isFinite).sort((a, b) => a - b);
+    if (!s.length) return 15;
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 !== 0 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
+/**
+ * When minima come from different captures, `min(nAmbient)+min(nBsc) ≤ min(feNoStart)` always holds; we set
+ * `nBsc = min(feNoStart) − nAmbientEff` so synthetic **FeNO start** = `min(feNoStart)` (red line).
+ */
+function _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts) {
+    let template = layouts[0];
+    for (const L of layouts) {
+        if (L.feNoStart > template.feNoStart) template = L;
+    }
+    const durs = layouts
+        .map((L) => L.windowStart - L.feNoStart)
+        .filter((d) => Number.isFinite(d) && d >= 3);
+    if (durs.length === 0) return null;
+    const nFeno = Math.max(8, Math.min(220, Math.min(...durs)));
+    return {
+        nAmbient: Math.max(8, template.nAmbient),
+        nBsc: Math.max(0, Math.min(80, template.nBsc)),
+        nFeno,
+        nWindow: Math.max(1, _medianInt(layouts.map((L) => L.nWindow))),
+    };
+}
+
+/**
+ * Phase counts aligned with **Multi AU** vertical markers: `processAromaBatchCore` draws each dashed line at
+ * `Math.min` of that phase’s **start index** across files in the column (sequence index 0 = first event, …).
+ *
+ * So synthetic must match **per-phase minima**, not one file’s split:
+ * - **BSC start** = `min_i(nAmbient_i)` → synthetic `nAmbient = max(8, min nAmbient)`.
+ * - **FeNO start** = `min_i(feNoStart_i)` → `nBsc = min(feNoStart) − nAmbientEff` (clamped), since `feNoStart = nAmbient + nBsc` per file.
+ * - **FeNOWindow start** = `min_i(windowStart_i)` → `nFeno = min(windowStart) − min(feNoStart)`.
+ * - **nWindow** — median window block length.
+ *
+ * Using only the file with smallest `feNoStart` for both `nAmbient` and `nBsc` was wrong when another file
+ * had a shorter RFC segment: dashed lines shifted right on synthetic vs real (your A1 plot).
+ *
+ * @param {Array<{ data?: object[] }>} files
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number } | null}
+ */
+export function buildAromaAlignedPhaseCountsFromFiles(files) {
+    const layouts = [];
+    for (const f of files || []) {
+        const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
+        if (!L || L.windowBeforeMeasurement) continue;
+        if (!(L.windowStart > L.feNoStart)) continue;
+        layouts.push(L);
+    }
+    if (layouts.length === 0) return null;
+
+    const minAmbient = Math.min(...layouts.map((L) => L.nAmbient));
+    const minFeNoStart = Math.min(...layouts.map((L) => L.feNoStart));
+    const minWindowStart = Math.min(...layouts.map((L) => L.windowStart));
+
+    const nAmbientEff = Math.max(8, Math.floor(minAmbient));
+    let nBsc = minFeNoStart - nAmbientEff;
+    if (!Number.isFinite(nBsc) || nBsc < 0 || nBsc > 80) {
+        return _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts);
+    }
+    nBsc = Math.floor(nBsc);
+
+    let nFeno = minWindowStart - minFeNoStart;
+    if (!Number.isFinite(nFeno) || nFeno < 3) {
+        return _buildAromaAlignedFallbackMaxPrefixMinDuration(layouts);
+    }
+    nFeno = Math.max(8, Math.min(220, Math.floor(nFeno)));
+
+    return {
+        nAmbient: nAmbientEff,
+        nBsc,
+        nFeno,
+        nWindow: Math.max(1, _medianInt(layouts.map((L) => L.nWindow))),
+    };
+}
+
+function _pickMedianTotalPhaseCounts(rows) {
+    if (!rows || rows.length === 0) return null;
+    if (rows.length === 1) {
+        const x = rows[0];
+        return { nAmbient: x.nAmbient, nBsc: x.nBsc, nFeno: x.nFeno, nWindow: x.nWindow };
+    }
+    const sorted = [...rows].sort((a, b) => {
+        const ta = a.nAmbient + a.nBsc + a.nFeno + a.nWindow;
+        const tb = b.nAmbient + b.nBsc + b.nFeno + b.nWindow;
+        return ta - tb || a.nAmbient - b.nAmbient;
+    });
+    const mid = Math.floor((sorted.length - 1) / 2);
+    const pick = sorted[mid];
+    return {
+        nAmbient: pick.nAmbient,
+        nBsc: pick.nBsc,
+        nFeno: pick.nFeno,
+        nWindow: pick.nWindow,
+    };
+}
+
+/**
+ * Phase row counts taken from **one** real capture (all four phases together — not blended across files).
+ * Prefers {@link getFeNOseAromaTrimPhaseLayout} (same trim as Multi AU: Remove Recovery + No Unknowns);
+ * if no file yields a layout, uses {@link countPhasesOneFile} per file. Among all successful captures,
+ * picks the one with **median total row count** so synthetics match a typical original length and shape.
+ *
+ * @param {Array<{ data?: object[] }>} files
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number } | null}
+ */
+export function pickRepresentativePhaseCountsFromFiles(files) {
+    const trimRows = [];
+    for (const f of files || []) {
+        const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
+        if (L) {
+            trimRows.push({
+                nAmbient: L.nAmbient,
+                nBsc: L.nBsc,
+                nFeno: L.nFeno,
+                nWindow: L.nWindow,
+            });
+        }
+    }
+    const fromTrim = _pickMedianTotalPhaseCounts(trimRows);
+    if (fromTrim) return fromTrim;
+
+    const rawRows = [];
+    for (const f of files || []) {
+        const c = countPhasesOneFile(f?.data);
+        if (c) rawRows.push({ ...c });
+    }
+    return _pickMedianTotalPhaseCounts(rawRows);
+}
+
+/**
+ * Median row counts per FeNOse phase from real files.
+ * Rows with `recoveryOff` or other phases are ignored — they are not reproduced in synthetic files.
+ *
+ * @param {Array<{ fileName?: string, name?: string, data?: object[] }>} files
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number } | null}
+ */
+export function computePhaseRowMediansFromFiles(files) {
+    const samples = [];
+    for (const f of files || []) {
+        const c = countPhasesOneFile(f?.data);
+        if (c) samples.push(c);
+    }
+    if (samples.length === 0) return null;
+
+    const med = (arr) => {
+        const s = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 !== 0 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+    };
+
+    return {
+        nAmbient: med(samples.map((x) => x.nAmbient)),
+        nBsc: med(samples.map((x) => x.nBsc)),
+        nFeno: med(samples.map((x) => x.nFeno)),
+        /* Median 0 drops FeNOWindow rows → Multi AU plots lose the purple phase marker vs real data. */
+        nWindow: Math.max(1, med(samples.map((x) => x.nWindow))),
+    };
+}
+
+/**
+ * Pooled phase counts: {@link buildAromaAlignedPhaseCountsFromFiles} (Multi AU marker alignment), else
+ * {@link pickRepresentativePhaseCountsFromFiles}, else per-phase medians.
+ */
+export function resolvePooledSyntheticPhaseCounts(files) {
+    return (
+        buildAromaAlignedPhaseCountsFromFiles(files) ||
+        pickRepresentativePhaseCountsFromFiles(files) ||
+        computePhaseRowMediansFromFiles(files)
+    );
+}
+
+/**
+ * Phase counts from **only** captures whose filename matches `deviceKey` (ASU id), so synthetics for that unit
+ * mirror originals for that AU. Falls back to the full workspace pool if none match.
+ *
+ * @param {string} deviceKey — upper-case id from {@link parseFenoseDeviceIdFromFilename} / device jobs
+ * @param {Array<{ fileName?: string, name?: string, data?: object[] }>} allParsedFiles
+ */
+export function resolvePooledSyntheticPhaseCountsForDeviceKey(deviceKey, allParsedFiles) {
+    const key = String(deviceKey || '');
+    const all = allParsedFiles || [];
+    const globalPool = resolvePooledSyntheticPhaseCounts(all);
+    if (!key || key === FENOSE_SYNTH_UNKNOWN_KEY) return globalPool;
+    const sub = all.filter(
+        (f) => parseFenoseDeviceIdFromFilename(f.fileName || f.name || '') === key
+    );
+    if (sub.length === 0) return globalPool;
+    return resolvePooledSyntheticPhaseCounts(sub) || globalPool;
+}
+
+/**
+ * Row counts for synthetic generation: explicit opts win; else {@link buildAromaAlignedPhaseCountsFromFiles}
+ * from device files, else {@link pickRepresentativePhaseCountsFromFiles}, else pooled; else {@link SYNTH_DEFAULT_PHASE_COUNTS}.
+ *
+ * @param {object[]} devFiles — same bucket as calibration for this AU
+ * @param {object | null} pooledPhaseCounts — from {@link resolvePooledSyntheticPhaseCounts}
+ * @param {object} [opts] — optional nAmbient, nBsc, nFeno, nWindow (finite numbers override inference)
+ */
+export function resolveSyntheticPhaseCounts(devFiles, pooledPhaseCounts, opts = {}) {
+    const fromDev =
+        devFiles?.length > 0
+            ? buildAromaAlignedPhaseCountsFromFiles(devFiles) ||
+              pickRepresentativePhaseCountsFromFiles(devFiles) ||
+              computePhaseRowMediansFromFiles(devFiles)
+            : null;
+    const src = fromDev || pooledPhaseCounts;
+    const fb = SYNTH_DEFAULT_PHASE_COUNTS;
+
+    const finiteOpt = (k) => {
+        const n = Number(opts[k]);
+        return Number.isFinite(n) ? Math.floor(n) : null;
+    };
+
+    const pick = (key, lo, hi) => {
+        const o = finiteOpt(key);
+        if (o !== null) return Math.max(lo, Math.min(hi, o));
+        if (src && src[key] != null && Number.isFinite(src[key])) {
+            return Math.max(lo, Math.min(hi, Math.floor(src[key])));
+        }
+        return Math.max(lo, Math.min(hi, fb[key]));
+    };
+
+    return {
+        nAmbient: pick('nAmbient', 8, 220),
+        nBsc: pick('nBsc', 0, 80),
+        nFeno: pick('nFeno', 8, 220),
+        nWindow: pick('nWindow', 1, 120),
+    };
+}
+
 /** `undefined` → default placeholder id in {@link buildSyntheticFenoseFileName} */
 export function deviceSuffixForSyntheticFile(deviceGroupKey) {
     if (!deviceGroupKey || deviceGroupKey === FENOSE_SYNTH_UNKNOWN_KEY) return undefined;
@@ -336,11 +713,25 @@ function effectivePpbForNd(ppb, curveJitter) {
     return y * sat * curve;
 }
 
-function samplePhaseDriftCoeffs(rnd) {
-    return { lin: randNormal(rnd, 0, 0.01), quad: randNormal(rnd, 0, 0.006) };
+/**
+ * Within-phase drift coefficients — AMBIENT / BSC phase (sensor is in steady-state).
+ * Real gas sensors stabilize quickly; within-capture drift over ~33 s is < 0.2%.
+ * Large values here create an artificial inverted funnel in ALAAC because normalization
+ * baseline is taken from the LAST rows of ambient.
+ */
+function sampleAmbientDriftCoeffs(rnd) {
+    return { lin: randNormal(rnd, 0, 0.002), quad: randNormal(rnd, 0, 0.001) };
 }
 
-/** Normalized time 0..1 within phase; coeffs from {@link samplePhaseDriftCoeffs}. */
+/**
+ * Within-phase drift coefficients — MEASUREMENT / WINDOW phase.
+ * Slightly more drift allowed due to breath humidity transients.
+ */
+function sampleMeasurementDriftCoeffs(rnd) {
+    return { lin: randNormal(rnd, 0, 0.004), quad: randNormal(rnd, 0, 0.002) };
+}
+
+/** Normalized time 0..1 within phase; coeffs from sampleAmbient/MeasurementDriftCoeffs. */
 function phaseDriftMultiplierFromCoeffs(c, t01) {
     const u = t01 * 2 - 1;
     return 1 + c.lin * u + c.quad * (u * u - 0.33);
@@ -364,9 +755,8 @@ function _clampSynthCount(v, fallback, lo, hi) {
  *
  * Dynamics layered on top (v2):
  *   • Ambient: slow within-phase baseline drift (linear + quadratic in time).
- *   • FeNO: wash-in curve 1 − exp(−i/τ); τ grows slightly with ppb (slower approach at high dose).
- *           Extra row noise while transient (raises fenoStd like real data).
- *   • Window: exponential recovery of excess ND toward ambient, per-sensor τ, optional damped ripple.
+ *   • FeNO: wash-in 1 − exp(−i/τ); τ grows slightly with ppb; extra noise during transient.
+ *   • FeNOWindow: exponential decay of excess ND toward breath baseline + mild damped ripple (not recoveryOff).
  *   • ND vs ppb: mild saturation + per-capture curvature on top of linear slope (concentration-specific shape).
  *   • Aux (AQT/AQH/AQP): gentle correlated drift across row index within each phase.
  *   • Tiny common-mode multiplicative noise per row (shared airflow / thermal).
@@ -394,27 +784,32 @@ export function generateSyntheticFenoseRows({
         throw new Error('generateSyntheticFenoseRows: ppb must be ≥ 0');
     }
 
-    const rowsAmbient = _clampSynthCount(nAmbient, 100, 8, 120);
-    const rowsBsc = _clampSynthCount(nBsc, 27, 0, 60);
-    const rowsFeno = _clampSynthCount(nFeno, 100, 8, 120);
-    const rowsWindow = _clampSynthCount(nWindow, 15, 0, 80);
+    /* Wide upper bounds so inferred medians from long real captures are not truncated. */
+    const rowsAmbient = _clampSynthCount(nAmbient, 100, 8, 220);
+    const rowsBsc = _clampSynthCount(nBsc, 27, 0, 80);
+    const rowsFeno = _clampSynthCount(nFeno, 100, 8, 220);
+    const rowsWindow = _clampSynthCount(nWindow, 15, 1, 120);
 
     const cal = calibration || FALLBACK_CALIBRATION;
     const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0);
 
     // ── Per-capture parameters ──────────────────────────────────────────────
-    const ambBase     = {};
-    const noiseSig    = {};
-    const effNdSlope  = {};
-    const zeroOffset  = {};
-    const tauRecover  = {};
+    const rfcBase = {};
+    const bscBase = {};
+    const noiseSig = {};
+    const effNdSlope = {};
+    const zeroOffset = {};
+    const tauRecover = {};
 
     for (const s of SENSOR_COLS) {
         const c = cal[s] || FALLBACK_CALIBRATION[s];
+        const bsc0 = Math.max(1e-6, c.bsc_med ?? c.amb_med);
+        const rfc0 = Math.max(1e-6, c.rfc_med ?? bsc0 * SYNTH_RFC_TO_BSC_RATIO);
 
         const deviceOffset = Math.exp(randNormal(rnd, 0, c.amb_cv));
-        ambBase[s]  = c.amb_med * deviceOffset;
-        noiseSig[s] = ambBase[s] * c.noise_cv;
+        rfcBase[s] = rfc0 * deviceOffset;
+        bscBase[s] = bsc0 * deviceOffset;
+        noiseSig[s] = bscBase[s] * c.noise_cv;
 
         const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv);
         effNdSlope[s] = c.nd_slope * sensJitter;
@@ -429,13 +824,16 @@ export function generateSyntheticFenoseRows({
     const riseTau =
         (3 + 2.9 * y / (y + 32)) * (0.86 + 0.28 * rnd());
     const riseTauClamped = Math.max(0.55, riseTau);
-    const transientNoiseBoost = 1.28 + 0.55 * rnd();
-    const rippleAmp = (0.025 + 0.035 * rnd()) * Math.min(1, y / (y + 15));
+    // Subtle wash-in noise boost: real FeNO transient is only 5–10% noisier than steady state.
+    // A large boost (was 1.28–1.83×) creates an inverted funnel in ALAAC that looks nothing like real data.
+    const transientNoiseBoost = 1.03 + 0.07 * rnd();
+    /* Small: large ripple reads as a false “recovery” spike on RFC-normalised Aroma plots. */
+    const rippleAmp = (0.008 + 0.014 * rnd()) * Math.min(1, y / (y + 15));
 
-    const driftAmb = samplePhaseDriftCoeffs(rnd);
-    const driftBsc = samplePhaseDriftCoeffs(rnd);
-    const driftFeno = samplePhaseDriftCoeffs(rnd);
-    const driftWin = samplePhaseDriftCoeffs(rnd);
+    const driftAmb  = sampleAmbientDriftCoeffs(rnd);
+    const driftBsc  = sampleAmbientDriftCoeffs(rnd);
+    const driftFeno = sampleMeasurementDriftCoeffs(rnd);
+    const driftWin  = sampleMeasurementDriftCoeffs(rnd);
 
     /* ── Ambient (room air) environmental conditions ────────────────────────── */
     const aqt0 = 22 + randNormal(rnd, 0, 1.5);
@@ -451,15 +849,20 @@ export function generateSyntheticFenoseRows({
     const breathPresShift  = randNormal(rnd, 0, 1.5);          // ~neutral pressure shift
 
     /**
-     * Breath-matrix multiplier per sensor:
-     * Exhaled breath changes the environment around the sensor (warm, humid).
-     * Each MOx sensor shifts slightly due to the new humidity/temperature even
-     * with zero analyte.  Model as a small proportional baseline shift, drawn
-     * per-sensor so the model can learn to subtract it.
+     * Breath-matrix replicate-to-replicate inconsistency per sensor:
+     * Exhaled breath creates a systematic humidity/temperature shift (captured by the
+     * BreathSampleCollection normalization in ML features).  The REPLICATE-TO-REPLICATE
+     * inconsistency of this shift is very small in practice (~0.1%), because breath
+     * composition and flow are nearly identical between replicates of the same session.
+     *
+     * IMPORTANT: keep this << analyte signal.  Aroma / ALAAC normalise against
+     * AmbientSamplingRFC median; RFC rows use rfc_med and BSC/FeNO use bsc_med so the
+     * room-air → breath step is visible before the FeNO wash-in.
+     * At 0.8% std it completely buries low-concentration NO signals (~0.05–0.2% ND).
      */
     const bscBaselineShift = {};
     for (const s of SENSOR_COLS) {
-        bscBaselineShift[s] = randNormal(rnd, 0, 0.008);  // ±0.8% typical breath-matrix shift
+        bscBaselineShift[s] = randNormal(rnd, 0, 0.001);  // ±0.1% replicate-to-replicate inconsistency
     }
 
     const rows = [];
@@ -476,7 +879,7 @@ export function generateSyntheticFenoseRows({
         };
         const cm = 1 + randNormal(rnd, 0, 0.0018);
         for (const s of SENSOR_COLS) {
-            const base = ambBase[s] * driftM;
+            const base = rfcBase[s] * driftM;
             row[s] = cm * (base + randNormal(rnd, 0, noiseSig[s]));
         }
         rows.push(row);
@@ -495,7 +898,7 @@ export function generateSyntheticFenoseRows({
             };
             const cm = 1 + randNormal(rnd, 0, 0.0020);
             for (const s of SENSOR_COLS) {
-                const base = ambBase[s] * driftM * (1 + bscBaselineShift[s]);
+                const base = bscBase[s] * driftM * (1 + bscBaselineShift[s]);
                 row[s] = cm * (base + randNormal(rnd, 0, noiseSig[s]));
             }
             rows.push(row);
@@ -512,32 +915,30 @@ export function generateSyntheticFenoseRows({
         const transient = transientNoiseBoost * (1 - rise);
         const row = {
             event_name: 'FeNOMeasurement',
-            /* env during FeNO: breath matrix (warm, humid) + slight drift */
             AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.04),
-            AQH0: aqh0 + breathHumShift  + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
-            AQP0: aqp0 + breathPresShift  + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
+            AQH0: aqh0 + breathHumShift + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
+            AQP0: aqp0 + breathPresShift + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
         };
         const cm = 1 + randNormal(rnd, 0, 0.0022);
         for (const s of SENSOR_COLS) {
             const ndResp = effNdSlope[s] * yNd * rise;
             const ndTot = bscBaselineShift[s] + ndResp + zeroOffset[s];
-            const base = ambBase[s] * driftM * (1 + ndTot);
+            const base = bscBase[s] * driftM * (1 + ndTot);
             const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
             row[s] = cm * (base + randNormal(rnd, 0, sig));
         }
         rows.push(row);
     }
 
-    // ── FeNOWindow (exponential recovery + mild damped overshoot) ───────────
+    // ── FeNOWindow (ND decay toward baseline + mild damped ripple; not recoveryOff) ─
     if (rowsWindow > 0) {
         for (let j = 0; j < rowsWindow; j++) {
             const t01 = rowsWindow <= 1 ? 0 : j / (rowsWindow - 1);
             const driftM = phaseDriftMultiplierFromCoeffs(driftWin, t01);
             const row = {
                 event_name: 'FeNOWindow',
-                /* env during window: still in breath matrix, slight decay toward ambient */
                 AQT0: aqt0 + breathTempShift * (0.9 - 0.15 * t01) + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, 0.04),
-                AQH0: aqh0 + breathHumShift  * (0.9 - 0.15 * t01) + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.4),
+                AQH0: aqh0 + breathHumShift * (0.9 - 0.15 * t01) + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.4),
                 AQP0: aqp0 + breathPresShift + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, 0.5),
             };
             const cm = 1 + randNormal(rnd, 0, 0.0018);
@@ -549,7 +950,7 @@ export function generateSyntheticFenoseRows({
                 const ripple =
                     rippleAmp * Math.sin((j + 0.7) * 0.95) * decay * Math.abs(excess0);
                 const ndTot = bscBaselineShift[s] + zeroOffset[s] + excess0 * decay + ripple;
-                const base = ambBase[s] * driftM * (1 + ndTot);
+                const base = bscBase[s] * driftM * (1 + ndTot);
                 const relax = 0.35 + 0.65 * (1 - decay);
                 const sig = noiseSig[s] * Math.sqrt(Math.max(0.2, relax));
                 row[s] = cm * (base + randNormal(rnd, 0, sig));
@@ -558,7 +959,7 @@ export function generateSyntheticFenoseRows({
         }
     }
 
-    return rows;
+    return rows.filter((r) => !isRecoveryLikeEventName(r?.event_name));
 }
 
 // ─── Filename helpers ────────────────────────────────────────────────────────

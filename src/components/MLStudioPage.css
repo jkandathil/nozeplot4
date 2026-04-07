@@ -541,11 +541,52 @@
     margin-bottom: 18px;
 }
 
+.ml-fenose-batch-chart-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.ml-fenose-batch-chart-title-row .ml-fenose-batch-chart-title {
+    margin-bottom: 0;
+}
+
 .ml-fenose-batch-chart-title {
     font-size: 0.88rem;
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 6px;
+}
+
+.ml-fenose-infer-band-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-muted);
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ml-fenose-infer-band-toggle:hover {
+    color: var(--text-primary);
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.ml-fenose-infer-band-toggle--on {
+    color: #e0f2fe;
+    border-color: rgba(56, 189, 248, 0.55);
+    background: rgba(56, 189, 248, 0.18);
 }
 
 .ml-fenose-batch-chart-sub {
@@ -573,19 +614,48 @@
     margin-bottom: 16px;
 }
 
+.ml-fenose-batch-tooltip-pct {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    font-size: 0.82rem;
+    color: #e0f2fe;
+    text-shadow: 0 0 10px rgba(15, 23, 42, 0.95), 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.ml-fenose-batch-tooltip-pct strong {
+    color: #7dd3fc;
+    font-weight: 700;
+    text-shadow: 0 0 12px rgba(15, 23, 42, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.ml-fenose-batch-tooltip-pct-note {
+    margin-top: 4px;
+    font-size: 0.75rem;
+    color: rgba(226, 232, 240, 0.92);
+    line-height: 1.35;
+    text-shadow: 0 0 10px rgba(15, 23, 42, 0.95), 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+/* ~98% transparent panel; blur behind keeps labels readable */
 .ml-fenose-batch-tooltip {
-    background: rgba(15, 23, 42, 0.95);
-    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.02);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border: 1px solid rgba(248, 250, 252, 0.14);
     border-radius: 8px;
     padding: 8px 10px;
     font-size: 0.8rem;
     color: var(--text-primary);
+    text-shadow: 0 0 12px rgba(15, 23, 42, 0.92), 0 1px 3px rgba(0, 0, 0, 0.9);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
 }
 
 .ml-fenose-batch-tooltip-name {
     font-weight: 600;
     margin-bottom: 4px;
     word-break: break-all;
+    text-shadow: 0 0 12px rgba(15, 23, 42, 0.92), 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
 .ml-fenose-batch-table-wrap {
@@ -700,6 +770,106 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
+}
+
+.ml-fenose-train-folder-scope {
+    margin-bottom: 4px;
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(56, 189, 248, 0.15);
+    border-radius: 10px;
+}
+
+.ml-fenose-train-folder-mode-fieldset {
+    border: none;
+    margin: 0 0 10px;
+    padding: 0;
+}
+
+.ml-fenose-train-folder-mode-legend {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+    padding: 0;
+}
+
+.ml-fenose-train-folder-mode-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    line-height: 1.45;
+    cursor: pointer;
+}
+
+.ml-fenose-train-folder-mode-row input {
+    flex-shrink: 0;
+    margin-top: 3px;
+}
+
+.ml-fenose-train-folder-row--disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.ml-fenose-train-folder-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: min(28vh, 220px);
+    overflow-y: auto;
+    margin-bottom: 8px;
+}
+
+.ml-fenose-train-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.ml-fenose-train-folder-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.ml-fenose-train-folder-row input {
+    flex-shrink: 0;
+}
+
+.ml-fenose-train-folder-row-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ml-fenose-train-folder-row-count {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.ml-fenose-train-folder-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ml-fenose-train-folder-warn {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: #fbbf24;
 }
 
 .ml-fenose-train-cols {

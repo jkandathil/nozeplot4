@@ -45,8 +45,11 @@ import {
   buildSyntheticFenoseFileName,
   parseConcentrationsList,
   computeCalibrationFromFiles,
+  resolvePooledSyntheticPhaseCounts,
+  resolvePooledSyntheticPhaseCountsForDeviceKey,
   groupFenoseCalibrationFilesByDevice,
   resolveSyntheticCalibration,
+  resolveSyntheticPhaseCounts,
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
   SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
@@ -434,14 +437,12 @@ function App() {
     }
     const reps = Math.max(1, Math.min(200, Math.floor(Number(opts.replicates) || 2)));
     const baseSeed = Math.floor(Number(opts.seed) || 0);
-    // NB: Number(undefined) is NaN, and NaN ?? fallback stays NaN — use finite fallbacks so row counts are never NaN.
-    const finiteOr = (v, fallback) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : fallback;
+    const phaseOptPass = {
+      nAmbient: opts.nAmbient,
+      nBsc: opts.nBsc,
+      nFeno: opts.nFeno,
+      nWindow: opts.nWindow,
     };
-    const nAmbient = Math.max(8, Math.min(120, Math.floor(finiteOr(opts.nAmbient, 100))));
-    const nFeno = Math.max(8, Math.min(120, Math.floor(finiteOr(opts.nFeno, 100))));
-    const nWindow = Math.max(0, Math.min(80, Math.floor(finiteOr(opts.nWindow, 15))));
 
     // ── Derive calibration from real workspace files ───────────────────────
     // Collect all labelled (…Nppb…) non-synthetic tabular files in the workspace.
@@ -486,6 +487,14 @@ function App() {
       );
     } catch (calErr) {
       console.warn('[FeNOse synthetic] calibration error, using fallback:', calErr);
+    }
+
+    const pooledPhasesGlobal = resolvePooledSyntheticPhaseCounts(parsedForCal);
+    if (pooledPhasesGlobal) {
+      console.info(
+        '[FeNOse synthetic] global pooled phase counts (Aroma-aligned FeNO length = min across files; else median capture; per-AU pool per device):',
+        pooledPhasesGlobal
+      );
     }
 
     const byDevice = groupFenoseCalibrationFilesByDevice(parsedForCal);
@@ -547,16 +556,19 @@ function App() {
     let written = 0;
     let k = 0;
     for (const { key: deviceKey, files: devFiles } of deviceJobs) {
+      const phasePool = resolvePooledSyntheticPhaseCountsForDeviceKey(deviceKey, parsedForCal);
       const calibration = resolveSyntheticCalibration(devFiles, pooledCalibration);
+      const phases = resolveSyntheticPhaseCounts(devFiles, phasePool, phaseOptPass);
       const deviceSuffix = deviceSuffixForSyntheticFile(deviceKey);
       for (const ppb of conc) {
         for (let r = 0; r < reps; r++) {
           const data = generateSyntheticFenoseRows({
             ppb,
             seed: (baseSeed + k * 9973) >>> 0,
-            nAmbient,
-            nFeno,
-            nWindow,
+            nAmbient: phases.nAmbient,
+            nBsc: phases.nBsc,
+            nFeno: phases.nFeno,
+            nWindow: phases.nWindow,
             calibration,
           });
           const name = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });
