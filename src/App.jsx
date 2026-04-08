@@ -42,6 +42,7 @@ import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from './utils/
 import { extractChronoSortKey } from './utils/recoveryChronoSort.js';
 import {
   generateSyntheticFenoseRows,
+  generateSyntheticFromTemplate,
   buildSyntheticFenoseFileName,
   parseConcentrationsList,
   computeCalibrationFromFiles,
@@ -445,6 +446,16 @@ function App() {
       nWindow: opts.nWindow,
     };
 
+    /* User-facing variance percentages → multipliers for the generator.
+     * Python defaults: baselineVariancePct=2, responseVariancePct=10, noisePct=0.1.
+     * The generator's calibration has per-sensor amb_cv / sens_cv / noise_cv.
+     * A multiplier of 1.0 = use calibration as-is (defaults already match real data).
+     * We convert the user's percentage to a multiplier: pct / defaultPct where
+     * defaultPct is the Python-style reference value. */
+    const baselineVarianceMult  = Math.max(0, (Number(opts.baselineVariancePct)  || 2)  / 2);
+    const responseVarianceMult  = Math.max(0, (Number(opts.responseVariancePct)  || 10) / 10);
+    const noiseMultiplier       = Math.max(0, (Number(opts.noisePct)             || 0.1) / 0.1);
+
     // ── Derive calibration from real workspace files ───────────────────────
     // Collect all labelled (…Nppb…) non-synthetic tabular files in the workspace.
     // Parse those that have not yet been hydrated, then compute per-sensor
@@ -561,19 +572,50 @@ function App() {
       const calibration = resolveSyntheticCalibration(devFiles, pooledCalibration);
       const phases = resolveSyntheticPhaseCounts(devFiles, phasePool, phaseOptPass);
       const deviceSuffix = deviceSuffixForSyntheticFile(deviceKey);
+
+      // Build template map: ppb → first real file's data (matches Python's one-per-concentration grouping)
+      const templatesByPpb = new Map();
+      for (const f of devFiles) {
+        const fn = String(f.fileName || f.name || '');
+        const m = fn.match(/(\d+(?:\.\d+)?)\s*ppb/i);
+        const fPpb = m ? parseFloat(m[1]) : null;
+        if (fPpb !== null && Number.isFinite(fPpb) && !templatesByPpb.has(fPpb)) {
+          templatesByPpb.set(fPpb, f.data);
+        }
+      }
+
       for (const ppb of conc) {
+        const template = templatesByPpb.get(ppb);
         for (let r = 0; r < reps; r++) {
-          const data = generateSyntheticFenoseRows({
-            ppb,
-            seed: (baseSeed + k * 9973) >>> 0,
-            nAmbient: phases.nAmbient,
-            nBsc: phases.nBsc,
-            nFeno: phases.nFeno,
-            nWindow: phases.nWindow,
-            windowBeforeMeasurement:
-              phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
-            calibration,
-          });
+          const seedVal = (baseSeed + k * 9973) >>> 0;
+          let data;
+          if (template && Array.isArray(template) && template.length > 0) {
+            // Template-based generation (same logic as generate_synthetic_simple.py)
+            data = generateSyntheticFromTemplate(template, {
+              seed: seedVal,
+              baselineVariancePct: Number(opts.baselineVariancePct) || 2.0,
+              responseVariancePct: Number(opts.responseVariancePct) || 10.0,
+              noisePct: Number(opts.noisePct) || 0.1,
+            });
+            // Ensure target_ppb is set for downstream parsing
+            if (data.length > 0) data[0].target_ppb = ppb;
+          } else {
+            // Ab-initio generation (fallback when no real template available for this ppb)
+            data = generateSyntheticFenoseRows({
+              ppb,
+              seed: seedVal,
+              nAmbient: phases.nAmbient,
+              nBsc: phases.nBsc,
+              nFeno: phases.nFeno,
+              nWindow: phases.nWindow,
+              windowBeforeMeasurement:
+                phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
+              calibration,
+              baselineVarianceMult,
+              responseVarianceMult,
+              noiseMultiplier,
+            });
+          }
           const name = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });
           const sampleN = Math.min(data.length, 32);
           const approxSize = Math.max(

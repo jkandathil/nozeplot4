@@ -305,6 +305,9 @@ const MLStudioPage = ({
     const [fenoseSynthConc, setFenoseSynthConc] = useState('0, 5, 10, 25, 50, 100');
     const [fenoseSynthReps, setFenoseSynthReps] = useState(2);
     const [fenoseSynthSeed, setFenoseSynthSeed] = useState(0);
+    const [fenoseSynthBaselineVar, setFenoseSynthBaselineVar] = useState(2.0);
+    const [fenoseSynthResponseVar, setFenoseSynthResponseVar] = useState(10.0);
+    const [fenoseSynthNoisePct, setFenoseSynthNoisePct] = useState(0.1);
     const [fenoseSynthBusy, setFenoseSynthBusy] = useState(false);
     const [fenoseSynthMsg, setFenoseSynthMsg] = useState(null); // { type, text }
     const [fenoseSynthSelectedAuKeys, setFenoseSynthSelectedAuKeys] = useState([]);
@@ -814,6 +817,9 @@ const MLStudioPage = ({
                 concentrationsText: fenoseSynthConc,
                 replicates: fenoseSynthReps,
                 seed: fenoseSynthSeed,
+                baselineVariancePct: fenoseSynthBaselineVar,
+                responseVariancePct: fenoseSynthResponseVar,
+                noisePct: fenoseSynthNoisePct,
                 deviceKeys: fenoseSynthAuOptions.length > 0 ? fenoseSynthSelectedAuKeys : undefined,
             });
             const folder = folderName || FENOSE_SYNTHETIC_FOLDER_NAME;
@@ -1675,6 +1681,45 @@ const MLStudioPage = ({
                                             type="number"
                                             value={fenoseSynthSeed}
                                             onChange={(e) => setFenoseSynthSeed(Number(e.target.value))}
+                                            disabled={fenoseSynthBusy || fenoseTrainBusy}
+                                        />
+                                    </label>
+                                    <label className="ml-fenose-label" title="± Percentage variance applied to the sensor baseline level across captures (default 2%). Higher = more spread between replicates.">
+                                        Baseline variance (%)
+                                        <input
+                                            className="text-input ml-fenose-input-full"
+                                            type="number"
+                                            min={0}
+                                            max={50}
+                                            step={0.1}
+                                            value={fenoseSynthBaselineVar}
+                                            onChange={(e) => setFenoseSynthBaselineVar(Number(e.target.value))}
+                                            disabled={fenoseSynthBusy || fenoseTrainBusy}
+                                        />
+                                    </label>
+                                    <label className="ml-fenose-label" title="± Percentage variance applied to the ND response magnitude across captures (default 10%). Higher = more sensitivity spread.">
+                                        Response variance (%)
+                                        <input
+                                            className="text-input ml-fenose-input-full"
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            step={0.5}
+                                            value={fenoseSynthResponseVar}
+                                            onChange={(e) => setFenoseSynthResponseVar(Number(e.target.value))}
+                                            disabled={fenoseSynthBusy || fenoseTrainBusy}
+                                        />
+                                    </label>
+                                    <label className="ml-fenose-label" title="Percentage of baseline used to scale the row-to-row random noise (default 0.1%). Higher = noisier signals.">
+                                        Noise (% of baseline)
+                                        <input
+                                            className="text-input ml-fenose-input-full"
+                                            type="number"
+                                            min={0}
+                                            max={10}
+                                            step={0.01}
+                                            value={fenoseSynthNoisePct}
+                                            onChange={(e) => setFenoseSynthNoisePct(Number(e.target.value))}
                                             disabled={fenoseSynthBusy || fenoseTrainBusy}
                                         />
                                     </label>

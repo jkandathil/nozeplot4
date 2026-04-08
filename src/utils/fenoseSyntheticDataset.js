@@ -1347,6 +1347,14 @@ export function generateSyntheticFenoseRows({
     nWindow  = SYNTH_DEFAULT_PHASE_COUNTS.nWindow,
     windowBeforeMeasurement = SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
     calibration = null,
+    /* User-tunable variance multipliers (1.0 = use calibration as-is).
+     * These mirror the simple Python generator parameters:
+     *   baselineVarianceMult  → scales amb_cv  (inter-capture baseline spread)
+     *   responseVarianceMult  → scales sens_cv (inter-capture ND sensitivity spread)
+     *   noiseMultiplier       → scales noise_cv / noise_cv_rfc (row-to-row noise)        */
+    baselineVarianceMult  = 1.0,
+    responseVarianceMult  = 1.0,
+    noiseMultiplier       = 1.0,
 }) {
     const y = Number(ppb);
     if (!Number.isFinite(y) || y < 0) {
@@ -1363,6 +1371,11 @@ export function generateSyntheticFenoseRows({
     const cal = calibration || FALLBACK_CALIBRATION;
     const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0);
 
+    /* Clamp multipliers so they don't go negative or pathologically large. */
+    const blMult  = Math.max(0, Math.min(10, Number(baselineVarianceMult)  || 1));
+    const rsMult  = Math.max(0, Math.min(10, Number(responseVarianceMult)  || 1));
+    const nsMult  = Math.max(0, Math.min(10, Number(noiseMultiplier)       || 1));
+
     // ── Per-capture parameters ──────────────────────────────────────────────
     const rfcBase = {};
     const bscBase = {};
@@ -1377,18 +1390,18 @@ export function generateSyntheticFenoseRows({
         const bsc0 = Math.max(1e-6, c.bsc_med ?? c.amb_med);
         const rfc0 = Math.max(1e-6, c.rfc_med ?? bsc0 * SYNTH_RFC_TO_BSC_RATIO);
 
-        const deviceOffset = Math.exp(randNormal(rnd, 0, c.amb_cv));
+        const deviceOffset = Math.exp(randNormal(rnd, 0, c.amb_cv * blMult));
         rfcBase[s] = rfc0 * deviceOffset;
         bscBase[s] = bsc0 * deviceOffset;
-        noiseSig[s] = bscBase[s] * c.noise_cv;
+        noiseSig[s] = bscBase[s] * c.noise_cv * nsMult;
         const ncvRfcRaw =
             c.noise_cv_rfc != null && Number.isFinite(c.noise_cv_rfc)
                 ? c.noise_cv_rfc
                 : c.noise_cv * SYNTH_RFC_NOISE_FRAC_FALLBACK;
         const ncvRfc = Math.max(3e-5, Math.min(0.05, Math.min(ncvRfcRaw, c.noise_cv)));
-        noiseSigRfc[s] = rfcBase[s] * ncvRfc;
+        noiseSigRfc[s] = rfcBase[s] * ncvRfc * nsMult;
 
-        const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv);
+        const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv * rsMult);
         effNdSlope[s] = c.nd_slope * sensJitter;
 
         zeroOffset[s] = randNormal(rnd, 0, c.zero_std_nd);
@@ -1585,6 +1598,81 @@ export function generateSyntheticFenoseRows({
     }
 
     return rows.filter((r) => !isRecoveryLikeEventName(r?.event_name));
+}
+
+// ─── Template-based generation (matches generate_synthetic_simple.py) ────────
+
+/**
+ * Generate a synthetic capture by perturbing a real CSV template.
+ * Matches the logic of the Python `generate_synthetic_simple.py` script:
+ *   1. Compute per-sensor baseline = mean of first ~20% of rows (max 50)
+ *   2. Extract response shape = curve − baseline
+ *   3. Perturb baseline with a single scalar: R_base × N(1, baselineVar/100)
+ *   4. Perturb response with a single scalar: shape × N(1, responseVar/100)
+ *   5. Add per-row IID noise: N(0, max(0.1, |R_base| × noisePct/100))
+ * Non-sensor columns (event_name, AQT0, AQH0, AQP0, etc.) are preserved unchanged.
+ *
+ * @param {Array<Object>} templateRows  Parsed rows from a real CSV
+ * @param {Object} opts
+ * @param {number} [opts.seed=42]
+ * @param {number} [opts.baselineVariancePct=2]   ± % variance on baseline
+ * @param {number} [opts.responseVariancePct=10]  ± % variance on response magnitude
+ * @param {number} [opts.noisePct=0.1]            % of baseline used to scale noise
+ * @returns {Array<Object>} Perturbed row array (same length and structure)
+ */
+export function generateSyntheticFromTemplate(templateRows, {
+    seed = 42,
+    baselineVariancePct = 2.0,
+    responseVariancePct = 10.0,
+    noisePct = 0.1,
+} = {}) {
+    if (!Array.isArray(templateRows) || templateRows.length === 0) return [];
+
+    const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+    const baseVar = Math.max(0, baselineVariancePct) / 100;
+    const respVar = Math.max(0, responseVariancePct) / 100;
+    const noiseFac = Math.max(0, noisePct) / 100;
+
+    // Deep copy rows — preserve all non-sensor columns (event_name, AQT0, AQH0, AQP0, etc.)
+    const synthRows = templateRows.map((r) => ({ ...r }));
+
+    // Detect sensor columns present in the data (handle A1 or CHRA1 naming)
+    const rowKeys = Object.keys(templateRows[0] || {});
+
+    for (const s of SENSOR_COLS) {
+        const col = rowKeys.find(
+            (k) => k.toUpperCase() === s.toUpperCase() || k.toUpperCase() === ('CHR' + s).toUpperCase()
+        );
+        if (!col) continue;
+
+        const realCurve = templateRows.map((r) => {
+            const v = _safeNum(r[col]);
+            return v !== null ? v : 0;
+        });
+
+        // 1. Baseline = mean of first ~20% of rows (max 50)
+        const baselineLen = Math.min(50, Math.max(1, Math.floor(realCurve.length / 5)));
+        const rBase = _mean(realCurve.slice(0, baselineLen));
+
+        // 2. Response shape: curve minus baseline
+        const responseShape = realCurve.map((v) => v - rBase);
+
+        // 3–4. Perturb baseline and response with single random scalars
+        //      synth_base = R_base * N(1.0, base_var)   [Python: np.random.normal(1.0, base_var)]
+        //      synth_response = response_shape * N(1.0, resp_var)
+        const synthBase = rBase * (1 + randNormal(rnd, 0, baseVar));
+        const respMult = 1 + randNormal(rnd, 0, respVar);
+
+        // 5. Per-row noise: N(0, max(0.1, |R_base| * noise_fac))
+        const noiseSigma = Math.max(0.1, Math.abs(rBase) * noiseFac);
+
+        for (let i = 0; i < synthRows.length; i++) {
+            const noise = randNormal(rnd, 0, noiseSigma);
+            synthRows[i][col] = synthBase + responseShape[i] * respMult + noise;
+        }
+    }
+
+    return synthRows;
 }
 
 // ─── Filename helpers ────────────────────────────────────────────────────────
