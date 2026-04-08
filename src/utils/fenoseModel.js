@@ -178,6 +178,14 @@ const FENOSE_SANITY_MAX_PPB = 250000;
 /** Clip model estimate of log1p(ppb) before expm1 — unbounded v2 ridge/MLP logits can overflow otherwise. */
 const FENOSE_MAX_LOG1P_AT_PREDICT = Math.log1p(FENOSE_SANITY_MAX_PPB);
 
+/**
+ * For log_target models, the MLP/Ridge output should be in [0,1] when in-distribution.
+ * OOD inputs can push raw > 1, causing expm1 to blow up exponentially.
+ * Clamp raw output to this factor × yLogMax so predictions stay within a sensible
+ * multiple of the training max ppb (factor 1.3 ⇒ ≈ 3.7× the training max ppb).
+ */
+const FENOSE_LOG_TARGET_RAW_CLAMP = 1.3;
+
 function clipLog1pPpbEstimate(v) {
     if (!Number.isFinite(v)) return 0;
     return Math.max(0, Math.min(v, FENOSE_MAX_LOG1P_AT_PREDICT));
@@ -928,9 +936,10 @@ export async function predictFenosePpbV2FromRows(
         }
         let s = w.intercept;
         for (let j = 0; j < w.coef.length; j++) s += xArr[j] * (w.coef[j] ?? 0);
+        const sClamp = logTarget ? Math.min(s, FENOSE_LOG_TARGET_RAW_CLAMP) : s;
         const ppbR = logTarget
-            ? Math.expm1(clipLog1pPpbEstimate(s * yMax))
-            : Math.max(0, Math.min(yMax, s * yMax));
+            ? Math.expm1(clipLog1pPpbEstimate(sClamp * yMax))
+            : Math.max(0, Math.min(yMax, sClamp * yMax));
         return Math.round(Math.min(ppbR, FENOSE_SANITY_MAX_PPB) * 100) / 100;
     }
 
@@ -952,9 +961,10 @@ export async function predictFenosePpbV2FromRows(
         return out.dataSync()[0];
     });
 
+    const rawClamp = logTarget ? Math.min(raw, FENOSE_LOG_TARGET_RAW_CLAMP) : raw;
     const ppb = logTarget
-        ? Math.expm1(clipLog1pPpbEstimate(raw * yMax))
-        : Math.max(0, Math.min(yMax, raw * yMax));
+        ? Math.expm1(clipLog1pPpbEstimate(rawClamp * yMax))
+        : Math.max(0, Math.min(yMax, rawClamp * yMax));
     return Math.round(Math.min(ppb, FENOSE_SANITY_MAX_PPB) * 100) / 100;
 }
 
