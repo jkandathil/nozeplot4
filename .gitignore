@@ -19,6 +19,9 @@ dist-ssr
 public/fenose_model/v1/
 public/fenose_model/v2/
 
+# Transient multi-worktree directories (never commit)
+.cla[u]de/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

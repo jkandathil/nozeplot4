@@ -151,7 +151,7 @@ export default function AromaUnitCapturePage({ onSaveToWorkspace, onOpenSerialTa
             const saved = localStorage.getItem('auSavedEvents');
             if (saved) return JSON.parse(saved);
         } catch { /* ignore */ }
-        return ['Baseline', 'FeNoWindow', 'FeNOMeasurement', 'Recovery'];
+        return ['Baseline', 'FeNOWindow', 'FeNOMeasurement', 'Recovery'];
     });
     const [captureSequence, setCaptureSequence] = useState([
         { id: 'initial-1', name: 'Baseline', durationStr: '60' }

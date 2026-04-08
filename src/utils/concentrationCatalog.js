@@ -2,7 +2,7 @@
  * Maps raw workspace paths like 2603241428_f74b1433/0000000063-0926-asu-nz.csv to ppb
  * using bundled catalog built from Raw_data/files normalized_* filenames.
  */
-import catalog from '../data/concentration-catalog.json';
+import catalog from '../data/concentration-catalog.json' with { type: 'json' };
 
 const SESSION_FOLDER_RE = /^(\d{10})_([a-f0-9]{8})$/i;
 

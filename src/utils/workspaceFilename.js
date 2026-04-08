@@ -167,6 +167,9 @@ function inferUnitFromColumnKey(colKey) {
     return null;
 }
 
+/** Matches fenoseModel label sanity — reject scientific garbage (e.g. 1e138) from mis-detected columns. */
+const MAX_PPB_FROM_METADATA_CELL = 250000;
+
 function parseConcCell(val, colKey) {
     const k = String(colKey).toLowerCase();
     const unitHint = inferUnitFromColumnKey(colKey);
@@ -177,7 +180,7 @@ function parseConcCell(val, colKey) {
         const m = t.match(/^(\d+(?:\.\d+)?)\s*(ppb|ppm)\b/i);
         if (m) return { numeric: parseFloat(m[1]), unit: m[2].toLowerCase() };
         const n = parseFloat(t.replace(/,/g, ''));
-        if (!Number.isFinite(n)) return null;
+        if (!Number.isFinite(n) || Math.abs(n) > MAX_PPB_FROM_METADATA_CELL) return null;
         if (unitHint) return { numeric: n, unit: unitHint };
         if (k === 'concentration' || k === 'target_conc' || k === 'targetconc' || k === 'gas_conc' || k === 'nominal_conc') {
             return { numeric: n, unit: 'ppb' };
@@ -185,6 +188,7 @@ function parseConcCell(val, colKey) {
         return null;
     }
     if (typeof val === 'number' && Number.isFinite(val)) {
+        if (Math.abs(val) > MAX_PPB_FROM_METADATA_CELL) return null;
         if (unitHint) return { numeric: val, unit: unitHint };
         if (k === 'concentration' || k === 'target_conc' || k === 'targetconc' || k === 'gas_conc' || k === 'nominal_conc') {
             return { numeric: val, unit: 'ppb' };
@@ -230,6 +234,10 @@ export function parseConcentrationMetaFromFile(fileName, data = null) {
         if (m) {
             const numericValue = parseFloat(m[1]);
             const unit = m[2].toLowerCase();
+            const ppbEq = unit === 'ppm' ? numericValue * 1000 : numericValue;
+            if (!Number.isFinite(ppbEq) || ppbEq < 0 || ppbEq > MAX_PPB_FROM_METADATA_CELL) {
+                return getConcentrationMetaFromData(data);
+            }
             return {
                 key: `${numericValue}|${unit}`,
                 label: `${numericValue} ${unit}`,

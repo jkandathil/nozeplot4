@@ -10,6 +10,7 @@
     "serial:list": "node scripts/serialProbe.mjs --list",
     "serial:read": "node scripts/serialProbe.mjs --port auto --lines 100",
     "lint": "eslint .",
+    "test:fenose-synth": "node --test scripts/fenoseSyntheticSelfTest.mjs",
     "preview": "vite preview",
     "predeploy": "node scripts/checkFirebaseBuildEnv.mjs && npm run build",
     "deploy": "gh-pages -d dist"

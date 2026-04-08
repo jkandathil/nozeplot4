@@ -893,9 +893,11 @@ function TSNEExplorerHelpDeepDive() {
             <hr className="ml-section-sep" />
             <h3 className="help-subheading">Feature extraction — every sensor element (A1–H8)</h3>
             <p className="help-eq-para">
-                For each eligible CSV, the app parses rows and groups them by <code>event_name</code>, using the same phase model as ML Studio:{' '}
-                <strong>BreathSampleCollection</strong> (breath-matrix baseline; falls back to AmbientSamplingRFC for legacy files), <strong>FeNOMeasurement</strong> (analyte challenge phase), and optionally{' '}
-                <strong>FeNOWindow</strong> (short steady plateau). The <strong>recoveryOff</strong> phase is excluded. If baseline or FeNO phases are missing, that file is skipped.
+                For each eligible CSV, the app parses rows and groups them by <code>event_name</code>, using the same phase model as ML Studio. The{' '}
+                <strong>standard capture order</strong> is: <strong>AmbientSamplingRFC</strong> (room air) →{' '}
+                <strong>BreathSampleCollection</strong> (breath-matrix baseline) → <strong>FeNOWindow</strong> →{' '}
+                <strong>FeNOMeasurement</strong> (analyte wash-in / challenge). Some files use the reverse of the last two phases; the app detects that.{' '}
+                Baseline features may fall back to AmbientSamplingRFC alone for legacy files. The <strong>recoveryOff</strong> phase is excluded. If baseline or FeNO phases are missing, that file is skipped.
             </p>
             <p className="help-eq-para">
                 For <strong>each</strong> of the 64 grid cells <code>A1</code> through <code>H8</code>:

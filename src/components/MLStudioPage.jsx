@@ -35,7 +35,7 @@ import {
     predictFenosePpbV2FromRows,
     trainFenoseV1FromFiles,
     trainFenoseV2FromFiles,
-    parseFenosePpbFromFilename,
+    parseFenoseActualPpbFromFileMeta,
     parseFenoseDeviceIdFromFilename,
     isAromaUnitDeviceId,
 } from '../utils/fenoseModel.js';
@@ -665,7 +665,7 @@ const MLStudioPage = ({
                               deviceId: parseFenoseDeviceIdFromFilename(sel.fileName),
                           },
                       });
-            const actual = parseFenosePpbFromFilename(sel.fileName);
+            const actual = parseFenoseActualPpbFromFileMeta(sel.fileName, sel.data);
             const absErr = actual != null ? Math.abs(predicted - actual) : null;
             setFenoseResults([{ fileName: sel.fileName, predictedPpb: predicted, actualPpb: actual, absErr }]);
         } catch (e) {
@@ -707,7 +707,6 @@ const MLStudioPage = ({
             const wf = list[i];
             const shortName = basenameOnly(wf.name);
             setFenoseBatchProgress({ current: i + 1, total: list.length, name: shortName });
-            const actualPpb = parseFenosePpbFromFilename(wf.name);
             try {
                 let data = wf.data;
                 if (!Array.isArray(data) || data.length === 0) {
@@ -717,6 +716,7 @@ const MLStudioPage = ({
                 if (!Array.isArray(data) || data.length === 0) {
                     throw new Error('No rows after parse');
                 }
+                const actualPpb = parseFenoseActualPpbFromFileMeta(wf.name, data);
                 const predicted =
                     m.version === 'v1'
                         ? await predictFenosePpbV1FromRows(data, { weights, preprocessing })
@@ -742,7 +742,7 @@ const MLStudioPage = ({
                     fileName: wf.name,
                     shortName,
                     predictedPpb: null,
-                    actualPpb,
+                    actualPpb: parseFenoseActualPpbFromFileMeta(wf.name, null),
                     absErr: null,
                     error: err?.message || String(err),
                 });
@@ -1207,8 +1207,8 @@ const MLStudioPage = ({
                                     <span className="ml-fenose-batch-inline-title">Batch inference</span>
                                 </div>
                                 <p className="ml-fenose-batch-inline-desc">
-                                    Uses the <strong>same files you select in the sidebar</strong>: the main file plus any comparison files (checkbox on a folder = all captures in that folder, or add files with the + button). Runs the model on each CSV/Excel one by one, then shows a chart and table below. Put{' '}
-                                    <code>ppb</code> in the filename (e.g. <code>…25ppb.csv</code>) for actual vs predicted plots.
+                                    Uses the <strong>same files you select in the sidebar</strong>: the main file plus any comparison files (checkbox on a folder = all captures in that folder, or add files with the + button). Runs the model on each CSV/Excel one by one, then shows a chart and table below.                                     Actual (ppb) for the scatter comes from the filename (<code>…25ppb.csv</code> or{' '}
+                                    <code>…0.05ppm.csv</code>), bundled folder/catalog path, or a concentration column on the first row — same rules as workspace plotting.
                                 </p>
                                 <div className="ml-fenose-batch-inline-meta">
                                     <span className="ml-fenose-batch-inline-count" title="Tabular files in sidebar selection (main + comparisons)">
@@ -1407,7 +1407,7 @@ const MLStudioPage = ({
                                     </div>
                                 ) : !fenoseBatchRunning && fenoseBatchScatterChartData.length === 1 ? (
                                     <div className="ml-fenose-batch-chart-hint">
-                                        Add at least two labelled files (…ppb in the name) to draw an actual-vs-predicted scatter plot. Table below lists all runs.
+                                        Add at least two files with a known concentration (ppb/ppm in the name, catalog path, or concentration column) to draw an actual-vs-predicted scatter plot. Table below lists all runs.
                                     </div>
                                 ) : !fenoseBatchRunning && fenoseBatchBarChartData.length > 0 && fenoseBatchScatterChartData.length === 0 ? (
                                     <div className="ml-fenose-batch-chart-wrap ml-fenose-chart-surface">

@@ -52,6 +52,7 @@ import {
   resolveSyntheticPhaseCounts,
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
+  SYNTH_DEFAULT_PHASE_COUNTS,
   SYNTHETIC_DEFAULT_DEVICE_SUFFIX,
 } from './utils/fenoseSyntheticDataset.js';
 
@@ -569,7 +570,8 @@ function App() {
             nBsc: phases.nBsc,
             nFeno: phases.nFeno,
             nWindow: phases.nWindow,
-            windowBeforeMeasurement: phases.windowBeforeMeasurement ?? true,
+            windowBeforeMeasurement:
+              phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
             calibration,
           });
           const name = buildSyntheticFenoseFileName({ ppb, replicateIndex: r, deviceSuffix });

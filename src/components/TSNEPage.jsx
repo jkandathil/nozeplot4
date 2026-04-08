@@ -38,6 +38,7 @@ import {
   resolveSyntheticPhaseCounts,
   deviceSuffixForSyntheticFile,
   FENOSE_SYNTH_UNKNOWN_KEY,
+  SYNTH_DEFAULT_PHASE_COUNTS,
   buildSyntheticFenoseFileName,
 } from '../utils/fenoseSyntheticDataset';
 
@@ -873,7 +874,8 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
               nBsc: phases.nBsc,
               nFeno: phases.nFeno,
               nWindow: phases.nWindow,
-              windowBeforeMeasurement: phases.windowBeforeMeasurement ?? true,
+              windowBeforeMeasurement:
+                phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
               calibration,
             });
             const feats = extractFenoseFeaturesFromRows(rows);

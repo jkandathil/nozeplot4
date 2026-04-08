@@ -10,6 +10,7 @@ import {
     ML_ENGINE_TF_MLP,
     TRANSFORMERS_EMBED_MODEL_ID,
 } from './mlEngines/registry.js';
+import { parseConcentrationMetaFromFile } from './workspaceFilename.js';
 
 const SENSOR_COLS = Array.from({ length: 8 }, (_, r) => 'ABCDEFGH'[r])
     .flatMap((row) => Array.from({ length: 8 }, (_, c) => `${row}${c + 1}`));
@@ -58,7 +59,9 @@ function rowsWhereEventEquals(data, eventName) {
  * true analyte (NO) response in the delta and normalised-delta features.
  *
  * Signal phases: **FeNOMeasurement** and **FeNOWindow** — the analyte is
- * actively present on the sensor array during these events.
+ * actively present on the sensor array during these events. Typical FeNOse **time order**
+ * after baseline is **FeNOWindow → FeNOMeasurement** (AmbientSamplingRFC → BreathSampleCollection →
+ * FeNOWindow → FeNOMeasurement overall); features are phase means and do not depend on row order.
  *
  * Excluded: **recoveryOff** — post-measurement sensor recovery is not part of
  * the analyte signal and must not contribute to features or environmental
@@ -169,10 +172,40 @@ export function extractFenoseFeaturesFromRows(data) {
     return feats;
 }
 
+/** Labels or inverse-transform outputs above this are rejected (bad CSV cell / OOD model blow-up). */
+const FENOSE_SANITY_MAX_PPB = 250000;
+
+/** Clip model estimate of log1p(ppb) before expm1 — unbounded v2 ridge/MLP logits can overflow otherwise. */
+const FENOSE_MAX_LOG1P_AT_PREDICT = Math.log1p(FENOSE_SANITY_MAX_PPB);
+
+function clipLog1pPpbEstimate(v) {
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(v, FENOSE_MAX_LOG1P_AT_PREDICT));
+}
+
+function concentrationMetaToPpb(meta) {
+    if (!meta || !Number.isFinite(meta.numericValue)) return null;
+    const u = String(meta.unit || 'ppb').toLowerCase();
+    let ppb = u === 'ppm' ? meta.numericValue * 1000 : meta.numericValue;
+    if (!Number.isFinite(ppb) || ppb < 0 || ppb > FENOSE_SANITY_MAX_PPB) return null;
+    return ppb;
+}
+
+/**
+ * Ground-truth ppb for evaluation / training labels: basename `…ppb` / `…ppm`, session-folder catalog paths,
+ * or a concentration-like column on the first data row (matches plotting / “known file” rules).
+ *
+ * @param {string} fileName — basename or relative path (e.g. folder upload)
+ * @param {object[]|null} data — optional parsed rows for in-file concentration
+ * @returns {number|null}
+ */
+export function parseFenoseActualPpbFromFileMeta(fileName, data = null) {
+    return concentrationMetaToPpb(parseConcentrationMetaFromFile(fileName || '', data));
+}
+
+/** Filename + catalog only; no in-file column. Prefer {@link parseFenoseActualPpbFromFileMeta} when rows exist. */
 export function parseFenosePpbFromFilename(name) {
-    const b = String(name || '').split(/[/\\]/).pop() || '';
-    const m = b.match(/(\d+(?:\.\d+)?)\s*ppb\b/i);
-    return m ? parseFloat(m[1]) : null;
+    return parseFenoseActualPpbFromFileMeta(name, null);
 }
 
 /**
@@ -217,7 +250,7 @@ export function buildFenoseDatasetFromFiles(files) {
     const rows = [];
     for (const f of files || []) {
         if (!f?.data?.length) continue;
-        const y = parseFenosePpbFromFilename(f.fileName || f.name || '');
+        const y = parseFenoseActualPpbFromFileMeta(f.fileName || f.name || '', f.data);
         if (!Number.isFinite(y)) continue;
         // Only Aroma Unit (ASU) captures are valid training / validation data.
         // VAL, OMS and other non-ASU devices are reference instruments — skip them.
@@ -873,9 +906,9 @@ export async function predictFenosePpbV2FromRows(
         let s = w.intercept;
         for (let j = 0; j < w.coef.length; j++) s += xArr[j] * (w.coef[j] ?? 0);
         const ppbR = logTarget
-            ? Math.max(0, Math.expm1(Math.max(0, s * yMax)))
+            ? Math.expm1(clipLog1pPpbEstimate(s * yMax))
             : Math.max(0, Math.min(yMax, s * yMax));
-        return Math.round(ppbR * 100) / 100;
+        return Math.round(Math.min(ppbR, FENOSE_SANITY_MAX_PPB) * 100) / 100;
     }
 
     if (!w?.W1 || !w?.b1 || !w?.W2 || !w?.b2 || !w?.W3 || !w?.b3) {
@@ -897,8 +930,8 @@ export async function predictFenosePpbV2FromRows(
     });
 
     const ppb = logTarget
-        ? Math.max(0, Math.expm1(Math.max(0, raw * yMax)))
+        ? Math.expm1(clipLog1pPpbEstimate(raw * yMax))
         : Math.max(0, Math.min(yMax, raw * yMax));
-    return Math.round(ppb * 100) / 100;
+    return Math.round(Math.min(ppb, FENOSE_SANITY_MAX_PPB) * 100) / 100;
 }
 

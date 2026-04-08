@@ -4,7 +4,7 @@ import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fen
 /**
  * Synthetic FeNOse-style tabular rows for workspace training / demos.
  * Phases and columns match extractFenoseFeaturesFromRows:
- * AmbientSamplingRFC, BreathSampleCollection (baseline), FeNOMeasurement, optional FeNOWindow; A1–H8; AQT0, AQH0, AQP0.
+ * AmbientSamplingRFC, BreathSampleCollection (baseline), FeNOWindow, FeNOMeasurement (canonical time order); A1–H8; AQT0, AQH0, AQP0.
  *
  * Temporal behaviour (wash-in, FeNO window decay, drift) is designed so ML features (means, feno std,
  * window deltas) resemble real captures, not IID plateaus per phase.
@@ -15,7 +15,7 @@ import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fen
  * Phase order (chronological, matching real FeNOse captures):
  *   AmbientSamplingRFC → BreathSampleCollection → FeNOWindow → FeNOMeasurement
  *
- * When `windowBeforeMeasurement` is false (legacy / alternate), the order is
+ * When `windowBeforeMeasurement` is false (non-canonical / some older captures), the order is
  * RFC → BSC → FeNOMeasurement → FeNOWindow instead.
  *
  * RFC vs BSC levels (critical for Aroma / ALAAC plots)
@@ -36,6 +36,10 @@ import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fen
  * If real data is unavailable the generator falls back to FALLBACK_CALIBRATION
  * (empirical, device 0000000018-0926-asu-nz, 18-2 batch, 7 ppb levels × 5 reps).
  *
+ * Environmental **AQT0 / AQH0 / AQP0** (temperature, humidity, pressure) are not sensor calibration:
+ * {@link computeEnvAuxFromFiles} pools room-air vs breath-matrix means, replicate spread, within-RFC noise,
+ * and FeNO-phase roughness from your batch so synthetics follow the same ambient dynamics as originals.
+ *
  * Calibration fields per sensor
  * ───────────────────────────────
  *  rfc_med      typical room-air (AmbientSamplingRFC) level — drives synthetic RFC rows
@@ -43,9 +47,13 @@ import { getFeNOseAromaTrimPhaseLayout, FENOSE_AROMA_TRIM_DEFAULTS } from './fen
  *  amb_med      same as bsc_med (legacy alias for ML / merges)
  *  nd_slope     linear ΔND/Δppb from OLS fit (ND vs BSC or RFC fallback; FeNOse-consistent)
  *  amb_cv       std/mean of ambient across captures         (inter-replicate baseline spread)
- *  noise_cv     within-ambient-phase std / mean             (row-to-row measurement noise)
+ *  noise_cv     within-breath-baseline (BSC) std / mean    (row noise for BSC / FeNO / window)
+ *  noise_cv_rfc within-RFC-phase std / mean                (quieter row noise for AmbientSamplingRFC only)
  *  sens_cv      std(nd@100ppb) / |nd_slope×100|             (capture-to-capture sensitivity variation ~13%)
  *  zero_std_nd  std(nd) at 0 ppb                            (baseline ND offset noise)
+ *  nd_env_t_coef, nd_env_h_coef  ND coupling to FeNO-phase ΔT / ΔRH (after ppb slope); from batch OLS when aux + spread sufficient
+ *
+ * `calibration.ndEnvRef`: batch median FeNO-phase AQT0/AQH0 used as T/H origin for coupling.
  *
  * sens_cv and zero_std_nd remain critical for realistic cross-replicate ND spread.
  */
@@ -88,6 +96,45 @@ function _linregSlope(xs, ys) {
     for (let i = 0; i < n; i++) { const dx = xs[i] - mx; num += dx * (ys[i] - my); den += dx * dx; }
     return den > 1e-12 ? num / den : 0;
 }
+
+/**
+ * Explains ND **after subtracting the ppb–ND linear trend** using FeNO-phase ΔT / ΔRH vs batch refs.
+ * y ~ bT*dt + bH*dh, no intercept (y already residual). Clamps pathological small-batch fits.
+ *
+ * @param {Array<{ dt: number, dh: number, y: number }>} rows
+ * @returns {{ bT: number, bH: number }}
+ */
+function _olsNdEnvCoupling(rows) {
+    const n = rows.length;
+    if (n < 3) return { bT: 0, bH: 0 };
+    let Stt = 0;
+    let Shh = 0;
+    let Sth = 0;
+    let Sty = 0;
+    let Shy = 0;
+    for (const r of rows) {
+        const { dt, dh, y } = r;
+        Stt += dt * dt;
+        Shh += dh * dh;
+        Sth += dt * dh;
+        Sty += dt * y;
+        Shy += dh * y;
+    }
+    const det = Stt * Shh - Sth * Sth;
+    const eps = 1e-18 * Math.max(Stt * Shh, 1);
+    if (Math.abs(det) <= eps) {
+        if (Stt > 1e-12) return { bT: Sty / Stt, bH: 0 };
+        if (Shh > 1e-12) return { bT: 0, bH: Shy / Shh };
+        return { bT: 0, bH: 0 };
+    }
+    const bT = (Shh * Sty - Sth * Shy) / det;
+    const bH = (Stt * Shy - Sth * Sty) / det;
+    /* ±0.02 ND / °C and ±0.01 ND / %RH are generous guards vs spurious tiny-batch regression */
+    return {
+        bT: _clampEnv(bT, -0.02, 0.02),
+        bH: _clampEnv(bH, -0.01, 0.01),
+    };
+}
 function _parsePpbFromName(name) {
     const b = String(name || '').split(/[/\\]/).pop() || '';
     const m = b.match(/(\d+(?:\.\d+)?)\s*ppb\b/i);
@@ -98,7 +145,7 @@ function _rowsOfPhase(data, phase) {
 }
 
 // ─── Fallback calibration (auto-generated from real data, device 0000000018-0926-asu-nz) ──
-// Fields: { amb_med, nd_slope, amb_cv, noise_cv, sens_cv, zero_std_nd }
+// Fields: { amb_med, nd_slope, amb_cv, noise_cv, noise_cv_rfc, sens_cv, zero_std_nd } (+ rfc_med, bsc_med after init loop)
 const FALLBACK_CALIBRATION = {
     A1: { amb_med:     706.4, nd_slope:  -1.8563e-04, amb_cv: 0.0480, noise_cv: 0.00131, sens_cv: 0.1343, zero_std_nd: 6.74967e-04 },
     A2: { amb_med:     601.5, nd_slope:  -2.4122e-04, amb_cv: 0.0656, noise_cv: 0.00063, sens_cv: 0.1328, zero_std_nd: 9.70983e-04 },
@@ -169,6 +216,10 @@ const FALLBACK_CALIBRATION = {
 /** When only legacy `amb_med` (BSC-typical) exists, RFC room-air is a few % lower on average. */
 const SYNTH_RFC_TO_BSC_RATIO = 0.988;
 
+/** Breath baseline (BSC) is noisier than room-air (RFC); never apply full `noise_cv` to RFC rows.
+ * Learned `noise_cv_rfc` from real RFC phase; fallback is a fraction of `noise_cv`. */
+const SYNTH_RFC_NOISE_FRAC_FALLBACK = 0.34;
+
 for (const s of SENSOR_COLS) {
     const e = FALLBACK_CALIBRATION[s];
     if (!e) continue;
@@ -176,6 +227,184 @@ for (const s of SENSOR_COLS) {
     e.bsc_med = Math.max(1e-6, bsc);
     e.rfc_med = Math.max(1e-6, bsc * SYNTH_RFC_TO_BSC_RATIO);
     e.amb_med = e.bsc_med;
+    const nv = Number(e.noise_cv) || 0.0001;
+    e.noise_cv_rfc = Math.max(3e-5, Math.min(0.05, Math.min(nv * SYNTH_RFC_NOISE_FRAC_FALLBACK, nv)));
+}
+
+/**
+ * Default environmental aux (AQT0 ≈ °C, AQH0 ≈ %RH, AQP0 pressure in file units) when no batch stats exist.
+ * Superseded by {@link computeEnvAuxFromFiles} on `calibration.envAux` after merge.
+ */
+export const FALLBACK_ENV_AUX = {
+    rfc_aqt_mean: 22,
+    rfc_aqt_std: 1.5,
+    rfc_aqh_mean: 45,
+    rfc_aqh_std: 8,
+    rfc_aqp_mean: 990,
+    rfc_aqp_std: 5,
+    within_rfc_aqt_std: 0.03,
+    within_rfc_aqh_std: 0.3,
+    within_rfc_aqp_std: 0.5,
+    bsc_noise_mult_aqt: 2,
+    bsc_noise_mult_aqh: 2,
+    bsc_noise_mult_aqp: 1.2,
+    feno_aux_noise_mult_aqt: 1.35,
+    feno_aux_noise_mult_aqh: 1.35,
+    feno_aux_noise_mult_aqp: 1,
+    breath_delta_aqt_mean: 10,
+    breath_delta_aqt_std: 2,
+    breath_delta_aqh_mean: 35,
+    breath_delta_aqh_std: 6,
+    breath_delta_aqp_mean: 0,
+    breath_delta_aqp_std: 1.5,
+    aqt_slope_std: 0.04,
+    aqh_slope_std: 0.35,
+    aqp_slope_std: 0.55,
+};
+
+const ENV_AUX_COLS = ['AQT0', 'AQH0', 'AQP0'];
+
+function _phaseAuxStats(rows) {
+    if (!rows || rows.length < 3) return null;
+    const out = {};
+    for (const col of ENV_AUX_COLS) {
+        const vals = rows.map((r) => _safeNum(r?.[col])).filter((v) => v !== null && Number.isFinite(v));
+        if (vals.length < 3) return null;
+        out[col] = { mean: _mean(vals), std: Math.max(1e-9, _std(vals)) };
+    }
+    return out;
+}
+
+function _clampEnv(x, lo, hi) {
+    return Math.max(lo, Math.min(hi, x));
+}
+
+/**
+ * Pool **ambient / breath environmental** statistics from labelled files (same filter as sensor calibration):
+ * RFC & BSC phase means for AQT0, AQH0, AQP0; capture-to-capture spread; within-phase row noise; BSC–RFC step;
+ * optional FeNO-phase noise ratio vs RFC. Used for careful synthetic aux traces.
+ *
+ * @param {Array<{ fileName?: string, name?: string, data?: object[] }>} files
+ * @returns {typeof FALLBACK_ENV_AUX | null}
+ */
+export function computeEnvAuxFromFiles(files) {
+    const perFile = [];
+    const slopeAQT = [];
+    const slopeAQH = [];
+    const slopeAQP = [];
+    const ratBscT = [];
+    const ratBscH = [];
+    const ratBscP = [];
+    const ratFenoT = [];
+    const ratFenoH = [];
+    const ratFenoP = [];
+
+    for (const f of files || []) {
+        const ppb = _parsePpbFromName(f.fileName || f.name || '');
+        if (!Number.isFinite(ppb) || ppb < 0) continue;
+        const data = f.data;
+        if (!Array.isArray(data) || data.length < 12 || !data[0]) continue;
+        if (!ENV_AUX_COLS.every((k) => Object.prototype.hasOwnProperty.call(data[0], k))) continue;
+
+        const rfcRows = _rowsOfPhase(data, 'AmbientSamplingRFC');
+        const bscRows = _rowsOfPhase(data, 'BreathSampleCollection');
+        if (rfcRows.length < 3 || bscRows.length < 3) continue;
+
+        const rfcS = _phaseAuxStats(rfcRows);
+        const bscS = _phaseAuxStats(bscRows);
+        if (!rfcS || !bscS) continue;
+
+        perFile.push({
+            rfc_aqt: rfcS.AQT0.mean,
+            rfc_aqh: rfcS.AQH0.mean,
+            rfc_aqp: rfcS.AQP0.mean,
+            within_rfc_aqt: rfcS.AQT0.std,
+            within_rfc_aqh: rfcS.AQH0.std,
+            within_rfc_aqp: rfcS.AQP0.std,
+            delta_aqt: bscS.AQT0.mean - rfcS.AQT0.mean,
+            delta_aqh: bscS.AQH0.mean - rfcS.AQH0.mean,
+            delta_aqp: bscS.AQP0.mean - rfcS.AQP0.mean,
+        });
+
+        ratBscT.push(bscS.AQT0.std / Math.max(rfcS.AQT0.std, 1e-9));
+        ratBscH.push(bscS.AQH0.std / Math.max(rfcS.AQH0.std, 1e-9));
+        ratBscP.push(bscS.AQP0.std / Math.max(rfcS.AQP0.std, 1e-9));
+
+        const n = rfcRows.length;
+        if (n >= 5) {
+            const xs = Array.from({ length: n }, (_, i) => i);
+            for (const [col, bucket] of [
+                ['AQT0', slopeAQT],
+                ['AQH0', slopeAQH],
+                ['AQP0', slopeAQP],
+            ]) {
+                const ys = rfcRows.map((r) => _safeNum(r?.[col]));
+                if (ys.some((v) => v === null || !Number.isFinite(v))) continue;
+                const sl = _linregSlope(xs, ys);
+                if (Number.isFinite(sl)) bucket.push(sl);
+            }
+        }
+
+        const fenoRows = _rowsOfPhase(data, 'FeNOMeasurement');
+        if (fenoRows.length >= 8) {
+            const fenoS = _phaseAuxStats(fenoRows);
+            if (fenoS) {
+                ratFenoT.push(fenoS.AQT0.std / Math.max(rfcS.AQT0.std, 1e-9));
+                ratFenoH.push(fenoS.AQH0.std / Math.max(rfcS.AQH0.std, 1e-9));
+                ratFenoP.push(fenoS.AQP0.std / Math.max(rfcS.AQP0.std, 1e-9));
+            }
+        }
+    }
+
+    if (perFile.length < 2) return null;
+
+    const med = _median;
+    const spread = (arr, lo, hi) => {
+        const sd = _std(arr);
+        if (!Number.isFinite(sd)) return lo;
+        return _clampEnv(sd, lo, hi);
+    };
+
+    const slopeSd = (arr, lo, hi, fb) => {
+        if (arr.length < 2) return fb;
+        return _clampEnv(_std(arr), lo, hi);
+    };
+
+    const out = {
+        ...FALLBACK_ENV_AUX,
+        rfc_aqt_mean: med(perFile.map((p) => p.rfc_aqt)),
+        rfc_aqh_mean: med(perFile.map((p) => p.rfc_aqh)),
+        rfc_aqp_mean: med(perFile.map((p) => p.rfc_aqp)),
+        rfc_aqt_std: spread(
+            perFile.map((p) => p.rfc_aqt),
+            0.2,
+            10
+        ),
+        rfc_aqh_std: spread(perFile.map((p) => p.rfc_aqh), 0.5, 30),
+        rfc_aqp_std: spread(perFile.map((p) => p.rfc_aqp), 0.5, 25),
+        within_rfc_aqt_std: _clampEnv(med(perFile.map((p) => p.within_rfc_aqt)), 0.008, 0.25),
+        within_rfc_aqh_std: _clampEnv(med(perFile.map((p) => p.within_rfc_aqh)), 0.03, 2.5),
+        within_rfc_aqp_std: _clampEnv(med(perFile.map((p) => p.within_rfc_aqp)), 0.05, 3),
+        breath_delta_aqt_mean: med(perFile.map((p) => p.delta_aqt)),
+        breath_delta_aqh_mean: med(perFile.map((p) => p.delta_aqh)),
+        breath_delta_aqp_mean: med(perFile.map((p) => p.delta_aqp)),
+        breath_delta_aqt_std: spread(perFile.map((p) => p.delta_aqt), 0.25, 12),
+        breath_delta_aqh_std: spread(perFile.map((p) => p.delta_aqh), 0.5, 25),
+        breath_delta_aqp_std: spread(perFile.map((p) => p.delta_aqp), 0.2, 15),
+        aqt_slope_std: slopeSd(slopeAQT, 0.002, 0.12, FALLBACK_ENV_AUX.aqt_slope_std),
+        aqh_slope_std: slopeSd(slopeAQH, 0.02, 1.2, FALLBACK_ENV_AUX.aqh_slope_std),
+        aqp_slope_std: slopeSd(slopeAQP, 0.05, 2, FALLBACK_ENV_AUX.aqp_slope_std),
+    };
+
+    if (ratBscT.length >= 2) out.bsc_noise_mult_aqt = _clampEnv(med(ratBscT), 1.05, 4);
+    if (ratBscH.length >= 2) out.bsc_noise_mult_aqh = _clampEnv(med(ratBscH), 1.05, 4);
+    if (ratBscP.length >= 2) out.bsc_noise_mult_aqp = _clampEnv(med(ratBscP), 1.02, 3.5);
+
+    if (ratFenoT.length >= 2) out.feno_aux_noise_mult_aqt = _clampEnv(med(ratFenoT), 1, 5);
+    if (ratFenoH.length >= 2) out.feno_aux_noise_mult_aqh = _clampEnv(med(ratFenoH), 1, 5);
+    if (ratFenoP.length >= 2) out.feno_aux_noise_mult_aqp = _clampEnv(med(ratFenoP), 1, 5);
+
+    return out;
 }
 
 // ─── Dynamic calibration ──────────────────────────────────────────────────────
@@ -224,19 +453,53 @@ export function computeCalibrationFromFiles(files) {
             if (Math.abs(bm) < 1e-6) continue;
             const rfcMean = rfcVals.length >= 3 ? _mean(rfcVals) : null;
             const bscMean = bscVals.length >= 3 ? _mean(bscVals) : null;
+            const noiseCvRfc =
+                rfcVals.length >= 3 && rfcMean != null && Math.abs(rfcMean) > 1e-9
+                    ? _std(rfcVals) / Math.abs(rfcMean)
+                    : null;
             sample[s] = {
                 ambMean: bm,
                 rfcMean,
                 bscMean,
                 nd: (fm - bm) / Math.abs(bm),
                 noiseCv: _std(bv) / Math.abs(bm),
+                noiseCvRfc,
             };
             found++;
         }
+
+        let feno_aqt_mean = null;
+        let feno_aqh_mean = null;
+        const row0 = data[0] || {};
+        if (
+            feno.length >= 5 &&
+            ENV_AUX_COLS.every((k) => Object.prototype.hasOwnProperty.call(row0, k))
+        ) {
+            const tVals = feno.map((r) => _safeNum(r?.AQT0)).filter((v) => v !== null && Number.isFinite(v));
+            const hVals = feno.map((r) => _safeNum(r?.AQH0)).filter((v) => v !== null && Number.isFinite(v));
+            if (tVals.length >= 5 && hVals.length >= 5) {
+                feno_aqt_mean = _mean(tVals);
+                feno_aqh_mean = _mean(hVals);
+            }
+        }
+        sample.feno_aqt_mean = feno_aqt_mean;
+        sample.feno_aqh_mean = feno_aqh_mean;
+
         if (found >= SENSOR_COLS.length / 2) fileSamples.push(sample);
     }
 
     if (fileSamples.length < 2) return null;
+
+    const samplesWithAux = fileSamples.filter(
+        (f) => f.feno_aqt_mean != null && f.feno_aqh_mean != null
+    );
+    const globalNdEnvRef =
+        samplesWithAux.length >= 2
+            ? {
+                  feno_aqt_ref: _median(samplesWithAux.map((f) => f.feno_aqt_mean)),
+                  feno_aqh_ref: _median(samplesWithAux.map((f) => f.feno_aqh_mean)),
+              }
+            : null;
 
     const calibration = {};
     for (const s of SENSOR_COLS) {
@@ -250,6 +513,15 @@ export function computeCalibrationFromFiles(files) {
         const ambAvg = _mean(ambMeans);
         const amb_cv = Math.max(0.001, Math.min(0.15, _std(ambMeans) / (Math.abs(ambAvg) + 1e-9)));
         const noise_cv = Math.max(0.00005, Math.min(0.05, _mean(ws.map((f) => f[s].noiseCv))));
+        const rfcNoisePool = ws
+            .map((f) => f[s].noiseCvRfc)
+            .filter((v) => v != null && Number.isFinite(v) && v > 0);
+        let noise_cv_rfc =
+            rfcNoisePool.length >= 1
+                ? _mean(rfcNoisePool)
+                : noise_cv * SYNTH_RFC_NOISE_FRAC_FALLBACK;
+        noise_cv_rfc = Math.max(0.00003, Math.min(0.05, noise_cv_rfc));
+        noise_cv_rfc = Math.min(noise_cv_rfc, noise_cv);
 
         const rfcPool = ws.map((f) => f[s].rfcMean).filter((v) => v != null && Number.isFinite(v));
         const bscPool = ws.map((f) => f[s].bscMean).filter((v) => v != null && Number.isFinite(v));
@@ -305,6 +577,29 @@ export function computeCalibrationFromFiles(files) {
             }
         }
 
+        let nd_env_t_coef = 0;
+        let nd_env_h_coef = 0;
+        if (globalNdEnvRef && ws.length >= 3) {
+            const olsRows = [];
+            for (const f of ws) {
+                if (f.feno_aqt_mean == null || f[s] == null) continue;
+                const eff = effectivePpbForNd(f.ppb, 0);
+                const y = f[s].nd - nd_slope * eff;
+                olsRows.push({
+                    dt: f.feno_aqt_mean - globalNdEnvRef.feno_aqt_ref,
+                    dh: f.feno_aqh_mean - globalNdEnvRef.feno_aqh_ref,
+                    y,
+                });
+            }
+            if (olsRows.length >= 3) {
+                const spreadT = _std(olsRows.map((r) => r.dt));
+                const spreadH = _std(olsRows.map((r) => r.dh));
+                const { bT, bH } = _olsNdEnvCoupling(olsRows);
+                nd_env_t_coef = spreadT >= 0.04 ? bT : 0;
+                nd_env_h_coef = spreadH >= 0.25 ? bH : 0;
+            }
+        }
+
         calibration[s] = {
             amb_med: Math.max(1, bsc_med),
             bsc_med: Math.max(1, bsc_med),
@@ -312,22 +607,54 @@ export function computeCalibrationFromFiles(files) {
             nd_slope: Number.isFinite(nd_slope) ? nd_slope : 0,
             amb_cv,
             noise_cv,
+            noise_cv_rfc,
             sens_cv,
             zero_std_nd: Math.max(0, zero_std_nd),
+            nd_env_t_coef,
+            nd_env_h_coef,
         };
     }
 
     const allPresent = SENSOR_COLS.every((s) => calibration[s] != null);
-    return allPresent ? calibration : null;
+    if (!allPresent) return null;
+
+    if (globalNdEnvRef) {
+        calibration.ndEnvRef = globalNdEnvRef;
+    }
+
+    const envAux = computeEnvAuxFromFiles(files);
+    if (envAux) calibration.envAux = envAux;
+
+    return calibration;
 }
 
 /**
  * Merge live calibration with fallback — live values take precedence per sensor.
+ * Merges {@link FALLBACK_ENV_AUX} with any `envAux` on `live` / `fallback` for synthetic AQT0/AQH0/AQP0.
+ * Merges `ndEnvRef` (FeNO-phase T/H centres for ND–env coupling) when present.
  */
 export function mergeCalibration(live, fallback) {
-    const base = fallback || FALLBACK_CALIBRATION;
-    if (!live) return base;
-    const merged = { ...base };
+    const base = fallback != null ? { ...fallback } : { ...FALLBACK_CALIBRATION };
+    const envMerged = {
+        ...FALLBACK_ENV_AUX,
+        ...(fallback && fallback.envAux ? fallback.envAux : {}),
+        ...(live && live.envAux ? live.envAux : {}),
+    };
+    const ndRefMerged = {
+        ...(fallback && fallback.ndEnvRef ? fallback.ndEnvRef : {}),
+        ...(live && live.ndEnvRef ? live.ndEnvRef : {}),
+    };
+    const attachNdRef = (obj) => {
+        if (Object.keys(ndRefMerged).length > 0) {
+            obj.ndEnvRef = { ...ndRefMerged };
+        }
+        return obj;
+    };
+    if (!live) {
+        return attachNdRef({ ...base, envAux: envMerged });
+    }
+    const merged = { ...base, envAux: envMerged };
+    attachNdRef(merged);
     for (const s of SENSOR_COLS) {
         if (live[s]) merged[s] = live[s];
     }
@@ -426,6 +753,28 @@ export function countPhasesOneFile(data) {
 }
 
 /**
+ * Whether FeNOWindow rows appear before FeNOMeasurement in file order (recovery-like rows ignored).
+ * Same boolean as {@link getFeNOseAromaTrimPhaseLayout} but without aroma trim — for fallbacks when trim fails.
+ *
+ * @returns {boolean | null}
+ */
+export function inferWindowBeforeMeasurementFromRawData(data) {
+    if (!Array.isArray(data) || data.length < 5 || !data[0]) return null;
+    if (!('event_name' in data[0]) && !('phase' in data[0])) return null;
+    const col = 'event_name' in data[0] ? 'event_name' : 'phase';
+    let firstM = null;
+    let firstW = null;
+    for (let i = 0; i < data.length; i++) {
+        const kind = classifyFenosePhaseRow(data[i]?.[col]);
+        if (firstM === null && kind === 'feno') firstM = i;
+        if (firstW === null && kind === 'window') firstW = i;
+        if (firstM !== null && firstW !== null) break;
+    }
+    if (firstM === null || firstW === null) return null;
+    return firstW < firstM;
+}
+
+/**
  * Pick phase row counts from the **single real file** with the longest RFC+BSC prefix (legacy helper).
  *
  * @param {Array<{ data?: object[] }>} files
@@ -521,7 +870,7 @@ export function buildAromaAlignedPhaseCountsFromFiles(files) {
     const nAmbientEff = Math.max(8, Math.floor(minAmbient));
 
     if (windowBeforeMeasurement) {
-        /* Real capture order: RFC → BSC → FeNOWindow → FeNOMeasurement.
+        /* Canonical order: RFC → BSC → FeNOWindow → FeNOMeasurement.
          * windowStart < feNoStart; third-phase ref line = min(windowStart). */
         const minWindowStart = Math.min(...layouts.map((L) => L.windowStart));
         const minFeNoStart = Math.min(...layouts.map((L) => L.feNoStart));
@@ -547,7 +896,7 @@ export function buildAromaAlignedPhaseCountsFromFiles(files) {
         };
     }
 
-    /* Alternate order: RFC → BSC → FeNOMeasurement → FeNOWindow.
+    /* Non-canonical order: RFC → BSC → FeNOMeasurement → FeNOWindow.
      * feNoStart < windowStart; third-phase ref line = min(feNoStart). */
     const minFeNoStart = Math.min(...layouts.map((L) => L.feNoStart));
     const minWindowStart = Math.min(...layouts.map((L) => L.windowStart));
@@ -624,11 +973,24 @@ export function pickRepresentativePhaseCountsFromFiles(files) {
     if (fromTrim) return fromTrim;
 
     const rawRows = [];
+    let wbmTrue = 0;
+    let wbmFalse = 0;
     for (const f of files || []) {
         const c = countPhasesOneFile(f?.data);
         if (c) rawRows.push({ ...c });
+        const inf = inferWindowBeforeMeasurementFromRawData(f?.data);
+        if (inf === true) wbmTrue++;
+        else if (inf === false) wbmFalse++;
     }
-    return _pickMedianTotalPhaseCounts(rawRows, wbm);
+    /* trimRows was empty ⇒ wbm above is false (0 > 0); re-vote from raw event order. */
+    let wbmRaw =
+        trimRows.length === 0 && (wbmTrue > 0 || wbmFalse > 0)
+            ? wbmTrue > wbmFalse
+            : wbm;
+    if (trimRows.length === 0 && wbmTrue === 0 && wbmFalse === 0) {
+        wbmRaw = SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement;
+    }
+    return _pickMedianTotalPhaseCounts(rawRows, wbmRaw);
 }
 
 /**
@@ -640,9 +1002,20 @@ export function pickRepresentativePhaseCountsFromFiles(files) {
  */
 export function computePhaseRowMediansFromFiles(files) {
     const samples = [];
+    let wbmTrue = 0;
+    let wbmFalse = 0;
     for (const f of files || []) {
         const c = countPhasesOneFile(f?.data);
         if (c) samples.push(c);
+        const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
+        if (L) {
+            if (L.windowBeforeMeasurement) wbmTrue++;
+            else wbmFalse++;
+        } else {
+            const inf = inferWindowBeforeMeasurementFromRawData(f?.data);
+            if (inf === true) wbmTrue++;
+            else if (inf === false) wbmFalse++;
+        }
     }
     if (samples.length === 0) return null;
 
@@ -652,13 +1025,109 @@ export function computePhaseRowMediansFromFiles(files) {
         return s.length % 2 !== 0 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
     };
 
-    return {
+    const out = {
         nAmbient: med(samples.map((x) => x.nAmbient)),
         nBsc: med(samples.map((x) => x.nBsc)),
         nFeno: med(samples.map((x) => x.nFeno)),
         /* Median 0 drops FeNOWindow rows → Multi AU plots lose the purple phase marker vs real data. */
         nWindow: Math.max(1, med(samples.map((x) => x.nWindow))),
     };
+    if (wbmTrue + wbmFalse > 0) {
+        out.windowBeforeMeasurement = wbmTrue > wbmFalse;
+    }
+    return out;
+}
+
+/**
+ * Median **total row count** over batch files for phases we reproduce in synthetics
+ * (RFC + BSC + FeNOWindow + FeNOMeasurement), using the same trim as Multi AU when available.
+ * Excludes recovery / unknown rows — matches what {@link generateSyntheticFenoseRows} emits.
+ *
+ * @param {Array<{ data?: object[] }>} files
+ * @returns {number | null}
+ */
+export function medianTotalSynthableRowsFromFiles(files) {
+    const totals = [];
+    for (const f of files || []) {
+        const L = getFeNOseAromaTrimPhaseLayout(f?.data, FENOSE_AROMA_TRIM_DEFAULTS);
+        if (L) {
+            totals.push(L.nAmbient + L.nBsc + L.nFeno + L.nWindow);
+            continue;
+        }
+        const c = countPhasesOneFile(f?.data);
+        if (c && (c.nWindow ?? 0) >= 1 && c.nFeno >= 5) {
+            totals.push(c.nAmbient + c.nBsc + c.nFeno + c.nWindow);
+        }
+    }
+    if (totals.length === 0) return null;
+    const s = [...totals].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 !== 0 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
+/**
+ * Adjust RFC/BSC/FeNO/window **row counts** so their sum equals `targetTotal`, respecting generator bounds.
+ * Prefers changing **nFeno** first (longest flexible segment), then nWindow, nAmbient, nBsc — and the reverse when shrinking.
+ *
+ * @returns {{ nAmbient: number, nBsc: number, nFeno: number, nWindow: number }}
+ */
+function reconcilePhaseRowCountsToTargetTotal(phase, targetTotal) {
+    let { nAmbient, nBsc, nFeno, nWindow } = phase;
+    const sum = () => nAmbient + nBsc + nFeno + nWindow;
+    let diff = targetTotal - sum();
+    if (diff === 0) return { nAmbient, nBsc, nFeno, nWindow };
+
+    const AM_LO = 8;
+    const AM_HI = 220;
+    const BSC_HI = 80;
+    const FE_LO = 8;
+    const FE_HI = 220;
+    const WIN_LO = 1;
+    const WIN_HI = 120;
+
+    if (diff > 0) {
+        let add = diff;
+        const stepF = Math.min(add, FE_HI - nFeno);
+        nFeno += stepF;
+        add -= stepF;
+        if (add > 0) {
+            const stepW = Math.min(add, WIN_HI - nWindow);
+            nWindow += stepW;
+            add -= stepW;
+        }
+        if (add > 0) {
+            const stepA = Math.min(add, AM_HI - nAmbient);
+            nAmbient += stepA;
+            add -= stepA;
+        }
+        if (add > 0) {
+            const stepB = Math.min(add, BSC_HI - nBsc);
+            nBsc += stepB;
+            add -= stepB;
+        }
+        return { nAmbient, nBsc, nFeno, nWindow };
+    }
+
+    let rem = -diff;
+    const subF = Math.min(rem, nFeno - FE_LO);
+    nFeno -= subF;
+    rem -= subF;
+    if (rem > 0) {
+        const subW = Math.min(rem, nWindow - WIN_LO);
+        nWindow -= subW;
+        rem -= subW;
+    }
+    if (rem > 0) {
+        const subB = Math.min(rem, nBsc - 0);
+        nBsc -= subB;
+        rem -= subB;
+    }
+    if (rem > 0) {
+        const subA = Math.min(rem, nAmbient - AM_LO);
+        nAmbient -= subA;
+        rem -= subA;
+    }
+    return { nAmbient, nBsc, nFeno, nWindow };
 }
 
 /**
@@ -696,9 +1165,13 @@ export function resolvePooledSyntheticPhaseCountsForDeviceKey(deviceKey, allPars
  * Row counts for synthetic generation: explicit opts win; else {@link buildAromaAlignedPhaseCountsFromFiles}
  * from device files, else {@link pickRepresentativePhaseCountsFromFiles}, else pooled; else {@link SYNTH_DEFAULT_PHASE_COUNTS}.
  *
+ * When `devFiles` is non-empty and no explicit phase counts are passed in `opts`, the sum
+ * `nAmbient + nBsc + nFeno + nWindow` is reconciled to the **median total** of those phases over the batch
+ * (trimmed like Multi AU), so synthetic CSVs match original capture **length** on average.
+ *
  * @param {object[]} devFiles — same bucket as calibration for this AU
  * @param {object | null} pooledPhaseCounts — from {@link resolvePooledSyntheticPhaseCounts}
- * @param {object} [opts] — optional nAmbient, nBsc, nFeno, nWindow (finite numbers override inference)
+ * @param {object} [opts] — optional nAmbient, nBsc, nFeno, nWindow (finite numbers override inference and skip reconciliation)
  */
 export function resolveSyntheticPhaseCounts(devFiles, pooledPhaseCounts, opts = {}) {
     const fromDev =
@@ -715,6 +1188,12 @@ export function resolveSyntheticPhaseCounts(devFiles, pooledPhaseCounts, opts = 
         return Number.isFinite(n) ? Math.floor(n) : null;
     };
 
+    const userTouchedPhase =
+        finiteOpt('nAmbient') !== null ||
+        finiteOpt('nBsc') !== null ||
+        finiteOpt('nFeno') !== null ||
+        finiteOpt('nWindow') !== null;
+
     const pick = (key, lo, hi) => {
         const o = finiteOpt(key);
         if (o !== null) return Math.max(lo, Math.min(hi, o));
@@ -724,12 +1203,41 @@ export function resolveSyntheticPhaseCounts(devFiles, pooledPhaseCounts, opts = 
         return Math.max(lo, Math.min(hi, fb[key]));
     };
 
+    const windowBeforeMeasurement =
+        src && typeof src.windowBeforeMeasurement === 'boolean'
+            ? src.windowBeforeMeasurement
+            : fb.windowBeforeMeasurement;
+
+    let nAmbient = pick('nAmbient', 8, 220);
+    let nBsc = pick('nBsc', 0, 80);
+    let nFeno = pick('nFeno', 8, 220);
+    let nWindow = pick('nWindow', 1, 120);
+
+    if (
+        !userTouchedPhase &&
+        devFiles?.length > 0 &&
+        opts.matchBatchTotalRows !== false
+    ) {
+        const target = medianTotalSynthableRowsFromFiles(devFiles);
+        const minSum = 8 + 0 + 8 + 1;
+        if (target != null && target >= minSum) {
+            const adj = reconcilePhaseRowCountsToTargetTotal(
+                { nAmbient, nBsc, nFeno, nWindow },
+                target
+            );
+            nAmbient = adj.nAmbient;
+            nBsc = adj.nBsc;
+            nFeno = adj.nFeno;
+            nWindow = adj.nWindow;
+        }
+    }
+
     return {
-        nAmbient: pick('nAmbient', 8, 220),
-        nBsc: pick('nBsc', 0, 80),
-        nFeno: pick('nFeno', 8, 220),
-        nWindow: pick('nWindow', 1, 120),
-        windowBeforeMeasurement: src?.windowBeforeMeasurement ?? true,
+        nAmbient,
+        nBsc,
+        nFeno,
+        nWindow,
+        windowBeforeMeasurement,
     };
 }
 
@@ -815,27 +1323,29 @@ function _clampSynthCount(v, fallback, lo, hi) {
  *   • FeNO: wash-in 1 − exp(−i/τ); τ grows slightly with ppb; extra noise during transient.
  *   • FeNOWindow: exponential decay of excess ND toward breath baseline + mild damped ripple (not recoveryOff).
  *   • ND vs ppb: mild saturation + per-capture curvature on top of linear slope (concentration-specific shape).
- *   • Aux (AQT/AQH/AQP): gentle correlated drift across row index within each phase.
+ *   • ND vs FeNO-phase **temperature & humidity**: per-cell `nd_env_t_coef` / `nd_env_h_coef` from batch OLS on
+ *     (ND − nd_slope·effectivePpb) vs ΔT, ΔRH (after {@link computeCalibrationFromFiles}); scales with wash-in / decay.
+ *   • Aux (AQT/AQH/AQP): drift + noise from `calibration.envAux` when present (learned from batch), else {@link FALLBACK_ENV_AUX}.
  *   • Tiny common-mode multiplicative noise per row (shared airflow / thermal).
  *
  * @param {object} opts
  * @param {number}  opts.ppb
  * @param {number}  [opts.seed=42]
- * @param {number}  [opts.nAmbient=100]
- * @param {number}  [opts.nBsc=27]         — BreathSampleCollection rows (breath matrix, no analyte)
- * @param {number}  [opts.nFeno=100]
- * @param {number}  [opts.nWindow=15]
- * @param {boolean} [opts.windowBeforeMeasurement=true] — true = real order (RFC→BSC→Window→Measurement)
+ * @param {number}  [opts.nAmbient]        — default {@link SYNTH_DEFAULT_PHASE_COUNTS}
+ * @param {number}  [opts.nBsc]            — BreathSampleCollection rows (breath matrix, no analyte)
+ * @param {number}  [opts.nFeno]
+ * @param {number}  [opts.nWindow]
+ * @param {boolean} [opts.windowBeforeMeasurement] — true: RFC→BSC→FeNOWindow→FeNOMeasurement; false: FeNO wash-in then window decay. Default {@link SYNTH_DEFAULT_PHASE_COUNTS}.
  * @param {object}  [opts.calibration]  — from computeCalibrationFromFiles / mergeCalibration
  */
 export function generateSyntheticFenoseRows({
     ppb,
     seed     = 42,
-    nAmbient = 100,
-    nBsc     = 27,
-    nFeno    = 100,
-    nWindow  = 15,
-    windowBeforeMeasurement = true,
+    nAmbient = SYNTH_DEFAULT_PHASE_COUNTS.nAmbient,
+    nBsc     = SYNTH_DEFAULT_PHASE_COUNTS.nBsc,
+    nFeno    = SYNTH_DEFAULT_PHASE_COUNTS.nFeno,
+    nWindow  = SYNTH_DEFAULT_PHASE_COUNTS.nWindow,
+    windowBeforeMeasurement = SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
     calibration = null,
 }) {
     const y = Number(ppb);
@@ -843,11 +1353,12 @@ export function generateSyntheticFenoseRows({
         throw new Error('generateSyntheticFenoseRows: ppb must be ≥ 0');
     }
 
+    const fb = SYNTH_DEFAULT_PHASE_COUNTS;
     /* Wide upper bounds so inferred medians from long real captures are not truncated. */
-    const rowsAmbient = _clampSynthCount(nAmbient, 100, 8, 220);
-    const rowsBsc = _clampSynthCount(nBsc, 27, 0, 80);
-    const rowsFeno = _clampSynthCount(nFeno, 100, 8, 220);
-    const rowsWindow = _clampSynthCount(nWindow, 15, 1, 120);
+    const rowsAmbient = _clampSynthCount(nAmbient, fb.nAmbient, 8, 220);
+    const rowsBsc = _clampSynthCount(nBsc, fb.nBsc, 0, 80);
+    const rowsFeno = _clampSynthCount(nFeno, fb.nFeno, 8, 220);
+    const rowsWindow = _clampSynthCount(nWindow, fb.nWindow, 1, 120);
 
     const cal = calibration || FALLBACK_CALIBRATION;
     const rnd = mulberry32((seed ^ 0x9e3779b9) >>> 0);
@@ -856,6 +1367,7 @@ export function generateSyntheticFenoseRows({
     const rfcBase = {};
     const bscBase = {};
     const noiseSig = {};
+    const noiseSigRfc = {};
     const effNdSlope = {};
     const zeroOffset = {};
     const tauRecover = {};
@@ -869,6 +1381,12 @@ export function generateSyntheticFenoseRows({
         rfcBase[s] = rfc0 * deviceOffset;
         bscBase[s] = bsc0 * deviceOffset;
         noiseSig[s] = bscBase[s] * c.noise_cv;
+        const ncvRfcRaw =
+            c.noise_cv_rfc != null && Number.isFinite(c.noise_cv_rfc)
+                ? c.noise_cv_rfc
+                : c.noise_cv * SYNTH_RFC_NOISE_FRAC_FALLBACK;
+        const ncvRfc = Math.max(3e-5, Math.min(0.05, Math.min(ncvRfcRaw, c.noise_cv)));
+        noiseSigRfc[s] = rfcBase[s] * ncvRfc;
 
         const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv);
         effNdSlope[s] = c.nd_slope * sensJitter;
@@ -894,18 +1412,36 @@ export function generateSyntheticFenoseRows({
     const driftFeno = sampleMeasurementDriftCoeffs(rnd);
     const driftWin  = sampleMeasurementDriftCoeffs(rnd);
 
-    /* ── Ambient (room air) environmental conditions ────────────────────────── */
-    const aqt0 = 22 + randNormal(rnd, 0, 1.5);
-    const aqh0 = 45 + randNormal(rnd, 0, 8);
-    const aqp0 = 990 + randNormal(rnd, 0, 5);
-    const aqtSlope = randNormal(rnd, 0, 0.04);
-    const aqhSlope = randNormal(rnd, 0, 0.35);
-    const aqpSlope = randNormal(rnd, 0, 0.55);
+    /* ── Environmental aux (temperature / humidity / pressure) ─────────────── */
+    const env = { ...FALLBACK_ENV_AUX, ...(cal.envAux || {}) };
 
-    /* ── Breath-matrix shift: exhaled breath raises humidity and temperature ── */
-    const breathTempShift  = 10 + randNormal(rnd, 0, 2);       // ~+10 °C from body heat
-    const breathHumShift   = 35 + randNormal(rnd, 0, 6);       // ~+35 %RH saturated exhaled air
-    const breathPresShift  = randNormal(rnd, 0, 1.5);          // ~neutral pressure shift
+    const aqt0 = env.rfc_aqt_mean + randNormal(rnd, 0, env.rfc_aqt_std);
+    const aqh0 = env.rfc_aqh_mean + randNormal(rnd, 0, env.rfc_aqh_std);
+    const aqp0 = env.rfc_aqp_mean + randNormal(rnd, 0, env.rfc_aqp_std);
+    const aqtSlope = randNormal(rnd, 0, env.aqt_slope_std);
+    const aqhSlope = randNormal(rnd, 0, env.aqh_slope_std);
+    const aqpSlope = randNormal(rnd, 0, env.aqp_slope_std);
+
+    const breathTempShift =
+        env.breath_delta_aqt_mean + randNormal(rnd, 0, env.breath_delta_aqt_std);
+    const breathHumShift =
+        env.breath_delta_aqh_mean + randNormal(rnd, 0, env.breath_delta_aqh_std);
+    const breathPresShift =
+        env.breath_delta_aqp_mean + randNormal(rnd, 0, env.breath_delta_aqp_std);
+
+    const nrT = env.within_rfc_aqt_std;
+    const nrH = env.within_rfc_aqh_std;
+    const nrP = env.within_rfc_aqp_std;
+    const bscT = Math.max(nrT * env.bsc_noise_mult_aqt, 0.02);
+    const bscH = Math.max(nrH * env.bsc_noise_mult_aqh, 0.05);
+    const bscP = Math.max(nrP * env.bsc_noise_mult_aqp, 0.08);
+    const fnT = Math.max(nrT * env.feno_aux_noise_mult_aqt, 0.02);
+    const fnH = Math.max(nrH * env.feno_aux_noise_mult_aqh, 0.05);
+    const fnP = Math.max(nrP * env.feno_aux_noise_mult_aqp, 0.08);
+
+    /* FeNO-phase T/H references for ND–environment coupling (learned batch medians or this draw). */
+    const tRefNd = cal.ndEnvRef?.feno_aqt_ref ?? aqt0 + breathTempShift;
+    const hRefNd = cal.ndEnvRef?.feno_aqh_ref ?? aqh0 + breathHumShift;
 
     /**
      * Breath-matrix replicate-to-replicate inconsistency per sensor:
@@ -932,14 +1468,15 @@ export function generateSyntheticFenoseRows({
         const driftM = phaseDriftMultiplierFromCoeffs(driftAmb, t01);
         const row = {
             event_name: 'AmbientSamplingRFC',
-            AQT0: aqt0 + aqtSlope * t01 + randNormal(rnd, 0, 0.03),
-            AQH0: aqh0 + aqhSlope * t01 + randNormal(rnd, 0, 0.3),
-            AQP0: aqp0 + aqpSlope * t01 + randNormal(rnd, 0, 0.5),
+            AQT0: aqt0 + aqtSlope * t01 + randNormal(rnd, 0, nrT),
+            AQH0: aqh0 + aqhSlope * t01 + randNormal(rnd, 0, nrH),
+            AQP0: aqp0 + aqpSlope * t01 + randNormal(rnd, 0, nrP),
         };
-        const cm = 1 + randNormal(rnd, 0, 0.0018);
+        /* Room-air phase is calmer than BSC: weaker common-mode than later phases. */
+        const cm = 1 + randNormal(rnd, 0, 0.0011);
         for (const s of SENSOR_COLS) {
             const base = rfcBase[s] * driftM;
-            row[s] = cm * (base + randNormal(rnd, 0, noiseSig[s]));
+            row[s] = cm * (base + randNormal(rnd, 0, noiseSigRfc[s]));
         }
         rows.push(row);
     }
@@ -951,9 +1488,9 @@ export function generateSyntheticFenoseRows({
             const driftM = phaseDriftMultiplierFromCoeffs(driftBsc, t01);
             const row = {
                 event_name: 'BreathSampleCollection',
-                AQT0: aqt0 + breathTempShift * (0.6 + 0.4 * t01) + randNormal(rnd, 0, 0.06),
-                AQH0: aqh0 + breathHumShift  * (0.5 + 0.5 * t01) + randNormal(rnd, 0, 0.6),
-                AQP0: aqp0 + breathPresShift + randNormal(rnd, 0, 0.6),
+                AQT0: aqt0 + breathTempShift * (0.6 + 0.4 * t01) + randNormal(rnd, 0, bscT),
+                AQH0: aqh0 + breathHumShift * (0.5 + 0.5 * t01) + randNormal(rnd, 0, bscH),
+                AQP0: aqp0 + breathPresShift + randNormal(rnd, 0, bscP),
             };
             const cm = 1 + randNormal(rnd, 0, 0.0020);
             for (const s of SENSOR_COLS) {
@@ -966,7 +1503,7 @@ export function generateSyntheticFenoseRows({
 
     // ── Phase 3 & 4: order depends on windowBeforeMeasurement ─────────────
     // Real captures: FeNOWindow (breath-level baseline) → FeNOMeasurement (analyte wash-in)
-    // Alternate:     FeNOMeasurement → FeNOWindow
+    // Non-canonical: FeNOMeasurement → FeNOWindow
 
     function _emitFeNOMeasurement() {
         let lastRise = 0;
@@ -978,13 +1515,17 @@ export function generateSyntheticFenoseRows({
             const transient = transientNoiseBoost * (1 - rise);
             const row = {
                 event_name: 'FeNOMeasurement',
-                AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, 0.04),
-                AQH0: aqh0 + breathHumShift + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, 0.4),
-                AQP0: aqp0 + breathPresShift + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, 0.5),
+                AQT0: aqt0 + breathTempShift + aqtSlope * 0.15 * t01 + randNormal(rnd, 0, fnT),
+                AQH0: aqh0 + breathHumShift + aqhSlope * 0.12 * t01 + randNormal(rnd, 0, fnH),
+                AQP0: aqp0 + breathPresShift + aqpSlope * 0.12 * t01 + randNormal(rnd, 0, fnP),
             };
             const cm = 1 + randNormal(rnd, 0, 0.0022);
             for (const s of SENSOR_COLS) {
-                const ndResp = effNdSlope[s] * yNd * rise;
+                const cS = cal[s] || FALLBACK_CALIBRATION[s];
+                const ndEnvRow =
+                    (Number(cS.nd_env_t_coef) || 0) * (row.AQT0 - tRefNd) +
+                    (Number(cS.nd_env_h_coef) || 0) * (row.AQH0 - hRefNd);
+                const ndResp = effNdSlope[s] * yNd * rise + ndEnvRow * rise;
                 const ndTot = bscBaselineShift[s] + ndResp + zeroOffset[s];
                 const base = bscBase[s] * driftM * (1 + ndTot);
                 const sig = noiseSig[s] * Math.sqrt(1 + transient * transient);
@@ -1002,14 +1543,18 @@ export function generateSyntheticFenoseRows({
             const driftM = phaseDriftMultiplierFromCoeffs(driftWin, t01);
             const row = {
                 event_name: 'FeNOWindow',
-                AQT0: aqt0 + breathTempShift * (0.9 - 0.15 * t01) + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, 0.04),
-                AQH0: aqh0 + breathHumShift * (0.9 - 0.15 * t01) + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, 0.4),
-                AQP0: aqp0 + breathPresShift + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, 0.5),
+                AQT0: aqt0 + breathTempShift * (0.9 - 0.15 * t01) + aqtSlope * 0.08 * t01 + randNormal(rnd, 0, fnT),
+                AQH0: aqh0 + breathHumShift * (0.9 - 0.15 * t01) + aqhSlope * 0.08 * t01 + randNormal(rnd, 0, fnH),
+                AQP0: aqp0 + breathPresShift + aqpSlope * 0.08 * t01 + randNormal(rnd, 0, fnP),
             };
             const cm = 1 + randNormal(rnd, 0, 0.0018);
             for (const s of SENSOR_COLS) {
-                const ndPlateau = bscBaselineShift[s] + effNdSlope[s] * yNd * lastRise + zeroOffset[s];
-                const excess0 = ndPlateau - bscBaselineShift[s] - zeroOffset[s];
+                const cS = cal[s] || FALLBACK_CALIBRATION[s];
+                const ndEnvRow =
+                    (Number(cS.nd_env_t_coef) || 0) * (row.AQT0 - tRefNd) +
+                    (Number(cS.nd_env_h_coef) || 0) * (row.AQH0 - hRefNd);
+                const excess0 =
+                    effNdSlope[s] * yNd * lastRise + ndEnvRow * lastRise;
                 const tr = tauRecover[s];
                 const decay = Math.exp(-j / tr);
                 const ripple =
@@ -1029,7 +1574,7 @@ export function generateSyntheticFenoseRows({
         _emitFeNOWindow(0);           // Window at breath baseline (no prior wash-in)
         _emitFeNOMeasurement();       // Measurement with analyte wash-in
     } else {
-        /* Alternate: RFC → BSC → FeNOMeasurement → FeNOWindow */
+        /* Non-canonical: RFC → BSC → FeNOMeasurement → FeNOWindow */
         const lastRise = _emitFeNOMeasurement();
         _emitFeNOWindow(lastRise);    // Window decays from wash-in plateau
     }

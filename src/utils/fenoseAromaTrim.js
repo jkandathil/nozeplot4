@@ -139,6 +139,10 @@ function _cellEventNorm(row, evCol) {
 /**
  * Phase layout in **trimmed** row indices (matches Multi AU reference lines).
  *
+ * **Canonical FeNOse measurement sequence (chronological):** AmbientSamplingRFC → BreathSampleCollection →
+ * FeNOWindow → FeNOMeasurement. That corresponds to `windowBeforeMeasurement === true` (first FeNOWindow row
+ * appears before the first FeNOMeasurement row).
+ *
  * @returns {{
  *   nAmbient: number,
  *   nBsc: number,
@@ -187,7 +191,7 @@ export function getFeNOseAromaTrimPhaseLayout(fileData, options = {}) {
     let nWindowBlock;
 
     if (!windowBeforeMeasurement) {
-        /* Alternate: FeNOMeasurement → FeNOWindow */
+        /* Non-canonical order: FeNOMeasurement → FeNOWindow */
         feNoStart = firstM;
         windowStart = firstW;
         nFenoBlock = firstW - firstM;
@@ -199,7 +203,7 @@ export function getFeNOseAromaTrimPhaseLayout(fileData, options = {}) {
             nWindowBlock++;
         }
     } else {
-        /* Real captures: FeNOWindow → FeNOMeasurement */
+        /* Canonical FeNOse: FeNOWindow → FeNOMeasurement (after RFC → BSC) */
         windowStart = firstW;
         feNoStart = firstM;
         nWindowBlock = firstM - firstW;
