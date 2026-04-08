@@ -235,7 +235,7 @@ function getTargetPpbFromFirstRow(data) {
     const row = data[0];
     if (!row || typeof row !== 'object') return null;
     for (const key of Object.keys(row)) {
-        if (String(key).toLowerCase() !== 'target_ppb') continue;
+        if (String(key).trim().toLowerCase() !== 'target_ppb') continue;
         const v = row[key];
         const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
         if (Number.isFinite(n) && n >= 0 && n <= MAX_PPB_FROM_METADATA_CELL) {
