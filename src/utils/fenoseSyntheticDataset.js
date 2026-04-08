@@ -1385,12 +1385,23 @@ export function generateSyntheticFenoseRows({
     const zeroOffset = {};
     const tauRecover = {};
 
+    // Draw ONE shared component for sensitivity jitter and zero-offset across
+    // all sensors in this capture.  In real captures every sensor sees the same
+    // gas concentration, so response magnitudes are highly correlated.  Fully
+    // independent per-sensor draws (the old approach) broke this correlation
+    // and created OOD feature vectors → wild model predictions.
+    //
+    // Decomposition: 80% shared + 20% per-sensor (matches template-based fix).
+    const sharedSensJitter  = randNormal(rnd, 0, 0.80);
+    const sharedZeroNd      = randNormal(rnd, 0, 0.80);
+    const sharedBaselineLog = randNormal(rnd, 0, 0.80);
+
     for (const s of SENSOR_COLS) {
         const c = cal[s] || FALLBACK_CALIBRATION[s];
         const bsc0 = Math.max(1e-6, c.bsc_med ?? c.amb_med);
         const rfc0 = Math.max(1e-6, c.rfc_med ?? bsc0 * SYNTH_RFC_TO_BSC_RATIO);
 
-        const deviceOffset = Math.exp(randNormal(rnd, 0, c.amb_cv * blMult));
+        const deviceOffset = Math.exp((sharedBaselineLog + randNormal(rnd, 0, 0.20)) * c.amb_cv * blMult);
         rfcBase[s] = rfc0 * deviceOffset;
         bscBase[s] = bsc0 * deviceOffset;
         noiseSig[s] = bscBase[s] * c.noise_cv * nsMult;
@@ -1401,10 +1412,10 @@ export function generateSyntheticFenoseRows({
         const ncvRfc = Math.max(3e-5, Math.min(0.05, Math.min(ncvRfcRaw, c.noise_cv)));
         noiseSigRfc[s] = rfcBase[s] * ncvRfc * nsMult;
 
-        const sensJitter = 1 + randNormal(rnd, 0, c.sens_cv * rsMult);
+        const sensJitter = 1 + (sharedSensJitter + randNormal(rnd, 0, 0.20)) * c.sens_cv * rsMult;
         effNdSlope[s] = c.nd_slope * sensJitter;
 
-        zeroOffset[s] = randNormal(rnd, 0, c.zero_std_nd);
+        zeroOffset[s] = (sharedZeroNd + randNormal(rnd, 0, 0.20)) * c.zero_std_nd;
 
         const tauBase = (2.6 + 3.8 * rnd()) * (1 + 0.28 * y / (y + 28));
         tauRecover[s] = Math.max(0.9, tauBase * Math.exp(randNormal(rnd, 0, 0.14)));
