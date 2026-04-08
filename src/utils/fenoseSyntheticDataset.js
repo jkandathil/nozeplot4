@@ -1639,6 +1639,16 @@ export function generateSyntheticFromTemplate(templateRows, {
     // Detect sensor columns present in the data (handle A1 or CHRA1 naming)
     const rowKeys = Object.keys(templateRows[0] || {});
 
+    // Draw ONE shared response multiplier for all sensors in this replicate.
+    // In real captures all sensors see the same gas concentration, so their
+    // response magnitudes are highly correlated.  Independent per-sensor
+    // multipliers (the old approach) break this correlation and create OOD
+    // feature vectors that cause wild model predictions.
+    //
+    // Decomposition: 80 % shared + 20 % per-sensor jitter
+    const sharedRespPert = randNormal(rnd, 0, respVar * 0.8);
+    const sharedBasePert = randNormal(rnd, 0, baseVar * 0.8);
+
     for (const s of SENSOR_COLS) {
         const col = rowKeys.find(
             (k) => k.toUpperCase() === s.toUpperCase() || k.toUpperCase() === ('CHR' + s).toUpperCase()
@@ -1657,11 +1667,13 @@ export function generateSyntheticFromTemplate(templateRows, {
         // 2. Response shape: curve minus baseline
         const responseShape = realCurve.map((v) => v - rBase);
 
-        // 3–4. Perturb baseline and response with single random scalars
-        //      synth_base = R_base * N(1.0, base_var)   [Python: np.random.normal(1.0, base_var)]
-        //      synth_response = response_shape * N(1.0, resp_var)
-        const synthBase = rBase * (1 + randNormal(rnd, 0, baseVar));
-        const respMult = 1 + randNormal(rnd, 0, respVar);
+        // 3–4. Perturb baseline and response: shared component + small per-sensor jitter.
+        //      This preserves inter-sensor correlation while adding realistic per-sensor
+        //      variation (sensor drift, manufacturing spread).
+        const basePert = sharedBasePert + randNormal(rnd, 0, baseVar * 0.2);
+        const synthBase = rBase * (1 + basePert);
+        const respPert = sharedRespPert + randNormal(rnd, 0, respVar * 0.2);
+        const respMult = 1 + respPert;
 
         // 5. Per-row noise: N(0, max(0.1, |R_base| * noise_fac))
         const noiseSigma = Math.max(0.1, Math.abs(rBase) * noiseFac);
