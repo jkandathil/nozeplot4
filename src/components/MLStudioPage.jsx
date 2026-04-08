@@ -29,6 +29,7 @@ import {
     Legend,
     Brush,
     ReferenceLine,
+    ZAxis,
 } from 'recharts';
 import {
     predictFenosePpbV1FromRows,
@@ -504,18 +505,27 @@ const MLStudioPage = ({
         }));
     }, [fenoseBatchResults]);
 
-    const fenoseBatchIdentityLineData = useMemo(() => {
+    /** Tight axis domain: 0-based floor, slight pad above. */
+    const fenoseBatchAxisDomain = useMemo(() => {
         const pts = fenoseBatchScatterChartData;
-        if (pts.length === 0) return [];
-        const vals = [...pts.flatMap((p) => [p.actual, p.predicted]), 0];
-        const lo = Math.min(...vals);
-        const hi = Math.max(...vals);
-        const pad = Math.max((hi - lo) * 0.05, 1);
-        return [
-            { actual: lo - pad, predicted: lo - pad },
-            { actual: hi + pad, predicted: hi + pad },
-        ];
+        if (pts.length === 0) return { lo: 0, hi: 100 };
+        const vals = pts.flatMap((p) => [p.actual, p.predicted]);
+        const dataMin = Math.min(...vals);
+        const dataMax = Math.max(...vals);
+        const lo = Math.min(0, dataMin);
+        const range = dataMax - lo;
+        const pad = Math.max(range * 0.08, 5);
+        const hi = dataMax + pad;
+        return { lo: Math.floor(lo), hi: Math.ceil(hi) };
     }, [fenoseBatchScatterChartData]);
+
+    const fenoseBatchIdentityLineData = useMemo(() => {
+        const { lo, hi } = fenoseBatchAxisDomain;
+        return [
+            { actual: lo, predicted: lo },
+            { actual: hi, predicted: hi },
+        ];
+    }, [fenoseBatchAxisDomain]);
 
     const fenoseBatchIdentitySegment = useMemo(() => {
         const d = fenoseBatchIdentityLineData;
@@ -1346,12 +1356,14 @@ const MLStudioPage = ({
                                             ) : null}
                                         </p>
                                         <ResponsiveContainer width="100%" height={380}>
-                                            <ComposedChart margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+                                            <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
                                                 <XAxis
                                                     type="number"
                                                     dataKey="actual"
                                                     name="Actual"
+                                                    domain={[fenoseBatchAxisDomain.lo, fenoseBatchAxisDomain.hi]}
+                                                    allowDataOverflow={false}
                                                     tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                                                     label={{ value: 'Actual (ppb)', position: 'insideBottom', offset: -2, fill: 'var(--text-muted)', fontSize: 11 }}
                                                 />
@@ -1359,10 +1371,13 @@ const MLStudioPage = ({
                                                     type="number"
                                                     dataKey="predicted"
                                                     name="Predicted"
+                                                    domain={[fenoseBatchAxisDomain.lo, fenoseBatchAxisDomain.hi]}
+                                                    allowDataOverflow={false}
                                                     tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                                                     width={44}
                                                     label={{ value: 'Predicted (ppb)', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
                                                 />
+                                                <ZAxis range={[48, 48]} />
                                                 <Tooltip
                                                     {...ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL}
                                                     cursor={{ strokeDasharray: '4 4' }}
@@ -1373,27 +1388,22 @@ const MLStudioPage = ({
                                                     }
                                                 />
                                                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                                                {fenoseInferShowErrorBand && fenoseBatchIdentityLineData.length >= 2 ? (
-                                                    <Line
-                                                        data={fenoseBatchIdentityLineData}
-                                                        type="linear"
-                                                        dataKey="predicted"
-                                                        stroke="rgba(56, 189, 248, 0.24)"
-                                                        strokeLinecap="round"
-                                                        strokeWidth={fenoseInferErrorBandStrokeWidth}
-                                                        dot={false}
-                                                        isAnimationActive={false}
-                                                        name="Error spread"
-                                                        legendType="none"
-                                                    />
-                                                ) : null}
                                                 {fenoseBatchIdentitySegment ? (
                                                     <ReferenceLine
                                                         segment={fenoseBatchIdentitySegment}
                                                         stroke="#94a3b8"
                                                         strokeWidth={2}
                                                         strokeDasharray="6 4"
-                                                        ifOverflow="extendDomain"
+                                                        ifOverflow="hidden"
+                                                    />
+                                                ) : null}
+                                                {fenoseInferShowErrorBand && fenoseBatchIdentityLineData.length >= 2 ? (
+                                                    <ReferenceLine
+                                                        segment={fenoseBatchIdentitySegment}
+                                                        stroke="rgba(56, 189, 248, 0.24)"
+                                                        strokeLinecap="round"
+                                                        strokeWidth={fenoseInferErrorBandStrokeWidth}
+                                                        ifOverflow="hidden"
                                                     />
                                                 ) : null}
                                                 <Scatter
@@ -1401,12 +1411,9 @@ const MLStudioPage = ({
                                                     fill="#38bdf8"
                                                     name="Captures"
                                                     isAnimationActive={false}
-                                                    activeDot={{ r: 8, stroke: '#0ea5e9', strokeWidth: 2, fill: '#e0f2fe' }}
+                                                    shape="circle"
                                                 />
-                                                {fenoseBatchScatterChartData.length > 4 ? (
-                                                    <Brush dataKey="actual" height={24} stroke="#38bdf8" travellerWidth={10} fill="rgba(15,23,42,0.5)" />
-                                                ) : null}
-                                            </ComposedChart>
+                                            </ScatterChart>
                                         </ResponsiveContainer>
                                     </div>
                                 ) : !fenoseBatchRunning && fenoseBatchScatterChartData.length === 1 ? (
