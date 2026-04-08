@@ -240,6 +240,22 @@ export function isAromaUnitDeviceId(deviceId) {
     return /-asu-nz$/i.test(String(deviceId || ''));
 }
 
+/**
+ * True when the basename names a validation-instrument (-val-nz) capture **without** an AU (-asu-nz) token.
+ * Those files are reference-analyser traces, not 64-element AU sensor data, and must not feed FeNOse regression.
+ * Paired names containing both tokens (AU + reference) are allowed.
+ */
+export function isValidationInstrumentOnlyFilename(fileName) {
+    const b = String(fileName || '')
+        .split(/[/\\]/)
+        .pop()
+        .toLowerCase();
+    if (!b) return false;
+    const hasAsu = /\d{10}-\d{4}-asu-nz/i.test(b);
+    const hasVal = /\d{10}-\d{4}-val-nz/i.test(b);
+    return hasVal && !hasAsu;
+}
+
 function trainingSampleLabel(row) {
     const b = String(row?.fileName || row?.name || '').split(/[/\\]/).pop() || '';
     if (!b) return 'sample';
@@ -250,11 +266,18 @@ export function buildFenoseDatasetFromFiles(files) {
     const rows = [];
     for (const f of files || []) {
         if (!f?.data?.length) continue;
-        const y = parseFenoseActualPpbFromFileMeta(f.fileName || f.name || '', f.data);
+        const fn = f.fileName || f.name || '';
+        if (isValidationInstrumentOnlyFilename(fn)) {
+            console.warn(
+                `[FeNOse training] Skipping validation-instrument-only file "${fn}" (-val-nz without -asu-nz).`
+            );
+            continue;
+        }
+        const y = parseFenoseActualPpbFromFileMeta(fn, f.data);
         if (!Number.isFinite(y)) continue;
         // Only Aroma Unit (ASU) captures are valid training / validation data.
         // VAL, OMS and other non-ASU devices are reference instruments — skip them.
-        const deviceId = parseFenoseDeviceIdFromFilename(f.fileName || f.name || '');
+        const deviceId = parseFenoseDeviceIdFromFilename(fn);
         if (!isAromaUnitDeviceId(deviceId)) {
             console.warn(
                 `[FeNOse training] Skipping non-ASU file "${f.fileName || f.name}" (device: ${deviceId}). ` +
@@ -264,8 +287,8 @@ export function buildFenoseDatasetFromFiles(files) {
         }
         const feats = extractFenoseFeaturesFromRows(f.data);
         rows.push({
-            id: f.id || f.fileName || f.name,
-            fileName: f.fileName || f.name || '',
+            id: f.id || fn,
+            fileName: fn,
             deviceId,
             y,
             feats,

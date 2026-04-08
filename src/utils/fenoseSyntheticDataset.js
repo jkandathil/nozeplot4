@@ -1579,6 +1579,11 @@ export function generateSyntheticFenoseRows({
         _emitFeNOWindow(lastRise);    // Window decays from wash-in plateau
     }
 
+    /* Ground truth for batch validation if basename is missing or ambiguous (see workspaceFilename last-match ppb). */
+    if (rows.length > 0) {
+        rows[0].target_ppb = y;
+    }
+
     return rows.filter((r) => !isRecoveryLikeEventName(r?.event_name));
 }
 

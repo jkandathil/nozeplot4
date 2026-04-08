@@ -43,6 +43,17 @@ def parse_ppb_from_filename(name: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def is_validation_instrument_only_csv(name: str) -> bool:
+    """
+    True when basename names -val-nz without -asu-nz.
+    Those CSVs are validation-instrument traces, not AU sensor arrays; exclude from training.
+    """
+    b = Path(name).name.lower()
+    has_asu = re.search(r"\d{10}-\d{4}-asu-nz", b, re.IGNORECASE)
+    has_val = re.search(r"\d{10}-\d{4}-val-nz", b, re.IGNORECASE)
+    return bool(has_val) and not bool(has_asu)
+
+
 def extract_features_from_df(df: pd.DataFrame) -> Dict[str, float]:
     """
     Extract ML features using BreathSampleCollection as baseline.
@@ -198,6 +209,8 @@ class Sample:
 def load_dataset(curated_dir: Path) -> List[Sample]:
     rows: List[Sample] = []
     for p in sorted(curated_dir.glob("*.csv")):
+        if is_validation_instrument_only_csv(p.name):
+            continue
         ppb = parse_ppb_from_filename(p.name)
         if ppb is None:
             continue
@@ -210,6 +223,8 @@ def load_dataset(curated_dir: Path) -> List[Sample]:
     if not rows:
         # Some curated exports use "5ppb" (no separator) rather than "5 ppb". Accept that too.
         for p in sorted(curated_dir.glob("*.csv")):
+            if is_validation_instrument_only_csv(p.name):
+                continue
             m2 = re.search(r"(\d+(?:\.\d+)?)ppb\b", p.name, re.IGNORECASE)
             if not m2:
                 continue

@@ -56,6 +56,7 @@ test('canonical default synthetic: phase order, counts, inference, features', ()
     assert.ok(Number.isFinite(feats.nd_A1));
     assert.ok(Number.isFinite(feats.wd_A1));
     assert.ok(Number.isFinite(feats.ss_nd_A1));
+    assert.equal(rows[0].target_ppb, 25);
 });
 
 test('non-canonical synthetic: FeNOMeasurement before FeNOWindow', () => {

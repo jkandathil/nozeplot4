@@ -8,8 +8,9 @@ export function fileBasename(fileName) {
     return String(fileName).split(/[/\\]/).pop() || '';
 }
 
+/** True if basename contains any `…ppb` / `…ppm` token (plot filtering / known-file heuristic). */
 export function hasConcentrationInFilename(fileName) {
-    return /(\d+(?:\.\d+)?)\s*(ppb|ppm)\b/i.test(fileBasename(fileName));
+    return /(\d+(?:\.\d+)?)\s*(ppb|ppm)(?=$|[^A-Za-z])/i.test(fileBasename(fileName));
 }
 
 /**
@@ -170,6 +171,32 @@ function inferUnitFromColumnKey(colKey) {
 /** Matches fenoseModel label sanity — reject scientific garbage (e.g. 1e138) from mis-detected columns. */
 const MAX_PPB_FROM_METADATA_CELL = 250000;
 
+/**
+ * Last `…ppb` / `…ppm` token in the basename wins (nominal concentration is usually at the end).
+ * A single leftmost match can mis-read e.g. `0ppb_…_50ppb` or odd curated prefixes as 0 ppb.
+ */
+function parseConcentrationMetaFromBasename(basename) {
+    if (!basename) return null;
+    const re = /(\d+(?:\.\d+)?)\s*(ppb|ppm)(?=$|[^A-Za-z])/gi;
+    let m;
+    let lastValid = null;
+    while ((m = re.exec(basename)) !== null) {
+        const numericValue = parseFloat(m[1]);
+        const unit = m[2].toLowerCase();
+        const ppbEq = unit === 'ppm' ? numericValue * 1000 : numericValue;
+        if (Number.isFinite(ppbEq) && ppbEq >= 0 && ppbEq <= MAX_PPB_FROM_METADATA_CELL) {
+            lastValid = { numericValue, unit };
+        }
+    }
+    if (!lastValid) return null;
+    return {
+        key: `${lastValid.numericValue}|${lastValid.unit}`,
+        label: `${lastValid.numericValue} ${lastValid.unit}`,
+        numericValue: lastValid.numericValue,
+        unit: lastValid.unit,
+    };
+}
+
 function parseConcCell(val, colKey) {
     const k = String(colKey).toLowerCase();
     const unitHint = inferUnitFromColumnKey(colKey);
@@ -177,7 +204,7 @@ function parseConcCell(val, colKey) {
     if (val == null || val === '') return null;
     if (typeof val === 'string') {
         const t = val.trim();
-        const m = t.match(/^(\d+(?:\.\d+)?)\s*(ppb|ppm)\b/i);
+        const m = t.match(/^(\d+(?:\.\d+)?)\s*(ppb|ppm)(?=$|[^A-Za-z])/i);
         if (m) return { numeric: parseFloat(m[1]), unit: m[2].toLowerCase() };
         const n = parseFloat(t.replace(/,/g, ''));
         if (!Number.isFinite(n) || Math.abs(n) > MAX_PPB_FROM_METADATA_CELL) return null;
@@ -194,6 +221,32 @@ function parseConcCell(val, colKey) {
             return { numeric: val, unit: 'ppb' };
         }
         return null;
+    }
+    return null;
+}
+
+/**
+ * Nominal ppb stamped on synthetic FeNOse rows ({@link generateSyntheticFenoseRows}).
+ * Prefer this over basename when present so batch inference stays correct if workspace `name` is wrong
+ * or the file was renamed (sidebar can still show a full path for display).
+ */
+function getTargetPpbFromFirstRow(data) {
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const row = data[0];
+    if (!row || typeof row !== 'object') return null;
+    for (const key of Object.keys(row)) {
+        if (String(key).toLowerCase() !== 'target_ppb') continue;
+        const v = row[key];
+        const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
+        if (Number.isFinite(n) && n >= 0 && n <= MAX_PPB_FROM_METADATA_CELL) {
+            return {
+                key: `${n}|ppb`,
+                label: `${n} ppb`,
+                numericValue: n,
+                unit: 'ppb',
+                sourceColumn: key,
+            };
+        }
     }
     return null;
 }
@@ -225,34 +278,29 @@ export function getConcentrationMetaFromData(data) {
 }
 
 /**
- * Filename ppb/ppm first; else first data row concentration column.
+ * Basename ppb/ppm (last token wins), then session catalog, then row `target_ppb` (synthetic / renamed files),
+ * then other concentration-like columns.
+ *
+ * `target_ppb` is not preferred over filename: CSV re-imports often misalign or default that field to 0 while
+ * `fenose_synth_…_100ppb.csv` stays authoritative for batch inference.
  */
 export function parseConcentrationMetaFromFile(fileName, data = null) {
     if (fileName) {
         const basename = fileBasename(fileName);
-        const m = basename.match(/(\d+(?:\.\d+)?)\s*(ppb|ppm)\b/i);
-        if (m) {
-            const numericValue = parseFloat(m[1]);
-            const unit = m[2].toLowerCase();
-            const ppbEq = unit === 'ppm' ? numericValue * 1000 : numericValue;
-            if (!Number.isFinite(ppbEq) || ppbEq < 0 || ppbEq > MAX_PPB_FROM_METADATA_CELL) {
-                return getConcentrationMetaFromData(data);
-            }
-            return {
-                key: `${numericValue}|${unit}`,
-                label: `${numericValue} ${unit}`,
-                numericValue,
-                unit,
-            };
+        const fromBasename = parseConcentrationMetaFromBasename(basename);
+        if (fromBasename) {
+            return fromBasename;
         }
         const fromCatalog = lookupConcentrationMetaFromCatalogPath(fileName);
         if (fromCatalog) return fromCatalog;
     }
+    const fromSynth = getTargetPpbFromFirstRow(data);
+    if (fromSynth) return fromSynth;
     return getConcentrationMetaFromData(data);
 }
 
 export function hasConcentrationInData(data) {
-    return getConcentrationMetaFromData(data) != null;
+    return getTargetPpbFromFirstRow(data) != null || getConcentrationMetaFromData(data) != null;
 }
 
 /** True if relative path (e.g. folder upload) matches bundled concentration catalog. */

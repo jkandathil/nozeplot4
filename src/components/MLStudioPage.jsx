@@ -708,15 +708,13 @@ const MLStudioPage = ({
             const shortName = basenameOnly(wf.name);
             setFenoseBatchProgress({ current: i + 1, total: list.length, name: shortName });
             try {
-                let data = wf.data;
-                if (!Array.isArray(data) || data.length === 0) {
-                    const r = await parseFile(wf);
-                    data = r?.data;
-                }
+                const parsed = await parseFile(wf);
+                const data = parsed?.data;
+                const labelSource = parsed?.fileName || wf.name || wf.fileName || '';
                 if (!Array.isArray(data) || data.length === 0) {
                     throw new Error('No rows after parse');
                 }
-                const actualPpb = parseFenoseActualPpbFromFileMeta(wf.name, data);
+                const actualPpb = parseFenoseActualPpbFromFileMeta(labelSource, data);
                 const predicted =
                     m.version === 'v1'
                         ? await predictFenosePpbV1FromRows(data, { weights, preprocessing })
@@ -724,8 +722,8 @@ const MLStudioPage = ({
                               weights,
                               preprocessing,
                               predictContext: {
-                                  fileName: wf.name,
-                                  deviceId: parseFenoseDeviceIdFromFilename(wf.name),
+                                  fileName: labelSource,
+                                  deviceId: parseFenoseDeviceIdFromFilename(labelSource),
                               },
                           });
                 const absErr = actualPpb != null && Number.isFinite(actualPpb) ? Math.abs(predicted - actualPpb) : null;
@@ -742,7 +740,7 @@ const MLStudioPage = ({
                     fileName: wf.name,
                     shortName,
                     predictedPpb: null,
-                    actualPpb: parseFenoseActualPpbFromFileMeta(wf.name, null),
+                    actualPpb: parseFenoseActualPpbFromFileMeta(wf.name || wf.fileName || '', null),
                     absErr: null,
                     error: err?.message || String(err),
                 });
@@ -1406,9 +1404,9 @@ const MLStudioPage = ({
                                         </ResponsiveContainer>
                                     </div>
                                 ) : !fenoseBatchRunning && fenoseBatchScatterChartData.length === 1 ? (
-                                    <div className="ml-fenose-batch-chart-hint">
-                                        Add at least two files with a known concentration (ppb/ppm in the name, catalog path, or concentration column) to draw an actual-vs-predicted scatter plot. Table below lists all runs.
-                                    </div>
+                                        <div className="ml-fenose-batch-chart-hint">
+                                            Add at least two files with a known concentration (ppb/ppm in the filename, synthetic <code>target_ppb</code> column, catalog path, or other concentration column) to draw an actual-vs-predicted scatter plot. Table below lists all runs.
+                                        </div>
                                 ) : !fenoseBatchRunning && fenoseBatchBarChartData.length > 0 && fenoseBatchScatterChartData.length === 0 ? (
                                     <div className="ml-fenose-batch-chart-wrap ml-fenose-chart-surface">
                                         <div className="ml-fenose-batch-chart-title">Predicted concentration by file (no ppb labels in names)</div>
