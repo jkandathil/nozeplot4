@@ -31,6 +31,7 @@ import { parseFile } from '../utils/fileParser';
 import { FENOSE_SYNTHETIC_FOLDER_NAME } from '../utils/fenoseWorkspace';
 import {
   generateSyntheticFenoseRows,
+  generateSyntheticFromTemplate,
   computeCalibrationFromFiles,
   resolvePooledSyntheticPhaseCountsForDeviceKey,
   groupFenoseCalibrationFilesByDevice,
@@ -863,21 +864,46 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
       const calibration = resolveSyntheticCalibration(devFiles, pooledCalibration);
       const phases = resolveSyntheticPhaseCounts(devFiles, phasePool, {});
       const deviceSuffix = deviceSuffixForSyntheticFile(deviceKey);
+
+      // Build template map matching Python logic (mirroring App.jsx)
+      const templatesByPpb = new Map();
+      for (const f of devFiles) {
+        const fn = String(f.fileName || f.name || '');
+        const m = fn.match(/(\d+(?:\.\d+)?)\s*ppb/i);
+        const fPpb = m ? parseFloat(m[1]) : null;
+        if (fPpb !== null && Number.isFinite(fPpb) && !templatesByPpb.has(fPpb)) {
+          templatesByPpb.set(fPpb, f.data);
+        }
+      }
+
       for (const ppb of concs) {
+        const template = templatesByPpb.get(ppb);
         for (let r = 0; r < nPerConc; r++) {
           if (cancelRef.current) break;
           try {
-            const rows = generateSyntheticFenoseRows({
-              ppb,
-              seed: (baseSeed + k * SYNTH_SEED_MULT) >>> 0,
-              nAmbient: phases.nAmbient,
-              nBsc: phases.nBsc,
-              nFeno: phases.nFeno,
-              nWindow: phases.nWindow,
-              windowBeforeMeasurement:
-                phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
-              calibration,
-            });
+            const seedVal = (baseSeed + k * SYNTH_SEED_MULT) >>> 0;
+            let rows;
+            if (template && Array.isArray(template) && template.length > 0) {
+              rows = generateSyntheticFromTemplate(template, {
+                seed: seedVal,
+                baselineVariancePct: 2.0,
+                responseVariancePct: 10.0,
+                noisePct: 0.1,
+              });
+              if (rows.length > 0) rows[0].target_ppb = ppb;
+            } else {
+              rows = generateSyntheticFenoseRows({
+                ppb,
+                seed: seedVal,
+                nAmbient: phases.nAmbient,
+                nBsc: phases.nBsc,
+                nFeno: phases.nFeno,
+                nWindow: phases.nWindow,
+                windowBeforeMeasurement:
+                  phases.windowBeforeMeasurement ?? SYNTH_DEFAULT_PHASE_COUNTS.windowBeforeMeasurement,
+                calibration,
+              });
+            }
             const feats = extractFenoseFeaturesFromRows(rows);
             const { featKeys, featVec } = featureKeysAndVectorFromFeats(feats);
             if (featVec.length) {
