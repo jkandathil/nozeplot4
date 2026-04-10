@@ -1157,10 +1157,8 @@ const MLStudioPage = ({
                                     lineHeight: 1.45,
                                 }}
                             >
-                                No complete FeNOse model yet. Train on the <strong>Training</strong> tab (saves to{' '}
-                                <code>{FENOSE_MODEL_FOLDER_NAME}/</code>) or use <strong>Import model</strong> and upload both{' '}
-                                <code>{'{name}_{v1|v2}_weights.json'}</code> and <code>{'{name}_{v1|v2}_preprocessing.json'}</code>.{' '}
-                                <code>metrics.json</code> is optional.
+                                <strong style={{ color: '#b45309', display: 'block', marginBottom: 4 }}>No model available.</strong>
+                                Please train a new model from the <strong>Training</strong> tab or import existing model artifacts.
                             </div>
                         ) : null}
 
