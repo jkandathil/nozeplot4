@@ -5,9 +5,11 @@ import * as tf from '@tensorflow/tfjs';
 import { PCA } from 'ml-pca';
 import { Matrix } from 'ml-matrix';
 import { ridgeFitWithIntercept } from './mlEngines/ridgeFit.js';
+import { RandomForestRegression } from 'ml-random-forest';
 import {
     ML_ENGINE_RIDGE_PCA,
     ML_ENGINE_TF_MLP,
+    ML_ENGINE_RF_PCA,
     TRANSFORMERS_EMBED_MODEL_ID,
 } from './mlEngines/registry.js';
 import { parseConcentrationMetaFromFile } from './workspaceFilename.js';
@@ -587,6 +589,7 @@ export async function trainFenoseV2FromFiles(
         h2 = 32,
         mlEngine = ML_ENGINE_TF_MLP,
         ridgeLambda = 0.05,
+        rfTrees = 50,
         textEmbeddingAugment = false,
         textEmbeddingDims = 8,
     } = {},
@@ -679,6 +682,29 @@ export async function trainFenoseV2FromFiles(
             return s;
         });
         onProgress?.({ epoch: 1, loss: mse(yTrainScaled, yTrainPred), phase: 'ridge' });
+    } else if (mlEngine === ML_ENGINE_RF_PCA) {
+        const nTrees = Math.max(1, Math.min(200, Number(rfTrees) || 50));
+        const options = {
+            seed,
+            maxFeatures: 1.0,
+            replacement: true,
+            nEstimators: nTrees,
+            treeOptions: {
+                maxDepth: 10,
+            }
+        };
+        const rf = new RandomForestRegression(options);
+        rf.train(XtrainPca, yTrainScaled);
+        const predScaled = rf.predict(XtestPca);
+        predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.expm1(Math.max(0, v * yLogMax))));
+        validationPoints = split.test.map((r, i) => ({
+            actual: yTest[i],
+            predicted: predPpb[i],
+            label: trainingSampleLabel(r),
+        }));
+        weights = { engine: ML_ENGINE_RF_PCA, rfModel: rf.toJSON() };
+        const yTrainPred = rf.predict(XtrainPca);
+        onProgress?.({ epoch: 1, loss: mse(yTrainScaled, yTrainPred), phase: 'rf' });
     } else {
         const model = await tfTrainMlp(XtrainPca, yTrainScaled, { epochs, lr, h1, h2 }, onProgress);
         const predScaled = tf.tidy(() =>
@@ -721,8 +747,9 @@ export async function trainFenoseV2FromFiles(
         y_log_max: yLogMax,
         y_max: yLogMax, // alias: inference reads y_max; now stores log-space max
         log_target: true, // flag: inference must apply expm1 to un-scale predictions
-        ml_engine: mlEngine === ML_ENGINE_RIDGE_PCA ? ML_ENGINE_RIDGE_PCA : ML_ENGINE_TF_MLP,
+        ml_engine: mlEngine,
         ridge_lambda: mlEngine === ML_ENGINE_RIDGE_PCA ? Math.max(1e-8, Number(ridgeLambda) || 0.05) : undefined,
+        rf_trees: mlEngine === ML_ENGINE_RF_PCA ? Math.max(1, Math.min(200, Number(rfTrees) || 50)) : undefined,
         text_embedding_augment:
             textEmbeddingAugment && embedDimsUsed > 0
                 ? { dims: embedDimsUsed, model_id: TRANSFORMERS_EMBED_MODEL_ID }
@@ -925,6 +952,17 @@ export async function predictFenosePpbV2FromRows(
 
     const Xpca = await buildFenoseV2PcaFloat32Vector(dataRows, p, predictContext);
     const xArr = Array.from(Xpca);
+
+    if (w?.engine === ML_ENGINE_RF_PCA) {
+        if (!w.rfModel) throw new Error('Random Forest weights JSON missing rfModel expected by ml-random-forest.');
+        const rf = RandomForestRegression.load(w.rfModel);
+        const [s] = rf.predict([xArr]);
+        const sClamp = logTarget ? Math.min(s, FENOSE_LOG_TARGET_RAW_CLAMP) : s;
+        const ppbR = logTarget
+            ? Math.expm1(clipLog1pPpbEstimate(sClamp * yMax))
+            : Math.max(0, Math.min(yMax, sClamp * yMax));
+        return Math.round(Math.min(ppbR, FENOSE_SANITY_MAX_PPB) * 100) / 100;
+    }
 
     const isRidge = w?.engine === ML_ENGINE_RIDGE_PCA;
     if (isRidge) {

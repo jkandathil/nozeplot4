@@ -53,6 +53,7 @@ import {
     FENOSE_V2_TRAINING_ENGINES,
     ML_ENGINE_TF_MLP,
     ML_ENGINE_RIDGE_PCA,
+    ML_ENGINE_RF_PCA,
     ONNX_INFERENCE_HINT,
 } from '../utils/mlEngines/registry.js';
 import './MLStudioPage.css';
@@ -290,6 +291,7 @@ const MLStudioPage = ({
     const [fenoseTrainSeed, setFenoseTrainSeed] = useState(0);
     const [fenoseV2TrainEngine, setFenoseV2TrainEngine] = useState(ML_ENGINE_TF_MLP);
     const [fenoseV2RidgeLambda, setFenoseV2RidgeLambda] = useState('0.05');
+    const [fenoseV2RfTrees, setFenoseV2RfTrees] = useState('50');
     const [fenoseV2TextEmbed, setFenoseV2TextEmbed] = useState(false);
     const [fenoseV2TextEmbedDims, setFenoseV2TextEmbedDims] = useState('8');
     const [fenoseTrainBusy, setFenoseTrainBusy] = useState(false);
@@ -898,6 +900,7 @@ const MLStudioPage = ({
                               nPca: Math.max(2, Number(fenoseTrainPca) || 50),
                               mlEngine: fenoseV2TrainEngine,
                               ridgeLambda: Number(fenoseV2RidgeLambda) || 0.05,
+                              rfTrees: Number(fenoseV2RfTrees) || 50,
                               textEmbeddingAugment: fenoseV2TextEmbed,
                               textEmbeddingDims: Number(fenoseV2TextEmbedDims) || 8,
                           },
@@ -2032,6 +2035,22 @@ const MLStudioPage = ({
                                                 value={fenoseV2RidgeLambda}
                                                 onChange={(e) => setFenoseV2RidgeLambda(e.target.value)}
                                                 disabled={fenoseTrainBusy || fenoseV2TrainEngine !== ML_ENGINE_RIDGE_PCA}
+                                            />
+                                        </div>
+                                        <div className={`ml-fenose-param ml-fenose-param--wide ${fenoseTrainVersion !== 'v2' || fenoseV2TrainEngine !== ML_ENGINE_RF_PCA ? 'disabled' : ''}`}>
+                                            <span className="ml-fenose-label" title="Number of estimators (trees) to train in the random forest.">
+                                                RF Trees
+                                            </span>
+                                            <input
+                                                id="fenose-train-rf-trees"
+                                                className="text-input ml-fenose-input-full"
+                                                type="number"
+                                                step="1"
+                                                min="1"
+                                                max="200"
+                                                value={fenoseV2RfTrees}
+                                                onChange={(e) => setFenoseV2RfTrees(e.target.value)}
+                                                disabled={fenoseTrainBusy || fenoseV2TrainEngine !== ML_ENGINE_RF_PCA}
                                             />
                                         </div>
                                         <div className="ml-fenose-param ml-fenose-param--wide">

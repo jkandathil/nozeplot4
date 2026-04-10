@@ -6,6 +6,7 @@
 
 export const ML_ENGINE_TF_MLP = 'tensorflow_mlp';
 export const ML_ENGINE_RIDGE_PCA = 'ridge_pca';
+export const ML_ENGINE_RF_PCA = 'random_forest_pca';
 
 /** Training-time engine options (v2 pipeline). */
 export const FENOSE_V2_TRAINING_ENGINES = [
@@ -22,6 +23,14 @@ export const FENOSE_V2_TRAINING_ENGINES = [
         label: 'Ridge regression — linear on PCA (fast)',
         description:
             'Closed-form L2-regularized linear model on the same PCA space as v2. Small data, quick baseline; weights use engine "ridge_pca" in JSON.',
+        supportsTraining: true,
+        usesEpochs: false,
+    },
+    {
+        id: ML_ENGINE_RF_PCA,
+        label: 'Random Forest Regression — tree ensemble on PCA',
+        description:
+            'Ensemble of decision trees. Captures non-linearities and interactions well. Small data, robust baseline.',
         supportsTraining: true,
         usesEpochs: false,
     },
