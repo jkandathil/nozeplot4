@@ -2139,7 +2139,7 @@ const MLStudioPage = ({
                                             <ResponsiveContainer width="100%" height={fenoseTrainLossHistory.length > 40 ? 320 : 280}>
                                                 <LineChart data={fenoseTrainLossHistory} margin={{ top: 8, right: 12, left: 0, bottom: fenoseTrainLossHistory.length > 30 ? 28 : 8 }}>
                                                     <CartesianGrid strokeDasharray="3 3" opacity={0.12} />
-                                                    <XAxis dataKey="epoch" stroke="var(--text-muted)" fontSize={11} />
+                                                    <XAxis dataKey="epoch" stroke="var(--text-muted)" fontSize={11} label={{ value: 'Epoch / Trees', position: 'insideBottom', offset: -2, fill: 'var(--text-muted)', fontSize: 11 }} />
                                                     <YAxis stroke="var(--text-muted)" fontSize={11} width={48} />
                                                     <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid var(--border-color)', borderRadius: 8 }} />
                                                     <Line

@@ -684,17 +684,42 @@ export async function trainFenoseV2FromFiles(
         onProgress?.({ epoch: 1, loss: mse(yTrainScaled, yTrainPred), phase: 'ridge' });
     } else if (mlEngine === ML_ENGINE_RF_PCA) {
         const nTrees = Math.max(1, Math.min(200, Number(rfTrees) || 50));
-        const options = {
+        const rf = new RandomForestRegression({
             seed,
             maxFeatures: 1.0,
             replacement: true,
             nEstimators: nTrees,
-            treeOptions: {
-                maxDepth: 10,
-            }
-        };
-        const rf = new RandomForestRegression(options);
-        rf.train(XtrainPca, yTrainScaled);
+            treeOptions: { maxDepth: 10 }
+        });
+        rf.estimators = [];
+
+        // Chunked training to yield to the browser and chart the learning curve
+        const batchSize = Math.max(1, Math.floor(nTrees / 20));
+        let treesTrained = 0;
+
+        while (treesTrained < nTrees) {
+            const chunk = Math.min(batchSize, nTrees - treesTrained);
+            const batchRf = new RandomForestRegression({
+                seed: seed + treesTrained,
+                maxFeatures: 1.0,
+                replacement: true,
+                nEstimators: chunk,
+                treeOptions: { maxDepth: 10 }
+            });
+            batchRf.train(XtrainPca, yTrainScaled);
+            rf.estimators.push(...batchRf.estimators);
+            treesTrained += chunk;
+
+            // Evaluate ensemble performance out of current trees
+            rf.nEstimators = treesTrained;
+            const yTrainPred = rf.predict(XtrainPca);
+            const currentLoss = mse(yTrainScaled, yTrainPred);
+
+            onProgress?.({ epoch: treesTrained, loss: currentLoss, phase: 'rf' });
+            await new Promise((r) => setTimeout(r, 0)); // yield to UI
+        }
+
+        rf.nEstimators = nTrees;
         const predScaled = rf.predict(XtestPca);
         predPpb = Array.from(predScaled).map((v) => Math.max(0, Math.expm1(Math.max(0, v * yLogMax))));
         validationPoints = split.test.map((r, i) => ({
@@ -703,8 +728,6 @@ export async function trainFenoseV2FromFiles(
             label: trainingSampleLabel(r),
         }));
         weights = { engine: ML_ENGINE_RF_PCA, rfModel: rf.toJSON() };
-        const yTrainPred = rf.predict(XtrainPca);
-        onProgress?.({ epoch: 1, loss: mse(yTrainScaled, yTrainPred), phase: 'rf' });
     } else {
         const model = await tfTrainMlp(XtrainPca, yTrainScaled, { epochs, lr, h1, h2 }, onProgress);
         const predScaled = tf.tidy(() =>
