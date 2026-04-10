@@ -910,20 +910,27 @@ const MLStudioPage = ({
 
             // Save into workspace folder "Model" if handler provided
             const safeName = String(fenoseModelName || 'fenose').trim().replace(/[\\/:*?"<>|]/g, '-').slice(0, 80) || 'fenose';
+            let engineShort = 'mlp';
+            if (fenoseTrainVersion === 'v2') {
+                if (fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA) engineShort = 'ridge';
+                else if (fenoseV2TrainEngine === ML_ENGINE_RF_PCA) engineShort = 'rf';
+            }
+            const nameSuffix = `${fenoseTrainVersion}_${engineShort}`;
+
             if (onSaveJsonToWorkspace) {
                 await onSaveJsonToWorkspace({
                     folderName: FENOSE_MODEL_FOLDER_NAME,
-                    fileName: `${safeName}_${fenoseTrainVersion}_weights.json`,
+                    fileName: `${safeName}_${nameSuffix}_weights.json`,
                     json: out.weights,
                 });
                 await onSaveJsonToWorkspace({
                     folderName: FENOSE_MODEL_FOLDER_NAME,
-                    fileName: `${safeName}_${fenoseTrainVersion}_preprocessing.json`,
+                    fileName: `${safeName}_${nameSuffix}_preprocessing.json`,
                     json: out.preprocessing,
                 });
                 await onSaveJsonToWorkspace({
                     folderName: FENOSE_MODEL_FOLDER_NAME,
-                    fileName: `${safeName}_${fenoseTrainVersion}_metrics.json`,
+                    fileName: `${safeName}_${nameSuffix}_metrics.json`,
                     json: out.metrics,
                 });
             }
@@ -2248,11 +2255,25 @@ const MLStudioPage = ({
                                     <div style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', padding: 12, borderRadius: 10 }}>
                                         <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Artifacts</div>
                                         <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-                                            <button className="btn-secondary" onClick={() => downloadJson(fenoseTrainOut.weights, `fenose_${fenoseTrainVersion}_weights.json`)}>
-                                                <Download size={14} /> weights.json
+                                            <button className="btn-secondary" onClick={() => {
+                                                let engineShort = 'mlp';
+                                                if (fenoseTrainVersion === 'v2') {
+                                                    if (fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA) engineShort = 'ridge';
+                                                    else if (fenoseV2TrainEngine === ML_ENGINE_RF_PCA) engineShort = 'rf';
+                                                }
+                                                downloadJson(fenoseTrainOut.weights, `fenose_${fenoseTrainVersion}_${engineShort}_weights.json`);
+                                            }}>
+                                                <Download size={14} /> weights
                                             </button>
-                                            <button className="btn-secondary" onClick={() => downloadJson(fenoseTrainOut.preprocessing, `fenose_${fenoseTrainVersion}_preprocessing.json`)}>
-                                                <Download size={14} /> preprocessing.json
+                                            <button className="btn-secondary" onClick={() => {
+                                                let engineShort = 'mlp';
+                                                if (fenoseTrainVersion === 'v2') {
+                                                    if (fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA) engineShort = 'ridge';
+                                                    else if (fenoseV2TrainEngine === ML_ENGINE_RF_PCA) engineShort = 'rf';
+                                                }
+                                                downloadJson(fenoseTrainOut.preprocessing, `fenose_${fenoseTrainVersion}_${engineShort}_preprocessing.json`);
+                                            }}>
+                                                <Download size={14} /> preprocessing
                                             </button>
                                         </div>
                                     </div>
