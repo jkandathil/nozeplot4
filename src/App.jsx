@@ -513,6 +513,10 @@ function App() {
     // When the user picks AUs in ML Studio, options come from filenames. Parsed calibration
     // may omit some of those files (parse errors or strict phase checks). Still emit synthetic
     // files per selected key using pooled or fallback calibration instead of failing.
+    if (byDevice.size === 0) {
+      throw new Error('No real AU data files found. Please upload real AU data files to base the synthetic generation on.');
+    }
+
     let deviceJobs;
     const dk = opts.deviceKeys;
     if (Array.isArray(dk) && dk.length > 0) {
@@ -521,8 +525,6 @@ function App() {
         key,
         files: byDevice.get(key) || [],
       }));
-    } else if (byDevice.size === 0) {
-      deviceJobs = [{ key: FENOSE_SYNTH_UNKNOWN_KEY, files: [] }];
     } else {
       deviceJobs = [...byDevice.entries()]
         .map(([key, files]) => ({ key, files }))
@@ -1237,10 +1239,8 @@ function App() {
   };
 
   return (
-    <div className="app-container" {...getRootProps()}>
-      <input {...getInputProps()} />
-
-      {/* Sidebar */}
+    <div className="app-container">
+      {/* Sidebar outside dropzone root — avoids Chrome hit-test / drag-target bugs with the chart pane */}
       {activePage !== 'folderCompareAroma' && (
         <Sidebar
           files={files}
@@ -1263,16 +1263,21 @@ function App() {
         />
       )}
 
-      {/* Main Content */}
-      {activePage === 'folderCompareAroma' ? (
-        <FolderCompareAromaPage
-          files={files}
-          selectedFileId={selectedFileId}
-          compareFileIds={compareFileIds}
-          onClose={() => setActivePage('aromaAnalysis')}
-        />
-      ) : (
-        <main className="main-content" style={{ position: 'relative' }}>
+      <main className="main-content" {...getRootProps()} style={{ position: 'relative' }}>
+        <input {...getInputProps()} />
+        {activePage === 'folderCompareAroma' ? (
+          <div
+            className="folder-compare-main-fill"
+            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          >
+            <FolderCompareAromaPage
+              files={files}
+              selectedFileId={selectedFileId}
+              compareFileIds={compareFileIds}
+              onClose={() => setActivePage('aromaAnalysis')}
+            />
+          </div>
+        ) : (
           <div className="content-area">
             {/*
               Only AU capture stays mounted when hidden so Web Serial + timers keep running.
@@ -1396,8 +1401,8 @@ function App() {
               </AnimatePresence>
             )}
           </div>
-        </main>
-      )}
+        )}
+      </main>
 
       {/* Name Input Modal */}
       {isNameModalOpen && (

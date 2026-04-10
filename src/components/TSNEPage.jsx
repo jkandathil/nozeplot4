@@ -837,14 +837,13 @@ export default function TSNEPage({ workspaceFiles = [], onAddSyntheticFenoseToWo
     }
 
     const byDevice = groupFenoseCalibrationFilesByDevice(parsedForCal);
-    let deviceJobs;
     if (byDevice.size === 0) {
-      deviceJobs = [{ key: FENOSE_SYNTH_UNKNOWN_KEY, files: [] }];
-    } else {
-      deviceJobs = [...byDevice.entries()]
-        .map(([key, files]) => ({ key, files }))
-        .sort((a, b) => a.key.localeCompare(b.key));
+      throw new Error('No real AU data files found. Please upload real AU data files to base the synthetic generation on.');
     }
+
+    const deviceJobs = [...byDevice.entries()]
+      .map(([key, files]) => ({ key, files }))
+      .sort((a, b) => a.key.localeCompare(b.key));
 
     const totalPlanned = deviceJobs.length * concs.length * nPerConc;
     const MAX_SYNTHETIC_BATCH = 10000;

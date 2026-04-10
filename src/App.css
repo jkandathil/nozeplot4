@@ -19,8 +19,8 @@
   background-color: var(--bg-secondary);
   border-top-left-radius: var(--border-radius-xl);
   margin-top: 0;
-  /* Small gap for styling */
-  z-index: 10;
+  /* Below .sidebar so the rail wins any accidental overlap with chart layers */
+  z-index: 1;
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -59,6 +59,8 @@
   overflow-x: hidden;
   position: relative;
   -webkit-overflow-scrolling: touch;
+  /* Don’t let wheel/touch scroll chain to the window and shift the whole shell */
+  overscroll-behavior: contain;
 }
 
 /* Serial monitor: only the log panel scrolls; keep controls + disconnect reachable */
@@ -96,8 +98,11 @@
 
 /* Sidebar Styles (moved to component css ideally, but here for now) */
 .sidebar {
+  position: relative;
+  z-index: 50;
   width: 392px;
   height: 100%;
+  max-height: 100%;
   min-height: 0;
   align-self: stretch;
   background: var(--bg-primary);
@@ -106,6 +111,7 @@
   padding: var(--spacing-md);
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 /* Modal Styles */
