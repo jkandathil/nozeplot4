@@ -103,7 +103,8 @@ export async function parseFile(fileObj) {
         Papa.parse(papaSource, {
             header: true,
             dynamicTyping: true,
-            skipEmptyLines: true,
+            /* Keep blank data rows so empty spreadsheets still load editable rows */
+            skipEmptyLines: false,
             complete: (results) => {
                 resolve({
                     id: obj.id,

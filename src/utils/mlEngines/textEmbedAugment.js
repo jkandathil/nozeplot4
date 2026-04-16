@@ -20,7 +20,10 @@ async function getExtractor() {
  */
 export async function embedMiniLmSlice(text, dims = 8) {
     const ext = await getExtractor();
-    const t = String(text || '').slice(0, 512);
+    const t = String(text || '').trim().slice(0, 512);
+    if (!t) {
+        return new Array(dims).fill(0);
+    }
     const out = await ext(t, { pooling: 'mean', normalize: true });
     const data = out?.data;
     if (!data || !(data.length >= dims)) {

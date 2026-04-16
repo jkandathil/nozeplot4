@@ -9,6 +9,16 @@
   overflow: hidden;
 }
 
+/*
+ * Spreadsheet: keep horizontal bounds (flex min-content was growing main to full grid width → no inner scroll).
+ * Y overflow stays hidden like the rest of the shell; main-content stays visible for chart <select> popups.
+ */
+.app-container:has(.spreadsheet-page--gs) {
+  overflow-x: hidden;
+  overflow-y: hidden;
+  min-width: 0;
+}
+
 .main-content {
   flex: 1;
   min-height: 0;
@@ -22,6 +32,29 @@
   /* Below .sidebar so the rail wins any accidental overlap with chart layers */
   z-index: 1;
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Spreadsheet chart uses native <select>; overflow:hidden on main would clip dropdown menus */
+.main-content:has(.spreadsheet-page--gs) {
+  overflow: visible;
+  min-width: 0;
+  flex: 1 1 0%;
+}
+
+.content-area:has(.spreadsheet-page--gs) {
+  /* Single scroll owner: react-data-grid — avoid competing wheel targets on this wrapper */
+  overflow: hidden;
+  /* Flex column so the sheet + chart get a real height */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.content-area:has(.spreadsheet-page--gs) .spreadsheet-page--gs {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 .top-bar {

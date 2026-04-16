@@ -1,7 +1,8 @@
 import React, { useRef, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2, Pencil,
-    Activity, CheckSquare, Square, LineChart, FileSpreadsheet,
+    Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal
 } from 'lucide-react';
@@ -11,6 +12,7 @@ import {
     estimateWorkspaceFileBytes,
     formatWorkspaceDataSize,
     sumWorkspaceDataBytes,
+    isSpreadsheetEditableWorkspaceFile,
 } from '../utils/workspaceFilename';
 import {
     downloadWorkspaceFileAsCsv,
@@ -25,7 +27,7 @@ function fileBelongsToFolder(file, folderId) {
     return String(file.folderId) === String(folderId);
 }
 
-const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, onOpenRecoveryForFileIds, userName = "User", activePage = 'dashboard', onPageChange, onCreateFolder, onDeleteFolder, onRenameFolder }) => {
+const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onUpload, onDeleteFile, onDeleteFiles, onDeleteAllFiles, onSelectAll, onSelectFiles, onOpenRecoveryForFileIds, userName = "User", activePage = 'dashboard', onPageChange, onCreateFolder, onDeleteFolder, onRenameFolder, onOpenWorkspaceSpreadsheet, onNewBlankSpreadsheet, onOpenSpreadsheetNav, onOpenWorkspaceFileViewer, onOpenFileViewerNav }) => {
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
@@ -76,8 +78,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         folderInputRef.current?.click();
     };
 
-    const [hoveredFile, setHoveredFile] = useState(null);
-    const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0 });
     const [csvExportBusy, setCsvExportBusy] = useState(false);
     const [auDevicesExpanded, setAuDevicesExpanded] = useState(false);
 
@@ -120,15 +120,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         }
     };
 
-    const handleMouseEnter = (e, file) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        setTooltipPos({
-            top: rect.top + (rect.height / 2),
-            left: rect.right + 10
-        });
-        setHoveredFile(file);
-    };
-
     const activeAUs = React.useMemo(() => {
         const groups = {};
         for (const f of files) {
@@ -159,6 +150,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     return (
         <aside className="sidebar" style={{ 
             width: isCollapsed ? 60 : sidebarWidth, 
+            minWidth: isCollapsed ? 60 : sidebarWidth,
+            flexShrink: 0,
             position: 'relative', 
             overflow: 'hidden',
             transition: 'width 0.4s cubic-bezier(0.33, 1, 0.68, 1)'
@@ -182,29 +175,6 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 />
             )}
             
-            {hoveredFile && (
-                <div
-                    className="fixed-tooltip"
-                    style={{
-                        position: 'fixed',
-                        top: tooltipPos.top,
-                        left: tooltipPos.left,
-                        transform: 'translateY(-50%)',
-                        zIndex: 9999,
-                        background: '#0f172a',
-                        color: '#f8fafc',
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        fontSize: '0.75rem',
-                        whiteSpace: 'nowrap',
-                        pointerEvents: 'none',
-                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
-                        border: '1px solid rgba(56, 189, 248, 0.2)'
-                    }}
-                >
-                    {hoveredFile.name}
-                </div>
-            )}
             <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'row', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', paddingBottom: '0.5rem' }}>
                 <div 
                     className="logo" 
@@ -233,20 +203,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
             {/* Zen mode: icon rail so Drift Map / ML / t-SNE stay reachable when the full nav is hidden */}
             {isCollapsed && (
-                <div
-                    className="sidebar-zen-page-rail"
-                    style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: 4,
-                        padding: '4px 0 10px',
-                        flexShrink: 0,
-                        borderBottom: '1px solid var(--border-color)',
-                    }}
-                >
+                <div className="sidebar-zen-page-rail">
                     {[
                         { page: 'dashboard', title: 'Dashboard', Icon: BarChart2 },
+                        { page: 'csvPlotter', title: 'SE Analysis — plot CSV columns', Icon: FileSpreadsheet },
+                        { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
                         { page: 'mlStudio', title: 'FeNOse ML Studio', Icon: Brain },
@@ -290,6 +251,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 borderBottom: '1px solid var(--border-color)',
                 flexShrink: 0,
                 flexWrap: 'wrap',
+                maxHeight: 'min(38vh, 320px)',
+                overflowY: 'auto',
+                overscrollBehavior: 'contain',
                 transition: 'opacity 0.2s'
             }}>
                 <button
@@ -333,6 +297,48 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="User guide — instructions for every section"
                 >
                     <BookOpen size={14} /> Help
+                </button>
+                <button
+                    onClick={() => onPageChange?.('csvPlotter')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
+                        color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
+                    }}
+                    title="SE Analysis from Custom CSV Data"
+                >
+                    <FileSpreadsheet size={13} /> SE Analysis
+                </button>
+                <button
+                    onClick={() => onPageChange?.('gasMath')}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: activePage === 'gasMath' ? 'rgba(56,189,248,0.15)' : 'transparent',
+                        color: activePage === 'gasMath' ? '#38bdf8' : 'var(--text-muted)',
+                    }}
+                    title="Gas-Dilution Math Tool"
+                >
+                    <FlaskConical size={13} /> Dilution
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}
@@ -440,7 +446,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     <Activity size={14} /> Drift Map
                 </button>
                 <button
-                    onClick={() => onPageChange?.('csvPlotter')}
+                    type="button"
+                    onClick={() => onOpenSpreadsheetNav?.()}
                     style={{
                         flex: '1 1 40%',
                         display: 'flex',
@@ -453,12 +460,56 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         cursor: 'pointer',
                         fontSize: '0.70rem',
                         fontWeight: 600,
-                        background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
-                        color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
+                        background: activePage === 'spreadsheet' ? 'rgba(52,211,153,0.15)' : 'transparent',
+                        color: activePage === 'spreadsheet' ? '#34d399' : 'var(--text-muted)',
                     }}
-                    title="SE Analysis from Custom CSV Data"
+                    title="Edit the selected CSV in a grid; Save writes back to the workspace"
                 >
-                    <FileSpreadsheet size={13} /> SE Analysis
+                    <Table2 size={13} /> Spreadsheet
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onNewBlankSpreadsheet?.()}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: 'rgba(52,211,153,0.08)',
+                        color: '#6ee7b7',
+                    }}
+                    title="Create a blank CSV in the spreadsheets folder and open the editor"
+                >
+                    <FilePlus size={13} /> New sheet
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onOpenFileViewerNav?.()}
+                    style={{
+                        flex: '1 1 40%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 3,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        background: activePage === 'fileViewer' ? 'rgba(147,197,253,0.15)' : 'transparent',
+                        color: activePage === 'fileViewer' ? '#93c5fd' : 'var(--text-muted)',
+                    }}
+                    title="Preview code, JSON, notes, PDF, Word, images — with syntax colors for code"
+                >
+                    <Eye size={13} /> Viewer
                 </button>
                 <button
                     onClick={() => onPageChange?.('aromaUnitCapture')}
@@ -983,8 +1034,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 key={keyPrefix + file.id}
                                 className={`file-item ${selectedFileId === file.id ? 'active' : ''} ${compareFileIds?.includes(file.id) ? 'compare-active' : ''}`}
                                 onClick={(e) => onFileSelect(file.id, e.ctrlKey || e.metaKey)}
-                                onMouseEnter={(e) => handleMouseEnter(e, file)}
-                                onMouseLeave={() => setHoveredFile(null)}
+                                title={file.name}
                             >
                                 <div className="file-icon">
                                     <FileText size={16} />
@@ -1023,6 +1073,52 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                         <div style={{ width: 13, height: 13, border: '1.5px solid #94a3b8', borderRadius: 3, opacity: 0.5 }} />
                                     )}
                                 </button>
+                                {onOpenWorkspaceFileViewer ? (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onOpenWorkspaceFileViewer(file.id);
+                                        }}
+                                        title="Open in file viewer (code, JSON, PDF, images, …)"
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: 2,
+                                            marginRight: 2,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            opacity: 0.85,
+                                            color: '#93c5fd',
+                                        }}
+                                    >
+                                        <Eye size={14} />
+                                    </button>
+                                ) : null}
+                                {isSpreadsheetEditableWorkspaceFile(file.name) && onOpenWorkspaceSpreadsheet ? (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onOpenWorkspaceSpreadsheet(file.id);
+                                        }}
+                                        title="Open in spreadsheet editor"
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: 2,
+                                            marginRight: 2,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            opacity: 0.85,
+                                            color: '#34d399',
+                                        }}
+                                    >
+                                        <FileSpreadsheet size={14} />
+                                    </button>
+                                ) : null}
                                 <button
                                     type="button"
                                     onClick={(e) => onDownloadFileCsv(e, file)}

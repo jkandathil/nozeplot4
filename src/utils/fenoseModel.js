@@ -431,12 +431,19 @@ function trainTestSplitStratifiedByY(rows, testFrac = 0.2, seed = 0) {
     const testIdx = new Set();
     for (const idxs of by.values()) {
         shuffleInPlace(idxs, rng);
-        const nTest = Math.max(1, Math.floor(idxs.length * testFrac));
+        let nTest = Math.floor(idxs.length * testFrac);
+        if (nTest === 0 && idxs.length > 1) nTest = 1;
         idxs.slice(0, nTest).forEach((i) => testIdx.add(i));
     }
     const train = [];
     const test = [];
     rows.forEach((r, i) => (testIdx.has(i) ? test.push(r) : train.push(r)));
+    if (train.length === 0) {
+        throw new Error("Training set is empty. Please provide more replicated measurements per concentration.");
+    }
+    if (test.length === 0 && train.length >= 2) {
+        test.push(train.pop());
+    }
     return { train, test };
 }
 

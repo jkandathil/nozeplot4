@@ -8,6 +8,14 @@ export function fileBasename(fileName) {
     return String(fileName).split(/[/\\]/).pop() || '';
 }
 
+/** Workspace folder for in-app spreadsheets (blank + saved CSVs). */
+export const SPREADSHEETS_WORKSPACE_FOLDER_NAME = 'spreadsheets';
+
+/** CSV-only in-app spreadsheet editor (not .xlsx). */
+export function isSpreadsheetEditableWorkspaceFile(fileName) {
+    return /\.csv$/i.test(fileBasename(fileName));
+}
+
 /** True if basename contains any `…ppb` / `…ppm` token (plot filtering / known-file heuristic). */
 export function hasConcentrationInFilename(fileName) {
     return /(\d+(?:\.\d+)?)\s*(ppb|ppm)(?=$|[^A-Za-z])/i.test(fileBasename(fileName));

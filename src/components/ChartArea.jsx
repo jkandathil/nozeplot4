@@ -1121,7 +1121,7 @@ const ChartArea = ({ data, fileName, loading, compareDataList, availableFiles, o
                     </div>
                 </>
             )}
-
+            
             <DashboardBaselineBarModal
                 open={baselineBarModalOpen}
                 onClose={() => setBaselineBarModalOpen(false)}

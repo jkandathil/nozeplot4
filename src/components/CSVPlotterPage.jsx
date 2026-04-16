@@ -62,6 +62,22 @@ const CustomTooltip = ({ active, payload, label }) => {
     return null;
 };
 
+function parsePlotAxisBound(raw) {
+    const t = String(raw ?? '').trim();
+    if (t === '') return undefined;
+    const n = Number(t.replace(/,/g, ''));
+    return Number.isFinite(n) ? n : undefined;
+}
+
+function plotRechartsDomain(minStr, maxStr) {
+    const lo = parsePlotAxisBound(minStr);
+    const hi = parsePlotAxisBound(maxStr);
+    if (lo === undefined && hi === undefined) return undefined;
+    if (lo !== undefined && hi !== undefined) return [lo, hi];
+    if (lo !== undefined) return [lo, 'auto'];
+    return ['auto', hi];
+}
+
 const CSVPlotterPage = ({ workspaceFiles = [] }) => {
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
 
@@ -77,6 +93,10 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedColumns, setSelectedColumns] = useState([]);
     const [xAxisKey, setXAxisKey] = useState('');
+    const [plotXMin, setPlotXMin] = useState('');
+    const [plotXMax, setPlotXMax] = useState('');
+    const [plotYMin, setPlotYMin] = useState('');
+    const [plotYMax, setPlotYMax] = useState('');
 
     const [brushStartIdx, setBrushStartIdx] = useState(0);
     const [brushEndIdx, setBrushEndIdx] = useState(null);
@@ -174,6 +194,10 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         setSearchTerm('');
         setBrushStartIdx(0);
         setBrushEndIdx(null);
+        setPlotXMin('');
+        setPlotXMax('');
+        setPlotYMin('');
+        setPlotYMax('');
     }, []);
 
     const handleClear = useCallback(() => {
@@ -187,6 +211,10 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         setXAxisKey('');
         setBrushStartIdx(0);
         setBrushEndIdx(null);
+        setPlotXMin('');
+        setPlotXMax('');
+        setPlotYMin('');
+        setPlotYMax('');
     }, []);
 
     const handleWorkspaceFileCheck = useCallback(
@@ -253,6 +281,29 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         const sliced = csvData.slice(start, end + 1);
         return sliced.length > 0 ? sliced : csvData;
     }, [csvData, brushStartIdx, brushEndIdx]);
+
+    const plotDataForChart = useMemo(
+        () => (visibleData.length > 0 ? visibleData : csvData),
+        [visibleData, csvData]
+    );
+
+    const xAxisNumericForPlot = useMemo(() => {
+        if (!plotDataForChart.length || !xAxisKey) return false;
+        return plotDataForChart.every((r) => {
+            const v = r[xAxisKey];
+            if (v === null || v === undefined || v === '') return false;
+            return Number.isFinite(Number(v));
+        });
+    }, [plotDataForChart, xAxisKey]);
+
+    const chartXDomain = useMemo(() => {
+        if (!xAxisNumericForPlot) return undefined;
+        return plotRechartsDomain(plotXMin, plotXMax);
+    }, [xAxisNumericForPlot, plotXMin, plotXMax]);
+
+    const chartYDomain = useMemo(() => plotRechartsDomain(plotYMin, plotYMax), [plotYMin, plotYMax]);
+    const hasChartXDom = chartXDomain != null;
+    const hasChartYDom = chartYDomain != null;
 
     const handleZoomInBtn = () => {
         if (!csvData || csvData.length === 0) return;
@@ -815,6 +866,52 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                         </span>
                                     </div>
                                 )}
+                                {csvData.length > 0 && selectedColumns.length > 0 && (
+                                    <div
+                                        style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: '8px',
+                                            alignItems: 'flex-end',
+                                            marginTop: 10,
+                                            paddingTop: 10,
+                                            borderTop: '1px solid rgba(51,65,85,0.6)',
+                                        }}
+                                    >
+                                        <span style={{ fontSize: '0.72rem', color: '#94a3b8', width: '100%' }}>
+                                            Axis min / max (optional). Leave blank for auto. X range applies only when the X
+                                            column values are numeric.
+                                        </span>
+                                        {['X min', 'X max', 'Y min', 'Y max'].map((label, i) => {
+                                            const vals = [plotXMin, plotXMax, plotYMin, plotYMax];
+                                            const setters = [setPlotXMin, setPlotXMax, setPlotYMin, setPlotYMax];
+                                            return (
+                                                <label
+                                                    key={label}
+                                                    style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.7rem', color: '#94a3b8' }}
+                                                >
+                                                    {label}
+                                                    <input
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        value={vals[i]}
+                                                        onChange={(e) => setters[i](e.target.value)}
+                                                        placeholder="auto"
+                                                        style={{
+                                                            width: 72,
+                                                            padding: '4px 8px',
+                                                            fontSize: '0.75rem',
+                                                            background: '#1e293b',
+                                                            border: '1px solid #334155',
+                                                            color: '#f8fafc',
+                                                            borderRadius: 4,
+                                                        }}
+                                                    />
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
 
                             {selectedColumns.length === 0 ? (
@@ -873,19 +970,29 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                     )}
                                     <div style={{ flex: 1, minHeight: 0 }} ref={chartWrapperRef}>
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <ComposedChart data={visibleData.length > 0 ? visibleData : csvData} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                                            <ComposedChart data={plotDataForChart} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                                                 <XAxis
+                                                    type={xAxisNumericForPlot ? 'number' : undefined}
                                                     dataKey={xAxisKey}
                                                     stroke="#94a3b8"
                                                     tick={{ fill: '#94a3b8', fontSize: 12 }}
                                                     tickLine={{ stroke: '#334155' }}
                                                     label={{ value: xAxisKey, position: 'insideBottom', offset: -15, fill: '#94a3b8' }}
+                                                    {...(xAxisNumericForPlot
+                                                        ? {
+                                                              domain: chartXDomain ?? ['auto', 'auto'],
+                                                              allowDataOverflow: hasChartXDom,
+                                                          }
+                                                        : {})}
                                                 />
                                                 <YAxis
                                                     stroke="#94a3b8"
                                                     tick={{ fill: '#94a3b8', fontSize: 12 }}
                                                     tickLine={{ stroke: '#334155' }}
+                                                    {...(hasChartYDom
+                                                        ? { domain: chartYDomain, allowDataOverflow: true }
+                                                        : {})}
                                                 />
                                                 <Tooltip
                                                     content={<CustomTooltip />}

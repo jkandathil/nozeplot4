@@ -1,0 +1,653 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap');
+
+/* —— Google Sheets–inspired shell —— */
+.spreadsheet-page--gs {
+    /* Flex item: allow shrinking below grid min-content so RDG gets a bounded width → horizontal scroll inside grid */
+    min-width: 0;
+    --gs-bg: #f8f9fa;
+    --gs-surface: #ffffff;
+    --gs-border: #dadce0;
+    --gs-text: #202124;
+    --gs-muted: #5f6368;
+    --gs-green: #188038;
+    --gs-green-hover: #137333;
+    --gs-blue: #1a73e8;
+    --gs-header: #f3f3f3;
+    --gs-selection: #1a73e8;
+    --gs-formula-bg: #fff;
+
+    font-family: 'Roboto', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--gs-bg);
+    color: var(--gs-text);
+    padding: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+.sheet-topbar {
+    flex-shrink: 0;
+    background: var(--gs-surface);
+    border-bottom: 1px solid var(--gs-border);
+    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
+}
+
+.sheet-topbar-strip {
+    height: 3px;
+    background: linear-gradient(90deg, #0f9d58 0%, #0b8043 35%, #188038 100%);
+}
+
+.sheet-topbar-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px 12px;
+}
+
+.sheet-btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--gs-border);
+    background: var(--gs-surface);
+    color: var(--gs-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.sheet-btn-back:hover {
+    background: #f1f3f4;
+}
+
+.sheet-doc-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.sheet-doc-icon {
+    font-size: 1.35rem;
+    line-height: 1;
+}
+
+.sheet-doc-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sheet-doc-name {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--gs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sheet-doc-meta {
+    font-size: 0.75rem;
+    color: var(--gs-muted);
+}
+
+.sheet-topbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.sheet-btn-scroll-cols {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--gs-border);
+    background: var(--gs-surface);
+    color: var(--gs-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sheet-btn-scroll-cols:hover:not(:disabled) {
+    background: #f1f3f4;
+    color: var(--gs-text);
+}
+
+.sheet-btn-scroll-cols:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.sheet-range-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 0 2px 0 8px;
+    border-left: 1px solid var(--gs-border);
+}
+
+.sheet-btn-range {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--gs-border);
+    background: var(--gs-surface);
+    color: var(--gs-text);
+    cursor: pointer;
+}
+
+.sheet-btn-range:hover:not(:disabled) {
+    background: #f1f3f4;
+}
+
+.sheet-btn-range:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.sheet-btn-range--clear {
+    color: #c5221f;
+}
+
+/* Fill the RDG cell so drags hit the surface (grid cells use align-content: center). */
+.sheet-rdg .rdg-cell:not(.rdg-editor-container) .sheet-cell-surface {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+}
+
+.sheet-cell-surface {
+    min-height: 100%;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sheet-rdg .rdg-cell .sheet-cell-inner {
+    pointer-events: none;
+    flex: 1;
+    min-width: 0;
+}
+
+.sheet-rdg .rdg-cell.sheet-range-sel {
+    background: rgba(26, 115, 232, 0.14) !important;
+    position: relative;
+    overflow: visible;
+}
+
+.sheet-rdg .rdg-cell.sheet-range-top::before { content: ""; position: absolute; top: -1px; left: -1px; right: 0; height: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
+.sheet-rdg .rdg-cell.sheet-range-bottom::after { content: ""; position: absolute; bottom: -1px; left: -1px; right: 0; height: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
+.sheet-rdg .rdg-cell.sheet-range-left .sheet-cell-surface::before { content: ""; position: absolute; top: -1px; bottom: 0; left: -1px; width: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
+.sheet-rdg .rdg-cell.sheet-range-right .sheet-cell-surface::after { content: ""; position: absolute; top: -1px; bottom: 0; right: -1px; width: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
+
+.sheet-range-handle {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    width: 6px;
+    height: 6px;
+    background: #1a73e8;
+    border: 1px solid #ffffff;
+    border-radius: 50%;
+    z-index: 10;
+    cursor: crosshair;
+    pointer-events: auto;
+}
+
+.sheet-rdg .rdg-cell.sheet-range-chart-x {
+    box-shadow: inset 0 0 0 1px rgba(33, 115, 70, 0.5);
+}
+
+.sheet-rdg .rdg-cell.sheet-range-chart-y {
+    box-shadow: inset 0 0 0 1px rgba(26, 115, 232, 0.45);
+}
+
+.sheet-rdg .rdg-cell.sheet-range-chart-x.sheet-range-chart-y {
+    box-shadow: inset 0 0 0 2px rgba(94, 53, 177, 0.4);
+}
+
+.sheet-btn-chart-toggle {
+    padding: 8px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--gs-border);
+    background: var(--gs-surface);
+    color: var(--gs-blue);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sheet-btn-chart-toggle:hover {
+    background: #e8f0fe;
+}
+
+.sheet-btn-chart-toggle.on {
+    background: #e8f0fe;
+    border-color: #aecbfa;
+}
+
+.sheet-btn-chart-maximize {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--gs-border);
+    background: var(--gs-surface);
+    color: var(--gs-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sheet-btn-chart-maximize:hover:not(:disabled) {
+    background: #f1f3f4;
+    color: var(--gs-text);
+}
+
+.sheet-btn-chart-maximize:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.sheet-btn-chart-maximize.on {
+    background: #fef7e0;
+    border-color: #fdd663;
+    color: #b06000;
+}
+
+.sheet-btn-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 22px;
+    border-radius: 20px;
+    border: none;
+    background: var(--gs-green);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(24, 128, 56, 0.35);
+}
+
+.sheet-btn-save:hover:not(:disabled) {
+    background: var(--gs-green-hover);
+}
+
+.sheet-btn-save:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+/* Formula bar */
+.sheet-formula-bar {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    background: var(--gs-formula-bg);
+    border-bottom: 1px solid var(--gs-border);
+    min-height: 40px;
+}
+
+.sheet-fx {
+    width: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid var(--gs-border);
+    color: var(--gs-muted);
+    background: #fafafa;
+}
+
+.sheet-f-addr {
+    width: 64px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--gs-muted);
+    border-right: 1px solid var(--gs-border);
+    background: #fafafa;
+}
+
+.sheet-f-input {
+    flex: 1;
+    border: none;
+    padding: 0 14px;
+    font-size: 0.88rem;
+    font-family: 'Roboto Mono', ui-monospace, monospace;
+    color: var(--gs-text);
+    background: var(--gs-formula-bg);
+    min-width: 0;
+}
+
+.sheet-f-input:focus {
+    outline: none;
+    background: #fff;
+}
+
+.sheet-f-input:disabled {
+    background: #f1f3f4;
+    color: #9aa0a6;
+}
+
+.sheet-banner {
+    margin: 10px 14px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+    background: #fff;
+    border: 1px solid var(--gs-border);
+    color: var(--gs-muted);
+}
+
+.sheet-banner--error {
+    background: #fce8e6;
+    border-color: #f9ab9e;
+    color: #c5221f;
+}
+
+.sheet-banner--warn {
+    background: #fef7e0;
+    border-color: #fdd663;
+    color: #b06000;
+}
+
+.sheet-workspace {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 10px 14px 14px;
+}
+
+/*
+ * Row layout: spreadsheet fills remaining width (min-width:0 → horizontal scroll inside grid),
+ * chart docked on the right; Chart toggle hides/shows the panel (FAB when hidden).
+ */
+.sheet-grid-panel {
+    flex: 1;
+    min-height: 280px;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    min-width: 0;
+    position: relative;
+    background: var(--gs-surface);
+    border: 1px solid var(--gs-border);
+    border-radius: 12px;
+    overflow: visible;
+    box-shadow: 0 1px 3px rgba(60, 64, 67, 0.12);
+}
+
+.sheet-grid-wrap {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+    border-radius: 11px 0 0 11px;
+    align-self: stretch;
+    /* react-data-grid light theme tuned to Sheets */
+    --rdg-color: #202124;
+    --rdg-border-color: #e0e0e0;
+    --rdg-summary-border-color: #dadce0;
+    --rdg-background-color: #ffffff;
+    --rdg-header-background-color: #f3f3f3;
+    --rdg-header-draggable-background-color: #ececec;
+    --rdg-row-hover-background-color: #f8f9fa;
+    --rdg-row-selected-background-color: #e8f0fe;
+    --rdg-row-selected-hover-background-color: #d2e3fc;
+    --rdg-checkbox-focus-color: #1a73e8;
+    --rdg-selection-color: #1a73e8;
+    --rdg-font-size: 13px;
+    --rdg-cell-frozen-box-shadow: 2px 0 6px -2px rgba(60, 64, 67, 0.2);
+    color-scheme: light;
+}
+
+.sheet-rdg.rdg-light {
+    --rdg-color-scheme: light;
+}
+
+.sheet-rdg {
+    font-family: 'Roboto', 'Segoe UI', system-ui, sans-serif !important;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    scrollbar-gutter: stable;
+}
+
+/* Make horizontal scrollbar easier to spot (RDG scrolls on this node, not the wrapper). */
+.sheet-grid-wrap .sheet-rdg::-webkit-scrollbar {
+    height: 12px;
+    width: 12px;
+}
+
+.sheet-grid-wrap .sheet-rdg::-webkit-scrollbar-thumb {
+    background: #9aa0a6;
+    border-radius: 6px;
+    border: 2px solid #fff;
+}
+
+.sheet-grid-wrap .sheet-rdg::-webkit-scrollbar-track {
+    background: #f1f3f4;
+}
+
+.sheet-grid-panel--chart-collapsed .sheet-grid-wrap {
+    border-radius: 11px;
+}
+
+.sheet-grid-panel .spreadsheet-chart-panel {
+    flex: 0 0 292px;
+    width: 292px;
+    min-width: 240px;
+    max-width: min(320px, 40vw);
+    min-height: 0;
+    align-self: stretch;
+    border-left: 1px solid #dadce0;
+    border-top: none;
+    border-radius: 0 11px 11px 0;
+    box-shadow: -4px 0 24px rgba(60, 64, 67, 0.08);
+}
+
+/* Max plot: hide grid; chart fills the sheet row (same container, full width) */
+.sheet-grid-panel--chart-maximized .sheet-grid-wrap {
+    display: none;
+}
+
+.sheet-grid-panel--chart-maximized .spreadsheet-chart-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+    border-radius: 11px;
+    box-shadow: none;
+}
+
+/* Chart height in max plot: flex + min-height from SpreadsheetChartPanel.css (tools left, chart right) */
+.sheet-grid-panel--chart-maximized .spreadsheet-chart-eca-split:not(.spreadsheet-chart-eca-split--max) .spreadsheet-chart-canvas {
+    height: clamp(300px, min(55vh, 620px), 78vh);
+}
+
+/* Chart canvas height lives in SpreadsheetChartPanel.css (scrollable panel body) */
+
+/* Two-tier headers: letter row (group) + name row (leaf) — match Google Sheets chrome */
+
+.sheet-header-group-letter {
+    padding: 0 !important;
+    background: #f3f3f3 !important;
+    border-bottom: 1px solid #e0e0e0 !important;
+}
+
+.sheet-header-group-corner {
+    border-right: 1px solid var(--gs-border);
+}
+
+.sheet-corner-letter-tier {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    background: linear-gradient(135deg, #e8eaed 0%, #dadce0 100%);
+}
+
+.sheet-corner-cell-tier2 {
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    background: linear-gradient(135deg, #e8eaed 0%, #dadce0 100%);
+    border-right: 1px solid var(--gs-border);
+}
+
+.sheet-header-frozen-name {
+    padding: 0 !important;
+}
+
+.sheet-col-letter-tier1 {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #5f6368;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sheet-col-letter-tier1:hover {
+    background: rgba(26, 115, 232, 0.08);
+}
+
+.sheet-header-name-cell {
+    padding: 0 !important;
+    background: #f3f3f3 !important;
+}
+
+.sheet-row-num {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--gs-muted);
+    user-select: none;
+    padding: 0 4px;
+}
+
+/* Second header row: field name only */
+.sheet-col-header-tier2 {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    padding: 0;
+    line-height: 1.2;
+    box-sizing: border-box;
+}
+
+button.sheet-col-head-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0;
+    padding: 4px 8px;
+    line-height: 1.25;
+    min-height: 22px;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+    border-radius: 0;
+    font: inherit;
+}
+
+button.sheet-col-head-btn:hover {
+    background: rgba(26, 115, 232, 0.08);
+}
+
+button.sheet-col-head-btn:focus-visible {
+    outline: 2px solid #1a73e8;
+    outline-offset: -2px;
+}
+
+.sheet-col-header--y {
+    box-shadow: inset 0 -3px 0 #188038;
+}
+
+.sheet-col-header--x {
+    box-shadow: inset 0 -3px 0 #1a73e8;
+}
+
+button.sheet-col-head-btn.sheet-col-header--y.sheet-col-header--x {
+    box-shadow: inset 0 -3px 0 #188038, inset 0 -6px 0 #1a73e8;
+}
+
+.sheet-col-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--gs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: start;
+}
+
+.sheet-cell-inner {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sheet-cell-inner.sheet-cell-col-selected {
+    background-color: rgba(26, 115, 232, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(26, 115, 232, 0.35);
+}
+
+/* Editor in grid — match Sheets */
+.sheet-rdg .rdg-editor-container input {
+    font-family: 'Roboto Mono', ui-monospace, monospace !important;
+    font-size: 13px !important;
+    color: #202124 !important;
+    background: #fff !important;
+}
+

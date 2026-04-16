@@ -67,7 +67,7 @@ function looksLikeFenoseLabelledTabular(name) {
 }
 
 /** Must match App.jsx FENOSE_MODEL_JSON_RE */
-const FENOSE_MODEL_FILE_RE = /^(.*)_(v1|v2)_(weights|preprocessing|metrics)\.json$/i;
+const FENOSE_MODEL_FILE_RE = /^(.*)_(v1|v2(?:_[a-z0-9]+)?)_(weights|preprocessing|metrics)\.json$/i;
 
 /** Recharts wraps custom tooltip content in a box — keep it transparent for `.ml-fenose-batch-tooltip`. */
 const ML_FENOSE_TRANSPARENT_TOOLTIP_SHELL = {
@@ -1000,6 +1000,24 @@ const MLStudioPage = ({
                             </p>
                         </div>
 
+                        {savedFenoseModels.length === 0 && fenoseIncompleteModels.length === 0 ? (
+                            <div
+                                style={{
+                                    marginBottom: 16,
+                                    padding: 12,
+                                    borderRadius: 10,
+                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                    background: 'rgba(245, 158, 11, 0.08)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.88rem',
+                                    lineHeight: 1.45,
+                                }}
+                            >
+                                <strong style={{ color: '#b45309', display: 'block', marginBottom: 4 }}>No model available.</strong>
+                                Please train a new model from the <strong>Training</strong> tab or import existing model artifacts.
+                            </div>
+                        ) : null}
+
                         {onUploadModelJsonToWorkspace ? (
                             <div className={`ml-fenose-import-disclosure ${fenoseImportOpen ? 'ml-fenose-import-disclosure--open' : ''}`}>
                                 <button
@@ -1112,56 +1130,6 @@ const MLStudioPage = ({
                             </div>
                         ) : null}
 
-                        {fenoseIncompleteModels.length > 0 ? (
-                            <div className="ml-fenose-upload-banner ml-fenose-upload-banner--warn">
-                                <strong>Incomplete FeNOse files in {FENOSE_MODEL_FOLDER_NAME}/:</strong> inference needs <em>both</em>{' '}
-                                <code>{'{name}_{v1|v2}_weights.json'}</code> and <code>{'{name}_{v1|v2}_preprocessing.json'}</code> with the{' '}
-                                <strong>same</strong> name and version (e.g. <code>mymodel_v2_weights.json</code> + <code>mymodel_v2_preprocessing.json</code>).
-                                <ul style={{ margin: '8px 0 0', paddingLeft: '1.25rem' }}>
-                                    {fenoseIncompleteModels.map((m) => {
-                                        const miss = [!m.weights && 'weights', !m.preprocessing && 'preprocessing'].filter(Boolean);
-                                        return (
-                                            <li key={`${m.modelName}::${m.version}`}>
-                                                <code>
-                                                    {m.modelName}_{m.version}
-                                                </code>
-                                                : missing {miss.join(' and ')}
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
-                            </div>
-                        ) : null}
-
-                        {fenoseIgnoredJsonInModel.length > 0 ? (
-                            <div className="ml-fenose-upload-banner ml-fenose-upload-banner--warn" style={{ marginBottom: 12 }}>
-                                These files in {FENOSE_MODEL_FOLDER_NAME}/ don’t match the FeNOse name pattern (ignored):{' '}
-                                {fenoseIgnoredJsonInModel.map((n) => (
-                                    <code key={n} style={{ marginRight: 8 }}>
-                                        {n}
-                                    </code>
-                                ))}
-                            </div>
-                        ) : null}
-
-                        {savedFenoseModels.length === 0 && fenoseIncompleteModels.length === 0 ? (
-                            <div
-                                style={{
-                                    marginBottom: 12,
-                                    padding: 12,
-                                    borderRadius: 10,
-                                    border: '1px solid rgba(245, 158, 11, 0.35)',
-                                    background: 'rgba(245, 158, 11, 0.08)',
-                                    color: 'var(--text-primary)',
-                                    fontSize: '0.88rem',
-                                    lineHeight: 1.45,
-                                }}
-                            >
-                                <strong style={{ color: '#b45309', display: 'block', marginBottom: 4 }}>No model available.</strong>
-                                Please train a new model from the <strong>Training</strong> tab or import existing model artifacts.
-                            </div>
-                        ) : null}
-
                         <div className="ml-fenose-infer-body">
                         <div className="ml-fenose-infer-controls">
                         <div className="ml-fenose-infer-toolbar">
@@ -1171,14 +1139,14 @@ const MLStudioPage = ({
                                 </label>
                                 <select
                                     id="fenose-model-select"
-                                    className="text-input ml-fenose-infer-select-grow"
+                                    className="ml-fenose-model-select-sleek ml-fenose-infer-select-grow"
                                     value={fenosePredictWorkspaceKey}
                                     onChange={(e) => setFenosePredictWorkspaceKey(e.target.value)}
                                     disabled={fenoseRunning || fenoseBatchRunning || savedFenoseModels.length === 0}
                                     title={`Choose a model saved under workspace folder ${FENOSE_MODEL_FOLDER_NAME}/`}
                                 >
-                                    <option value="">
-                                        {savedFenoseModels.length === 0 ? `No models in ${FENOSE_MODEL_FOLDER_NAME}/` : 'Select saved model…'}
+                                    <option value="" disabled hidden>
+                                        {savedFenoseModels.length === 0 ? `No models in ${FENOSE_MODEL_FOLDER_NAME}/` : 'Choose a model saved under workspace folder Model/'}
                                     </option>
                                     {savedFenoseModels.map((m) => (
                                         <option key={`${m.modelName}::${m.version}`} value={`${m.modelName}::${m.version}`}>
@@ -1195,7 +1163,7 @@ const MLStudioPage = ({
                                 <div className="ml-fenose-infer-row-inner">
                                     <select
                                         id="fenose-single-file-select"
-                                        className="text-input ml-fenose-infer-select-grow"
+                                        className="ml-fenose-model-select-sleek ml-fenose-infer-select-grow"
                                         value={fenoseSelectedFileId || ''}
                                         onChange={(e) => setFenoseSelectedFileId(e.target.value)}
                                         disabled={files.length === 0 || fenoseRunning || fenoseBatchRunning}
@@ -1288,6 +1256,38 @@ const MLStudioPage = ({
                             </div>
                         </div>
                         </div>
+
+                        {fenoseIncompleteModels.length > 0 ? (
+                            <div className="ml-fenose-upload-banner ml-fenose-upload-banner--warn">
+                                <strong>Incomplete FeNOse files in {FENOSE_MODEL_FOLDER_NAME}/:</strong> inference needs <em>both</em>{' '}
+                                <code>{'{name}_{v1|v2}_weights.json'}</code> and <code>{'{name}_{v1|v2}_preprocessing.json'}</code> with the{' '}
+                                <strong>same</strong> name and version (e.g. <code>mymodel_v2_weights.json</code> + <code>mymodel_v2_preprocessing.json</code>).
+                                <ul style={{ margin: '8px 0 0', paddingLeft: '1.25rem' }}>
+                                    {fenoseIncompleteModels.map((m) => {
+                                        const miss = [!m.weights && 'weights', !m.preprocessing && 'preprocessing'].filter(Boolean);
+                                        return (
+                                            <li key={`${m.modelName}::${m.version}`}>
+                                                <code>
+                                                    {m.modelName}_{m.version}
+                                                </code>
+                                                : missing {miss.join(' and ')}
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </div>
+                        ) : null}
+
+                        {fenoseIgnoredJsonInModel.length > 0 ? (
+                            <div className="ml-fenose-upload-banner ml-fenose-upload-banner--warn" style={{ marginBottom: 12 }}>
+                                These files in {FENOSE_MODEL_FOLDER_NAME}/ don’t match the FeNOse name pattern (ignored):{' '}
+                                {fenoseIgnoredJsonInModel.map((n) => (
+                                    <code key={n} style={{ marginRight: 8 }}>
+                                        {n}
+                                    </code>
+                                ))}
+                            </div>
+                        ) : null}
 
                         <div className="ml-fenose-infer-results">
                         {fenoseError ? (
@@ -1962,35 +1962,33 @@ const MLStudioPage = ({
                                         <label className="ml-fenose-label" htmlFor="fenose-train-pca">PCA</label>
                                         <input id="fenose-train-pca" className="text-input ml-fenose-input-full" type="number" value={fenoseTrainPca} onChange={(e) => setFenoseTrainPca(e.target.value)} disabled={fenoseTrainBusy || fenoseTrainVersion !== 'v2'} />
                                     </div>
-                                    <div className="ml-fenose-param">
-                                        <label className="ml-fenose-label" htmlFor="fenose-train-epochs">Epochs</label>
-                                        <input
-                                            id="fenose-train-epochs"
-                                            className="text-input ml-fenose-input-full"
-                                            type="number"
-                                            value={fenoseTrainEpochs}
-                                            onChange={(e) => setFenoseTrainEpochs(e.target.value)}
-                                            disabled={
-                                                fenoseTrainBusy ||
-                                                (fenoseTrainVersion === 'v2' && fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA)
-                                            }
-                                        />
-                                    </div>
-                                    <div className="ml-fenose-param">
-                                        <label className="ml-fenose-label" htmlFor="fenose-train-lr">Learning rate</label>
-                                        <input
-                                            id="fenose-train-lr"
-                                            className="text-input ml-fenose-input-full"
-                                            type="number"
-                                            step="0.0001"
-                                            value={fenoseTrainLr}
-                                            onChange={(e) => setFenoseTrainLr(e.target.value)}
-                                            disabled={
-                                                fenoseTrainBusy ||
-                                                (fenoseTrainVersion === 'v2' && fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA)
-                                            }
-                                        />
-                                    </div>
+                                    {fenoseTrainVersion === 'v1' || fenoseV2TrainEngine === ML_ENGINE_TF_MLP ? (
+                                        <>
+                                            <div className="ml-fenose-param">
+                                                <label className="ml-fenose-label" htmlFor="fenose-train-epochs">Epochs</label>
+                                                <input
+                                                    id="fenose-train-epochs"
+                                                    className="text-input ml-fenose-input-full"
+                                                    type="number"
+                                                    value={fenoseTrainEpochs}
+                                                    onChange={(e) => setFenoseTrainEpochs(e.target.value)}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                            </div>
+                                            <div className="ml-fenose-param">
+                                                <label className="ml-fenose-label" htmlFor="fenose-train-lr">Learning rate</label>
+                                                <input
+                                                    id="fenose-train-lr"
+                                                    className="text-input ml-fenose-input-full"
+                                                    type="number"
+                                                    step="0.0001"
+                                                    value={fenoseTrainLr}
+                                                    onChange={(e) => setFenoseTrainLr(e.target.value)}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                            </div>
+                                        </>
+                                    ) : null}
                                     <div className="ml-fenose-param">
                                         <label className="ml-fenose-label" htmlFor="fenose-train-testpct">Test %</label>
                                         <input id="fenose-train-testpct" className="text-input ml-fenose-input-full" type="number" value={fenoseTrainFrac} onChange={(e) => setFenoseTrainFrac(e.target.value)} disabled={fenoseTrainBusy} />
@@ -2027,37 +2025,41 @@ const MLStudioPage = ({
                                                 {FENOSE_V2_TRAINING_ENGINES.find((e) => e.id === fenoseV2TrainEngine)?.description}
                                             </p>
                                         </div>
-                                        <div className="ml-fenose-param">
-                                            <label className="ml-fenose-label" htmlFor="fenose-v2-ridge-lambda">
-                                                Ridge λ
-                                            </label>
-                                            <input
-                                                id="fenose-v2-ridge-lambda"
-                                                className="text-input ml-fenose-input-full"
-                                                type="number"
-                                                step="0.001"
-                                                min="1e-8"
-                                                value={fenoseV2RidgeLambda}
-                                                onChange={(e) => setFenoseV2RidgeLambda(e.target.value)}
-                                                disabled={fenoseTrainBusy || fenoseV2TrainEngine !== ML_ENGINE_RIDGE_PCA}
-                                            />
-                                        </div>
-                                        <div className={`ml-fenose-param ml-fenose-param--wide ${fenoseTrainVersion !== 'v2' || fenoseV2TrainEngine !== ML_ENGINE_RF_PCA ? 'disabled' : ''}`}>
-                                            <span className="ml-fenose-label" title="Number of estimators (trees) to train in the random forest.">
-                                                RF Trees
-                                            </span>
-                                            <input
-                                                id="fenose-train-rf-trees"
-                                                className="text-input ml-fenose-input-full"
-                                                type="number"
-                                                step="1"
-                                                min="1"
-                                                max="200"
-                                                value={fenoseV2RfTrees}
-                                                onChange={(e) => setFenoseV2RfTrees(e.target.value)}
-                                                disabled={fenoseTrainBusy || fenoseV2TrainEngine !== ML_ENGINE_RF_PCA}
-                                            />
-                                        </div>
+                                        {fenoseV2TrainEngine === ML_ENGINE_RIDGE_PCA ? (
+                                            <div className="ml-fenose-param">
+                                                <label className="ml-fenose-label" htmlFor="fenose-v2-ridge-lambda">
+                                                    Ridge λ
+                                                </label>
+                                                <input
+                                                    id="fenose-v2-ridge-lambda"
+                                                    className="text-input ml-fenose-input-full"
+                                                    type="number"
+                                                    step="0.001"
+                                                    min="1e-8"
+                                                    value={fenoseV2RidgeLambda}
+                                                    onChange={(e) => setFenoseV2RidgeLambda(e.target.value)}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                            </div>
+                                        ) : null}
+                                        {fenoseV2TrainEngine === ML_ENGINE_RF_PCA ? (
+                                            <div className="ml-fenose-param ml-fenose-param--wide">
+                                                <span className="ml-fenose-label" title="Number of estimators (trees) to train in the random forest.">
+                                                    RF Trees
+                                                </span>
+                                                <input
+                                                    id="fenose-train-rf-trees"
+                                                    className="text-input ml-fenose-input-full"
+                                                    type="number"
+                                                    step="1"
+                                                    min="1"
+                                                    max="200"
+                                                    value={fenoseV2RfTrees}
+                                                    onChange={(e) => setFenoseV2RfTrees(e.target.value)}
+                                                    disabled={fenoseTrainBusy}
+                                                />
+                                            </div>
+                                        ) : null}
                                         <div className="ml-fenose-param ml-fenose-param--wide">
                                             <label className="ml-fenose-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                                 <input

@@ -1,0 +1,305 @@
+.spreadsheet-chart-fab {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 5;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: none;
+    background: #217346;
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(33, 115, 70, 0.4);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.spreadsheet-chart-fab:hover {
+    background: #185c37;
+}
+
+.spreadsheet-chart-panel--maximized {
+    border-left: none;
+}
+
+/* Microsoft Office–inspired chart task pane */
+.spreadsheet-chart-panel {
+    --eca-bg: #f3f2f1;
+    --eca-surface: #ffffff;
+    --eca-border: #d1d1d1;
+    --eca-border-subtle: #edebe9;
+    --eca-text: #323130;
+    --eca-text-muted: #605e5c;
+    --eca-accent: #217346;
+    --eca-focus: #0078d4;
+
+    width: 292px;
+    min-width: 0;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--eca-bg);
+    border-left: 1px solid var(--eca-border);
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.06);
+    position: relative;
+    z-index: 6;
+    /* Let native <select> menus paint outside the pane; inner scroll handles long content */
+    overflow-x: visible;
+    overflow-y: hidden;
+    pointer-events: auto;
+    border-radius: 0 11px 11px 0;
+}
+
+.spreadsheet-chart-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px 8px 12px;
+    border-bottom: 1px solid var(--eca-border-subtle);
+    background: var(--eca-bg);
+    flex-shrink: 0;
+}
+
+.spreadsheet-chart-panel-head-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.spreadsheet-chart-panel-head-accent {
+    width: 3px;
+    height: 20px;
+    border-radius: 1px;
+    background: var(--eca-accent);
+    flex-shrink: 0;
+}
+
+.spreadsheet-chart-panel-head h2 {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--eca-text);
+    letter-spacing: -0.01em;
+}
+
+.spreadsheet-chart-close {
+    border: none;
+    background: transparent;
+    font-size: 1.25rem;
+    line-height: 1;
+    color: var(--eca-text-muted);
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 2px;
+}
+
+.spreadsheet-chart-close:hover {
+    background: #e1dfdd;
+    color: var(--eca-text);
+}
+
+/* Body: column (sheet + chart below) or row (tools left, chart right) */
+.spreadsheet-chart-eca-split {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.spreadsheet-chart-eca-split--max {
+    flex-direction: row;
+    align-items: stretch;
+}
+
+.spreadsheet-chart-eca-tools {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1 1 0;
+    background: var(--eca-bg);
+}
+
+.spreadsheet-chart-eca-split--max .spreadsheet-chart-eca-tools {
+    flex: 0 0 clamp(260px, 28vw, 340px);
+    width: clamp(260px, 28vw, 340px);
+    max-width: 380px;
+    border-right: 1px solid var(--eca-border);
+}
+
+.spreadsheet-chart-eca-preview {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-height: 0;
+    background: var(--eca-surface);
+}
+
+.spreadsheet-chart-eca-split--max .spreadsheet-chart-eca-preview {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* Ribbon-style tabs */
+.spreadsheet-chart-editor-tabs {
+    display: flex;
+    flex-direction: row;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--eca-border);
+    background: var(--eca-surface);
+    padding: 0 6px;
+    gap: 2px;
+}
+
+.spreadsheet-chart-tab {
+    flex: 1;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--eca-text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    border-radius: 2px 2px 0 0;
+}
+
+.spreadsheet-chart-tab:hover {
+    color: var(--eca-text);
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.spreadsheet-chart-tab.is-active {
+    color: var(--eca-text);
+    border-bottom-color: var(--eca-accent);
+    background: var(--eca-bg);
+}
+
+/* Chart type + column selects sit outside the scroll region so dropdowns are not clipped */
+.spreadsheet-chart-design-docked {
+    flex-shrink: 0;
+    background: var(--eca-surface);
+    border-bottom: 1px solid var(--eca-border-subtle);
+    padding: 4px 12px 10px;
+}
+
+.spreadsheet-chart-panel-scroll {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 0 8px;
+}
+
+.spreadsheet-chart-setup,
+.spreadsheet-chart-customize {
+    padding: 0 12px;
+}
+
+.spreadsheet-chart-range-summary {
+    margin: 0 0 6px;
+    padding: 6px 0 0;
+    border-bottom: none;
+    color: var(--eca-accent);
+    font-weight: 600;
+}
+
+.spreadsheet-chart-editor-tip {
+    margin: 0;
+    padding: 10px 0 8px;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: var(--eca-text-muted);
+    border-bottom: 1px solid var(--eca-border-subtle);
+}
+
+.spreadsheet-chart-editor-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--eca-border-subtle);
+}
+
+.spreadsheet-chart-editor-row label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--eca-text);
+}
+
+.spreadsheet-chart-editor-select,
+.spreadsheet-chart-editor-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border-radius: 2px;
+    border: 1px solid var(--eca-border);
+    font-size: 0.8rem;
+    color: var(--eca-text);
+    background: var(--eca-surface);
+    cursor: pointer;
+}
+
+.spreadsheet-chart-editor-input {
+    cursor: text;
+}
+
+.spreadsheet-chart-editor-select:focus,
+.spreadsheet-chart-editor-input:focus {
+    outline: none;
+    border-color: var(--eca-focus);
+    box-shadow: inset 0 0 0 1px var(--eca-focus);
+}
+
+.spreadsheet-chart-canvas {
+    flex: 0 0 auto;
+    min-height: 200px;
+    height: clamp(200px, 28vh, 340px);
+    padding: 8px 10px 12px;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    box-sizing: border-box;
+    border-top: 1px solid var(--eca-border-subtle);
+    background: var(--eca-surface);
+}
+
+.spreadsheet-chart-eca-split--max .spreadsheet-chart-canvas {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 240px;
+    max-height: none;
+    border-top: none;
+    padding: 12px 14px 16px;
+}
+
+.spreadsheet-chart-empty {
+    height: 100%;
+    min-height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 12px;
+    color: var(--eca-text-muted);
+    font-size: 0.8rem;
+    border: 1px dashed var(--eca-border);
+    border-radius: 2px;
+    margin: 4px;
+    box-sizing: border-box;
+    background: #faf9f8;
+}
+
+/* Max plot: chart area grows with the row; tools stay in the left pane */
+.spreadsheet-chart-panel--maximized .spreadsheet-chart-eca-split--max .spreadsheet-chart-canvas {
+    min-height: min(72vh, 720px);
+}

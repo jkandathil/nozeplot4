@@ -35,7 +35,16 @@ import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import SerialMonitorPage from './components/SerialMonitorPage';
+import SpreadsheetPage from './components/SpreadsheetPage';
+import FileViewerPage from './components/FileViewerPage';
+import { nanoid } from 'nanoid';
 import { parseFile } from './utils/fileParser';
+import { serializeWorkspaceCsvRows } from './utils/workspaceCsvDownload.js';
+import {
+  fileBasename,
+  isSpreadsheetEditableWorkspaceFile,
+  SPREADSHEETS_WORKSPACE_FOLDER_NAME,
+} from './utils/workspaceFilename.js';
 import { getBrowserStorageEstimate, uploadWorkloadHints } from './utils/browserCapacityHints.js';
 import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
 import { FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME } from './utils/fenoseWorkspace.js';
@@ -92,6 +101,8 @@ function App() {
   const [parsedData, setParsedData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activePage, setActivePage] = useState('dashboard');
+  const [spreadsheetTargetId, setSpreadsheetTargetId] = useState(null);
+  const [fileViewerTargetId, setFileViewerTargetId] = useState(null);
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
@@ -214,12 +225,71 @@ function App() {
     loadFiles();
   }, []);
 
+  useEffect(() => {
+    if (activePage !== 'spreadsheet') {
+      setSpreadsheetTargetId(null);
+    }
+  }, [activePage]);
+
+  useEffect(() => {
+    if (activePage !== 'fileViewer') {
+      setFileViewerTargetId(null);
+    }
+  }, [activePage]);
+
   // Common handler for adding files to processing queue
   const addFiles = useCallback(async (newFiles, targetFolderId = null) => {
-    // Filter non-CSV/Excel files
-    const validFiles = Array.from(newFiles).filter(file => {
+    const validFiles = Array.from(newFiles).filter((file) => {
       const name = file.name.toLowerCase();
-      return name.endsWith('.csv') || name.endsWith('.xls') || name.endsWith('.xlsx');
+      return (
+        name.endsWith('.csv') ||
+        name.endsWith('.xls') ||
+        name.endsWith('.xlsx') ||
+        name.endsWith('.json') ||
+        name.endsWith('.txt') ||
+        name.endsWith('.md') ||
+        name.endsWith('.markdown') ||
+        name.endsWith('.pdf') ||
+        name.endsWith('.docx') ||
+        name.endsWith('.doc') ||
+        name.endsWith('.py') ||
+        name.endsWith('.ipynb') ||
+        name.endsWith('.js') ||
+        name.endsWith('.mjs') ||
+        name.endsWith('.cjs') ||
+        name.endsWith('.ts') ||
+        name.endsWith('.tsx') ||
+        name.endsWith('.jsx') ||
+        name.endsWith('.html') ||
+        name.endsWith('.htm') ||
+        name.endsWith('.css') ||
+        name.endsWith('.scss') ||
+        name.endsWith('.xml') ||
+        name.endsWith('.yaml') ||
+        name.endsWith('.yml') ||
+        name.endsWith('.toml') ||
+        name.endsWith('.ini') ||
+        name.endsWith('.sh') ||
+        name.endsWith('.bash') ||
+        name.endsWith('.sql') ||
+        name.endsWith('.rs') ||
+        name.endsWith('.go') ||
+        name.endsWith('.java') ||
+        name.endsWith('.cpp') ||
+        name.endsWith('.cc') ||
+        name.endsWith('.cxx') ||
+        name.endsWith('.c') ||
+        name.endsWith('.h') ||
+        name.endsWith('.hpp') ||
+        name.endsWith('.cs') ||
+        name.endsWith('.php') ||
+        name.endsWith('.rb') ||
+        name.endsWith('.r') ||
+        name.endsWith('.vue') ||
+        name.endsWith('.svelte') ||
+        name.endsWith('.log') ||
+        /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(name)
+      );
     });
 
     if (validFiles.length === 0) return;
@@ -272,7 +342,58 @@ function App() {
     accept: {
       'text/csv': ['.csv'],
       'application/vnd.ms-excel': ['.csv', '.xls'],
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/json': ['.json', '.ipynb'],
+      'text/plain': [
+        '.txt',
+        '.md',
+        '.markdown',
+        '.log',
+        '.py',
+        '.js',
+        '.mjs',
+        '.cjs',
+        '.ts',
+        '.tsx',
+        '.jsx',
+        '.css',
+        '.scss',
+        '.html',
+        '.htm',
+        '.xml',
+        '.yaml',
+        '.yml',
+        '.toml',
+        '.ini',
+        '.sh',
+        '.bash',
+        '.sql',
+        '.rs',
+        '.go',
+        '.java',
+        '.cpp',
+        '.cc',
+        '.cxx',
+        '.c',
+        '.h',
+        '.hpp',
+        '.cs',
+        '.php',
+        '.rb',
+        '.r',
+        '.vue',
+        '.svelte',
+      ],
+      'application/pdf': ['.pdf'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/msword': ['.doc'],
+      'image/png': ['.png'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/gif': ['.gif'],
+      'image/webp': ['.webp'],
+      'image/svg+xml': ['.svg'],
+      'image/bmp': ['.bmp'],
+      'image/x-icon': ['.ico'],
     },
     noClick: true, // Always disable click on global container to prevent interference with other UI
     noKeyboard: true
@@ -751,7 +872,7 @@ function App() {
     }
   }, []);
 
-  const FENOSE_MODEL_JSON_RE = /^(.*)_(v1|v2)_(weights|preprocessing|metrics)\.json$/i;
+  const FENOSE_MODEL_JSON_RE = /^(.*)_(v1|v2(?:_[a-z0-9]+)?)_(weights|preprocessing|metrics)\.json$/i;
 
   function fenoseKindFromJson(json) {
     if (!json || typeof json !== 'object') return null;
@@ -1156,6 +1277,145 @@ function App() {
     handleCompareSelect(compareIds);
   };
 
+  const openWorkspaceSpreadsheet = useCallback(
+    (fileId) => {
+      const f = files.find((x) => x.id === fileId && !x.isFolder);
+      if (!f || !isSpreadsheetEditableWorkspaceFile(f.name)) return;
+      setSpreadsheetTargetId(fileId);
+      setActivePage('spreadsheet');
+    },
+    [files]
+  );
+
+  /** New blank CSV in workspace folder `spreadsheets/`, then open the spreadsheet editor. */
+  const openNewBlankSpreadsheet = useCallback(async () => {
+    try {
+      const existing = await fileManager.getAllFiles();
+      let folderMatch = existing.find(
+        (f) =>
+          f.isFolder &&
+          String(f.name).toLowerCase() === SPREADSHEETS_WORKSPACE_FOLDER_NAME.toLowerCase()
+      );
+      let folderId;
+      if (folderMatch) {
+        folderId = folderMatch.id;
+      } else {
+        folderId = `folder_${nanoid(10)}`;
+        await fileManager.saveFile({
+          id: folderId,
+          name: SPREADSHEETS_WORKSPACE_FOLDER_NAME,
+          isFolder: true,
+          createdAt: Date.now(),
+        });
+      }
+      const cols = ['Col_1', 'Col_2', 'Col_3', 'Col_4', 'Col_5', 'Col_6', 'Col_7', 'Col_8', 'Col_9', 'Col_10'];
+      const rowCount = 50;
+      const data = Array.from({ length: rowCount }, () => {
+        const row = {};
+        for (const c of cols) row[c] = '';
+        return row;
+      });
+      const csvText = serializeWorkspaceCsvRows(data, cols);
+      const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+      const leaf = `Spreadsheet-${nanoid(8)}.csv`;
+      const nativeFile = new File([blob], leaf, { type: blob.type });
+      const fileId = nanoid(12);
+      await fileManager.saveFile({
+        id: fileId,
+        name: leaf,
+        folderId,
+        data,
+        csvText,
+        csvSnapshot: csvText,
+        file: nativeFile,
+        size: blob.size,
+        createdAt: Date.now(),
+      });
+      const refreshed = await fileManager.getAllFiles();
+      setFiles(workspaceFilesForReactState(refreshed));
+      setSpreadsheetTargetId(fileId);
+      setSelectedFileId(fileId);
+      setActivePage('spreadsheet');
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not create a blank spreadsheet.');
+    }
+  }, []);
+
+  const handleOpenSpreadsheetNav = useCallback(() => {
+    if (!selectedFileId) {
+      window.alert('Select a CSV in the workspace first, or use the spreadsheet icon on a CSV row.');
+      return;
+    }
+    const f = files.find((x) => x.id === selectedFileId && !x.isFolder);
+    if (!f || !isSpreadsheetEditableWorkspaceFile(f.name)) {
+      window.alert('Spreadsheet editing is for .csv workspace files. Select a CSV or open one from its row.');
+      return;
+    }
+    setSpreadsheetTargetId(selectedFileId);
+    setActivePage('spreadsheet');
+  }, [files, selectedFileId]);
+
+  const openWorkspaceFileViewer = useCallback(
+    (id) => {
+      const f = files.find((x) => x.id === id && !x.isFolder);
+      if (!f) return;
+      setFileViewerTargetId(id);
+      setActivePage('fileViewer');
+    },
+    [files]
+  );
+
+  const handleOpenFileViewerNav = useCallback(() => {
+    if (!selectedFileId) {
+      window.alert('Select a file in the workspace first, or use the viewer (eye) icon on a row.');
+      return;
+    }
+    const f = files.find((x) => x.id === selectedFileId && !x.isFolder);
+    if (!f) return;
+    setFileViewerTargetId(selectedFileId);
+    setActivePage('fileViewer');
+  }, [files, selectedFileId]);
+
+  const openSpreadsheetFromViewer = useCallback((id) => {
+    setSpreadsheetTargetId(id);
+    setActivePage('spreadsheet');
+  }, []);
+
+  const handleSaveWorkspaceCsv = useCallback(async ({ fileId, rows, columns }) => {
+    const full = await fileManager.getFile(fileId);
+    if (!full || full.isFolder) {
+      throw new Error('File not found.');
+    }
+    const csvText = serializeWorkspaceCsvRows(rows, columns);
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+    const storageName = full.name || 'data.csv';
+    const leaf = fileBasename(storageName) || 'data.csv';
+    const nativeFile = new File([blob], leaf, { type: blob.type });
+    const updated = {
+      ...full,
+      name: storageName,
+      data: rows,
+      csvText,
+      csvSnapshot: csvText,
+      file: nativeFile,
+      size: blob.size,
+    };
+    await fileManager.saveFile(updated);
+    const refreshed = await fileManager.getAllFiles();
+    setFiles(workspaceFilesForReactState(refreshed));
+    setParsedData((prev) =>
+      prev && prev.id === fileId
+        ? { ...prev, data: rows, meta: { fields: [...columns] } }
+        : prev
+    );
+    setCompareDataList((prev) =>
+      (prev || []).map((p) =>
+        p.id === fileId ? { ...p, data: rows, meta: { fields: [...columns] } } : p
+      )
+    );
+  }, []);
+
   /** Sidebar: AU row / folder — chronological order for Drift Map, then open Recovery. */
   const handleOpenRecoveryForFileIds = async (rawIds) => {
     const ids = Array.isArray(rawIds) ? rawIds.filter(Boolean) : [];
@@ -1260,6 +1520,11 @@ function App() {
           onCreateFolder={handleCreateFolder}
           onDeleteFolder={handleDeleteFolder}
           onRenameFolder={handleRenameFolder}
+          onOpenWorkspaceSpreadsheet={openWorkspaceSpreadsheet}
+          onNewBlankSpreadsheet={openNewBlankSpreadsheet}
+          onOpenSpreadsheetNav={handleOpenSpreadsheetNav}
+          onOpenWorkspaceFileViewer={openWorkspaceFileViewer}
+          onOpenFileViewerNav={handleOpenFileViewerNav}
         />
       )}
 
@@ -1355,6 +1620,22 @@ function App() {
                   />
                 ) : activePage === 'csvPlotter' ? (
                   <CSVPlotterPage key="csvPlotter" workspaceFiles={files} />
+                ) : activePage === 'spreadsheet' ? (
+                  <SpreadsheetPage
+                    key="spreadsheet"
+                    fileId={spreadsheetTargetId ?? selectedFileId}
+                    workspaceFiles={files}
+                    onSave={handleSaveWorkspaceCsv}
+                    onClose={() => setActivePage('dashboard')}
+                  />
+                ) : activePage === 'fileViewer' ? (
+                  <FileViewerPage
+                    key="fileViewer"
+                    fileId={fileViewerTargetId ?? selectedFileId}
+                    workspaceFiles={files}
+                    onClose={() => setActivePage('dashboard')}
+                    onOpenSpreadsheet={openSpreadsheetFromViewer}
+                  />
                 ) : activePage === 'serialMonitor' ? (
                   <SerialMonitorPage
                     key="serialMonitor"

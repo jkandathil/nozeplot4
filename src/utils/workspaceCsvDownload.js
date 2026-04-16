@@ -27,6 +27,22 @@ function rowsToCsvString(rows) {
 }
 
 /**
+ * Deterministic CSV text for workspace save (column order preserved).
+ */
+export function serializeWorkspaceCsvRows(rows, columnOrder) {
+    if (!columnOrder?.length) return '';
+    const data = (rows || []).map((row) => {
+        const o = {};
+        for (const c of columnOrder) {
+            const v = row?.[c];
+            o[c] = v !== undefined && v !== null ? v : '';
+        }
+        return o;
+    });
+    return Papa.unparse(data, { columns: columnOrder, quotes: true, header: true });
+}
+
+/**
  * Download one workspace item as a UTF-8 CSV (from in-memory `data` or by parsing `file`).
  */
 export async function downloadWorkspaceFileAsCsv(fileMeta) {
