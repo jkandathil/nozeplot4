@@ -228,31 +228,47 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
     }, [fields, rows, hfEpoch]);
 
     const { rangeChartPoints, rangeChartSummary } = useMemo(() => {
+        let effXRanges = chartXRanges;
+        let effYRanges = chartYRanges;
+        
+        // INSTANT PLOT MAGIC: If the user hasn't explicitly set any X/Y bounds via the buttons, 
+        // we automatically pipe their current selection directly into the chart!
+        const hasExplicit = chartXRanges.length > 0 || chartYRanges.length > 0;
+        if (!hasExplicit && sheetRangeSelection) {
+             if (sheetRangeSelection.cols.length >= 2 && chartKind === 'scatter') {
+                 effXRanges = [{ ...sheetRangeSelection, cols: [sheetRangeSelection.cols[0]] }];
+                 effYRanges = [{ ...sheetRangeSelection, cols: [sheetRangeSelection.cols[1]] }];
+             } else {
+                 effYRanges = [sheetRangeSelection];
+             }
+        }
+
         const baseParts = [];
-        if (chartXRanges.length) baseParts.push(`Chart X: ${chartXRanges.length} cell area(s)`);
-        if (chartYRanges.length) baseParts.push(`Chart Y: ${chartYRanges.length} cell area(s)`);
+        if (effXRanges.length) baseParts.push(`Chart X: ${effXRanges.length} cell area(s)`);
+        if (effYRanges.length) baseParts.push(`Chart Y: ${effYRanges.length} cell area(s)`);
         const hf = hfRef.current;
         if (!hf || !fields.length || !rows.length) {
             return { rangeChartPoints: null, rangeChartSummary: baseParts.join(' · ') };
         }
-        if (!chartXRanges.length && !chartYRanges.length) {
+        if (!effXRanges.length && !effYRanges.length) {
             return { rangeChartPoints: null, rangeChartSummary: baseParts.join(' · ') };
         }
-        if (chartKind === 'histogram') {
+        if (chartKind === 'histogram' && hasExplicit) {
             return { rangeChartPoints: null, rangeChartSummary: baseParts.join(' · ') };
         }
+        
         const rowCount = rows.length;
         let xs = null;
         let ys = null;
         let xRows = null;
         let yRows = null;
-        if (chartXRanges.length) {
-            const ex = extractAxisFromRects(hf, fields, rowCount, chartXRanges);
+        if (effXRanges.length) {
+            const ex = extractAxisFromRects(hf, fields, rowCount, effXRanges);
             xs = ex.values;
             xRows = ex.rows;
         }
-        if (chartYRanges.length) {
-            const ey = extractAxisFromRects(hf, fields, rowCount, chartYRanges);
+        if (effYRanges.length) {
+            const ey = extractAxisFromRects(hf, fields, rowCount, effYRanges);
             ys = ey.values;
             yRows = ey.rows;
         }
@@ -265,13 +281,15 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             return { rangeChartPoints: null, rangeChartSummary: baseParts.join(' · ') };
         }
         const useRowPair =
-            chartXRanges.length > 0 &&
-            chartYRanges.length > 0 &&
+            effXRanges.length > 0 &&
+            effYRanges.length > 0 &&
             xRows?.length === xs.length &&
             yRows?.length === ys.length;
         const pts = useRowPair ? pairScatterPointsByRow(xs, xRows, ys, yRows) : pairScatterPoints(xs, ys);
         let summary = baseParts.join(' · ');
-        if (useRowPair && pts.length) {
+        if (!hasExplicit) {
+             summary = 'Showing active selection. (Use toolbar "Set Y" to lock securely)';
+        } else if (useRowPair && pts.length) {
             const finiteX = xs.filter((v) => Number.isFinite(v)).length;
             const finiteY = ys.filter((v) => Number.isFinite(v)).length;
             summary += ` · ${pts.length} point(s) (X and Y matched by sheet row; finite values: ${finiteX} X, ${finiteY} Y)`;
@@ -280,7 +298,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             }
         }
         return { rangeChartPoints: pts.length ? pts : null, rangeChartSummary: summary };
-    }, [chartXRanges, chartYRanges, fields, rows.length, chartKind, chartYField, hfEpoch]);
+    }, [chartXRanges, chartYRanges, fields, rows.length, chartKind, chartYField, hfEpoch, sheetRangeSelection]);
 
     const dragMovedRef = useRef(false);
 
@@ -319,12 +337,6 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             const rect = normalizeSheetRect(colKey, rowIdx, colKey, rowIdx, fields);
             if (rect) setSheetRangeSelection(rect);
             const pid = e.pointerId;
-            try {
-                captureEl.setPointerCapture(pid);
-            } catch {
-                /* ignore */
-            }
-
             const gridRoot = dataGridRef.current?.element ?? null;
             let cleaned = false;
             const cleanup = () => {
@@ -334,11 +346,6 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
                 window.removeEventListener('pointermove', onPointerMove);
                 window.removeEventListener('pointerup', onPointerUp);
                 window.removeEventListener('pointercancel', onPointerUp);
-                try {
-                    captureEl.releasePointerCapture(pid);
-                } catch {
-                    /* ignore */
-                }
             };
 
             const onScrollDuringDrag = () => {
@@ -384,8 +391,9 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
 
     const onRangeClick = useCallback(
         (e, rowIdx, colKey) => {
+            // Give react time if it needs to complete focus before we forcefully check drag
             if (dragMovedRef.current) {
-                dragMovedRef.current = false;
+                setTimeout(() => { dragMovedRef.current = false; }, 50);
                 return;
             }
             if (e.shiftKey && rangeAnchorRef.current) {
@@ -478,10 +486,23 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             setFormulaDraft(String(raw));
             /* While dragging a range, RDG moves the active cell each row — do not reset our multi-cell highlight. */
             if (!dragSelectingRef.current) {
-                const r = normalizeSheetRect(column.key, rowIdx, column.key, rowIdx, fields);
-                if (r) {
-                    setSheetRangeSelection(r);
-                    rangeAnchorRef.current = { colKey: column.key, rowIdx };
+                // If we navigated to a cell outside the current selection (e.g. keyboard navigation), reset our multi-select.
+                // If we navigated INSIDE the selection (e.g. at the end of a drag), let the drag bounds win.
+                // Normal clicks inside the selection are handled by `onRangeClick`, which purposefully collapses it back to 1x1.
+                let shouldReset = true;
+                if (sheetRangeSelection) {
+                     const isInside = cellInRect(column.key, rowIdx, sheetRangeSelection);
+                     if (isInside && dragMovedRef.current) {
+                         shouldReset = false;
+                     }
+                }
+
+                if (shouldReset) {
+                    const r = normalizeSheetRect(column.key, rowIdx, column.key, rowIdx, fields);
+                    if (r) {
+                        setSheetRangeSelection(r);
+                        rangeAnchorRef.current = { colKey: column.key, rowIdx };
+                    }
                 }
             }
         },

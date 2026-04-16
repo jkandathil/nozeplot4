@@ -177,6 +177,8 @@
     min-height: 100%;
     width: 100%;
     box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .sheet-rdg .rdg-cell .sheet-cell-inner {
