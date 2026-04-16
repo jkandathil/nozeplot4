@@ -302,6 +302,55 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
 
     const dragMovedRef = useRef(false);
 
+    // Fast DOM patch to bypass react-data-grid cell memoization during drag/select
+    useEffect(() => {
+        const grid = dataGridRef.current?.element;
+        if (!grid) return;
+
+        // Clean previous states (handles handles cleanly by `.remove()`)
+        grid.querySelectorAll('.sheet-range-sel, .sheet-range-chart-x, .sheet-range-chart-y').forEach(el => {
+            el.classList.remove('sheet-range-sel', 'sheet-range-top', 'sheet-range-bottom', 'sheet-range-left', 'sheet-range-right', 'sheet-range-chart-x', 'sheet-range-chart-y');
+            const h = el.querySelector('.sheet-range-handle');
+            if (h) h.remove();
+        });
+
+        const patchRect = (rect, baseClass) => {
+            if (!rect || !rect.cols || !rect.cols.length) return;
+            const rMin = Math.min(rect.r0, rect.r1);
+            const rMax = Math.max(rect.r0, rect.r1);
+            for (let r = rMin; r <= rMax; r++) {
+                for (let c = 0; c < rect.cols.length; c++) {
+                    const col = rect.cols[c];
+                    // Find the underlying RDG cell
+                    const surface = grid.querySelector(`[data-sheet-col="${col}"][data-sheet-row="${r}"]`);
+                    const cell = surface?.closest('.rdg-cell');
+                    if (cell) {
+                        cell.classList.add(baseClass);
+                        if (baseClass === 'sheet-range-sel') {
+                            if (r === rMin) cell.classList.add('sheet-range-top');
+                            if (r === rMax) cell.classList.add('sheet-range-bottom');
+                            if (c === 0) cell.classList.add('sheet-range-left');
+                            if (c === rect.cols.length - 1) cell.classList.add('sheet-range-right');
+
+                            if (r === rMax && c === rect.cols.length - 1) {
+                                if (!surface.querySelector('.sheet-range-handle')) {
+                                    const h = document.createElement('div');
+                                    h.className = 'sheet-range-handle';
+                                    surface.appendChild(h);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        if (sheetRangeSelection) patchRect(sheetRangeSelection, 'sheet-range-sel');
+        chartXRanges.forEach(r => patchRect(r, 'sheet-range-chart-x'));
+        chartYRanges.forEach(r => patchRect(r, 'sheet-range-chart-y'));
+        
+    }, [sheetRangeSelection, chartXRanges, chartYRanges]);
+
     const extendRangeFromClientXY = useCallback((clientX, clientY) => {
         lastPointerClientRef.current = { x: clientX, y: clientY };
         const el = document.elementFromPoint(clientX, clientY)?.closest?.('[data-sheet-cell]');
@@ -734,7 +783,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
                                 );
                             }
                         }
-                return (
+                        return (
                             <div
                                 className="sheet-cell-surface"
                                 data-sheet-cell
