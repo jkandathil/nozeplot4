@@ -235,7 +235,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
         // we automatically pipe their current selection directly into the chart!
         const hasExplicit = chartXRanges.length > 0 || chartYRanges.length > 0;
         if (!hasExplicit && sheetRangeSelection) {
-             if (sheetRangeSelection.cols.length >= 2 && chartKind === 'scatter') {
+             if (sheetRangeSelection.cols.length >= 2) {
                  effXRanges = [{ ...sheetRangeSelection, cols: [sheetRangeSelection.cols[0]] }];
                  effYRanges = [{ ...sheetRangeSelection, cols: [sheetRangeSelection.cols[1]] }];
              } else {
@@ -309,9 +309,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
 
         // Clean previous states (handles handles cleanly by `.remove()`)
         grid.querySelectorAll('.sheet-range-sel, .sheet-range-chart-x, .sheet-range-chart-y').forEach(el => {
-            el.classList.remove('sheet-range-sel', 'sheet-range-top', 'sheet-range-bottom', 'sheet-range-left', 'sheet-range-right', 'sheet-range-chart-x', 'sheet-range-chart-y');
-            const h = el.querySelector('.sheet-range-handle');
-            if (h) h.remove();
+            el.classList.remove('sheet-range-sel', 'sheet-range-top', 'sheet-range-bottom', 'sheet-range-left', 'sheet-range-right', 'sheet-range-chart-x', 'sheet-range-chart-y', 'sheet-range-has-handle');
         });
 
         const patchRect = (rect, baseClass) => {
@@ -333,11 +331,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
                             if (c === rect.cols.length - 1) cell.classList.add('sheet-range-right');
 
                             if (r === rMax && c === rect.cols.length - 1) {
-                                if (!surface.querySelector('.sheet-range-handle')) {
-                                    const h = document.createElement('div');
-                                    h.className = 'sheet-range-handle';
-                                    surface.appendChild(h);
-                                }
+                                cell.classList.add('sheet-range-has-handle');
                             }
                         }
                     }
@@ -794,13 +788,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
                                 onClick={(e) => onRangeClick(e, rowIdx, fieldKey)}
                             >
                                 {inner}
-                                {sheetRangeSelection && cellInRect(fieldKey, rowIdx, sheetRangeSelection) && (
-                                    <>
-                                        {rowIdx === Math.max(sheetRangeSelection.r0, sheetRangeSelection.r1) && fieldKey === sheetRangeSelection.cols[sheetRangeSelection.cols.length - 1] && (
-                                            <div className="sheet-range-handle"></div>
-                                        )}
-                                    </>
-                                )}
+                                <div className="sheet-range-handle-node"></div>
                             </div>
                         );
                     },

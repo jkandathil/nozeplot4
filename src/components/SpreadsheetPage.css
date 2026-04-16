@@ -198,7 +198,8 @@
 .sheet-rdg .rdg-cell.sheet-range-left .sheet-cell-surface::before { content: ""; position: absolute; top: -1px; bottom: 0; left: -1px; width: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
 .sheet-rdg .rdg-cell.sheet-range-right .sheet-cell-surface::after { content: ""; position: absolute; top: -1px; bottom: 0; right: -1px; width: 2px; background: #1a73e8; pointer-events: none; z-index: 2; }
 
-.sheet-range-handle {
+.sheet-range-handle-node {
+    display: none;
     position: absolute;
     bottom: -4px;
     right: -4px;
@@ -210,6 +211,10 @@
     z-index: 10;
     cursor: crosshair;
     pointer-events: auto;
+}
+
+.sheet-rdg .rdg-cell.sheet-range-has-handle .sheet-range-handle-node {
+    display: block;
 }
 
 .sheet-rdg .rdg-cell.sheet-range-chart-x {
