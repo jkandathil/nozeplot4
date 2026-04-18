@@ -20,8 +20,8 @@
     margin: 0;
     font-size: 1.75rem;
     font-weight: 700;
-    color: #f8fafc;
-    background: linear-gradient(to right, #38bdf8, #818cf8);
+    color: var(--accent-primary);
+    background: var(--gradient-primary);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -36,7 +36,7 @@
 }
 
 .help-title-icon {
-    color: #818cf8;
+    color: var(--accent-secondary);
     opacity: 0.85;
     flex-shrink: 0;
 }

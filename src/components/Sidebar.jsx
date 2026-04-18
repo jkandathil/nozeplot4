@@ -1,12 +1,14 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
     Folder, FileText, UploadCloud, ChevronRight, ChevronDown, BarChart2, Search, Trash2, Pencil,
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
-    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal
+    PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
+    Sparkles, Moon, Sun, Home as HomeIcon
 } from 'lucide-react';
 import './Sidebar.css';
+import { readStoredTheme, cycleTheme } from '../utils/theme.js';
 import { exportWorkspaceSession, importWorkspaceSession } from '../utils/fileSaver';
 import {
     estimateWorkspaceFileBytes,
@@ -31,13 +33,75 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const fileInputRef = useRef(null);
     const folderInputRef = useRef(null);
     const nozeInputRef = useRef(null);
+    const sidebarScrollRef = useRef(null);
+    const workspaceAnchorRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [sidebarWidth, setSidebarWidth] = useState(392);
-    const [expandedFolders, setExpandedFolders] = useState(new Set());
+    const [expandedFolders, setExpandedFolders] = useState(() => new Set(['root-data-files']));
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
-    
+    const [workspaceSectionOpen, setWorkspaceSectionOpen] = useState(
+        () => localStorage.getItem('sidebarWorkspaceOpen') !== '0'
+    );
+
     // NEW: Global Sidebar minimization toggle
     const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('zenMode') === 'true');
+
+    // Theme cycle (Noze → Dark → Light). Read stored value once; `cycleTheme` persists and updates DOM.
+    const [theme, setTheme] = useState(() => readStoredTheme());
+    useEffect(() => {
+        const onThemeChange = (e) => {
+            const next = e?.detail?.theme;
+            if (next) setTheme(next);
+        };
+        window.addEventListener('noze-theme-change', onThemeChange);
+        return () => window.removeEventListener('noze-theme-change', onThemeChange);
+    }, []);
+    const handleThemeCycle = useCallback(() => {
+        const next = cycleTheme(theme);
+        setTheme(next);
+    }, [theme]);
+    const themeLabel = theme === 'noze' ? 'Noze' : theme === 'dark' ? 'Dark' : 'Light';
+    const ThemeIcon = theme === 'noze' ? Sparkles : theme === 'dark' ? Moon : Sun;
+
+    const toggleWorkspaceSection = () => {
+        setWorkspaceSectionOpen((v) => {
+            const next = !v;
+            localStorage.setItem('sidebarWorkspaceOpen', next ? '1' : '0');
+            return next;
+        });
+    };
+
+    /**
+     * Shared props (className + inline style) for every button in the sidebar
+     * page/tools nav. Returns BOTH because:
+     *   - Inline style carries the active-state tint, font, geometry — one
+     *     source of truth instead of 15 hand-rolled style objects.
+     *   - The className lets `Sidebar.css` apply a :hover rule, which
+     *     inline style alone can't express. The `is-active` modifier
+     *     prevents the hover background from overriding the active tint.
+     */
+    const toolBtnProps = (active, activeBg, activeColor) => ({
+        className: `sidebar-nav-btn${active ? ' is-active' : ''}`,
+        style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 5,
+            padding: '7px 6px',
+            borderRadius: 8,
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.74rem',
+            fontWeight: 600,
+            lineHeight: 1.15,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            background: active ? activeBg : 'transparent',
+            color: active ? activeColor : 'var(--text-muted)',
+            transition: 'background 0.15s ease, color 0.15s ease, transform 0.1s ease',
+        },
+    });
 
     const actualFiles = files.filter(f => !f.isFolder);
     const customFolders = files.filter(f => f.isFolder);
@@ -80,6 +144,37 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
     const [csvExportBusy, setCsvExportBusy] = useState(false);
     const [auDevicesExpanded, setAuDevicesExpanded] = useState(false);
+    /** Which sticky jump control matches scroll position: page nav (top) vs workspace block */
+    const [sidebarJumpActive, setSidebarJumpActive] = useState('menu');
+
+    const updateSidebarJumpHighlight = useCallback(() => {
+        const scrollEl = sidebarScrollRef.current;
+        const anchor = workspaceAnchorRef.current;
+        if (!scrollEl || !anchor) return;
+        const scrollRect = scrollEl.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const threshold = scrollRect.top + 6;
+        setSidebarJumpActive(anchorRect.top <= threshold ? 'workspace' : 'menu');
+    }, []);
+
+    useEffect(() => {
+        if (isCollapsed) return;
+        const el = sidebarScrollRef.current;
+        if (!el) return;
+        updateSidebarJumpHighlight();
+        el.addEventListener('scroll', updateSidebarJumpHighlight, { passive: true });
+        const ro =
+            typeof ResizeObserver !== 'undefined'
+                ? new ResizeObserver(() => updateSidebarJumpHighlight())
+                : null;
+        ro?.observe(el);
+        const anchor = workspaceAnchorRef.current;
+        if (anchor) ro?.observe(anchor);
+        return () => {
+            el.removeEventListener('scroll', updateSidebarJumpHighlight);
+            ro?.disconnect();
+        };
+    }, [isCollapsed, workspaceSectionOpen, updateSidebarJumpHighlight]);
 
     const onDownloadFileCsv = async (e, file) => {
         e.stopPropagation();
@@ -120,6 +215,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         }
     };
 
+    /* Group files by AU tag (the first `_`-delimited token containing `asu`
+       or `asau`). Files without a recognized tag are skipped so they don't
+       show up as an anonymous "Unknown AU" entry inflating the device count. */
     const activeAUs = React.useMemo(() => {
         const groups = {};
         for (const f of files) {
@@ -127,7 +225,8 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             const baseName = f.name.split('/').pop().split('\\').pop();
             const fileParts = baseName.split('_');
             const asauPart = fileParts.find(p => p.toLowerCase().includes('asu') || p.toLowerCase().includes('asau'));
-            const auId = asauPart ? asauPart.toUpperCase() : 'UNKNOWN_AU';
+            if (!asauPart) continue;
+            const auId = asauPart.toUpperCase();
             if (!groups[auId]) groups[auId] = [];
             groups[auId].push(f);
         }
@@ -193,7 +292,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     {!isCollapsed && <span>NozePlot</span>}
                 </div>
                 {!isCollapsed && (
-                    <div className="user-profile" style={{ padding: 0 }}>
+                    <div className="user-profile" style={{ padding: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button
+                            type="button"
+                            className="sidebar-theme-toggle"
+                            onClick={handleThemeCycle}
+                            title={`Theme: ${themeLabel} — click to cycle Noze → Dark → Light`}
+                            aria-label={`Theme: ${themeLabel}. Click to change.`}
+                        >
+                            <ThemeIcon size={14} aria-hidden />
+                            <span className="sidebar-theme-toggle-label">{themeLabel}</span>
+                        </button>
                         <div className="avatar" style={{ width: 30, height: 30, fontSize: '0.85rem', cursor: 'pointer' }} title={`${userName} - Data Analyst`}>
                             {userName.charAt(0).toUpperCase()}
                         </div>
@@ -207,6 +316,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     {[
                         { page: 'dashboard', title: 'Dashboard', Icon: BarChart2 },
                         { page: 'csvPlotter', title: 'SE Analysis — plot CSV columns', Icon: FileSpreadsheet },
+                        { page: 'codeStudio', title: 'Code Studio — Python & text in Codes folder', Icon: Code2 },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
@@ -230,7 +340,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                 borderRadius: 8,
                                 cursor: 'pointer',
                                 background:
-                                    activePage === page ? 'rgba(56, 189, 248, 0.18)' : 'transparent',
+                                    activePage === page
+                                        ? page === 'codeStudio'
+                                            ? 'rgba(0, 222, 147, 0.16)'
+                                            : 'rgba(56, 189, 248, 0.18)'
+                                        : 'transparent',
                                 color: activePage === page ? 'var(--accent-primary)' : 'var(--text-muted)',
                             }}
                         >
@@ -240,346 +354,217 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 </div>
             )}
 
-            {/* Page navigation */}
+            {/* HOME — sits OUTSIDE the scrolling container so it stays
+                pinned at the top when the user jumps to the workspace
+                section further down. Was previously the first child of
+                .sidebar-body-scroll, which meant a click on "Workspace"
+                scrolled it off-screen. */}
             {!isCollapsed && (
-            <div className="sidebar-page-nav" style={{
-                display: 'flex',
-                pointerEvents: 'auto',
-                opacity: 1,
-                gap: 6,
-                padding: '8px 12px',
-                borderBottom: '1px solid var(--border-color)',
-                flexShrink: 0,
-                flexWrap: 'wrap',
-                maxHeight: 'min(38vh, 320px)',
-                overflowY: 'auto',
-                overscrollBehavior: 'contain',
-                transition: 'opacity 0.2s'
-            }}>
+                <div
+                    className="sidebar-home-row"
+                    style={{
+                        padding: '8px 12px 4px',
+                        flexShrink: 0,
+                    }}
+                >
+                    {(() => {
+                        const p = toolBtnProps(
+                            activePage === 'home',
+                            'rgba(5, 192, 125, 0.16)',
+                            'var(--accent-primary)'
+                        );
+                        return (
+                            <button
+                                onClick={() => onPageChange?.('home')}
+                                className={`${p.className} sidebar-nav-btn-home`}
+                                style={{
+                                    ...p.style,
+                                    width: '100%',
+                                    padding: '9px 10px',
+                                    fontSize: '0.82rem',
+                                    gap: 7,
+                                    letterSpacing: 0.2,
+                                }}
+                                title="Home — workspace launcher"
+                            >
+                                <HomeIcon size={14} /> Home
+                            </button>
+                        );
+                    })()}
+                </div>
+            )}
+
+            {!isCollapsed && (
+            <div ref={sidebarScrollRef} className="sidebar-body-scroll">
+                <div className="sidebar-scroll-jump" role="toolbar" aria-label="Scroll within sidebar">
+                    <button
+                        type="button"
+                        className={`sidebar-scroll-jump-btn${sidebarJumpActive === 'workspace' ? ' is-active' : ''}`}
+                        onClick={() => {
+                            setSidebarJumpActive('workspace');
+                            workspaceAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}
+                        title="Scroll to workspace (uploads and files)"
+                        aria-pressed={sidebarJumpActive === 'workspace'}
+                    >
+                        <Folder size={14} aria-hidden /> Workspace
+                    </button>
+                    <button
+                        type="button"
+                        className={`sidebar-scroll-jump-btn${sidebarJumpActive === 'menu' ? ' is-active' : ''}`}
+                        onClick={() => {
+                            setSidebarJumpActive('menu');
+                            sidebarScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        title="Scroll to menu and tools"
+                        aria-pressed={sidebarJumpActive === 'menu'}
+                    >
+                        <BarChart2 size={14} aria-hidden /> Menu
+                    </button>
+                </div>
+
+            {/* Tool nav: everything else in a 2-column grid. Dashboard and
+                Help live here too so the visual rhythm stays uniform. */}
+            <div
+                className="sidebar-tools-nav"
+                style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: 4,
+                    padding: '4px 12px 8px',
+                    borderBottom: '1px solid var(--border-color)',
+                    flexShrink: 0,
+                }}
+            >
                 <button
                     onClick={() => onPageChange?.('dashboard')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'dashboard' ? 'rgba(56,189,248,0.15)' : 'transparent',
-                        color: activePage === 'dashboard' ? 'var(--accent-primary)' : 'var(--text-muted)',
-                    }}
-                    title="Dashboard"
+                    {...toolBtnProps(activePage === 'dashboard', 'rgba(56,189,248,0.15)', 'var(--accent-primary)')}
+                    title="Dashboard — chart the selected file"
                 >
-                    <BarChart2 size={14} /> Dashboard
+                    <BarChart2 size={13} /> Dashboard
                 </button>
                 <button
                     onClick={() => onPageChange?.('help')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'help' ? 'rgba(129,140,248,0.2)' : 'transparent',
-                        color: activePage === 'help' ? '#a5b4fc' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'help', 'rgba(129,140,248,0.2)', '#a5b4fc')}
                     title="User guide — instructions for every section"
                 >
-                    <BookOpen size={14} /> Help
+                    <BookOpen size={13} /> Help
                 </button>
                 <button
                     onClick={() => onPageChange?.('csvPlotter')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'csvPlotter' ? 'rgba(168,85,247,0.15)' : 'transparent',
-                        color: activePage === 'csvPlotter' ? '#a855f7' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'csvPlotter', 'rgba(168,85,247,0.15)', '#a855f7')}
                     title="SE Analysis from Custom CSV Data"
                 >
                     <FileSpreadsheet size={13} /> SE Analysis
                 </button>
                 <button
-                    onClick={() => onPageChange?.('gasMath')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'gasMath' ? 'rgba(56,189,248,0.15)' : 'transparent',
-                        color: activePage === 'gasMath' ? '#38bdf8' : 'var(--text-muted)',
-                    }}
-                    title="Gas-Dilution Math Tool"
+                    onClick={() => onPageChange?.('codeStudio')}
+                    {...toolBtnProps(activePage === 'codeStudio', 'rgba(0, 222, 147, 0.14)', 'var(--accent-primary)')}
+                    title="Code Studio — Monaco editor; files saved in Codes folder"
                 >
-                    <FlaskConical size={13} /> Dilution
+                    <Code2 size={13} /> Code Studio
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'normalize' ? 'rgba(251,191,36,0.15)' : 'transparent',
-                        color: activePage === 'normalize' ? '#fbbf24' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'normalize', 'rgba(251,191,36,0.15)', '#fbbf24')}
                     title="Baseline Normalization"
                 >
-                    <Activity size={14} /> Normalize
+                    <Activity size={13} /> Normalize
                 </button>
                 <button
                     onClick={() => onPageChange?.('aromaAnalysis')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'aromaAnalysis' ? 'rgba(16,185,129,0.15)' : 'transparent',
-                        color: activePage === 'aromaAnalysis' ? '#10b981' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'aromaAnalysis', 'rgba(16,185,129,0.15)', '#10b981')}
                     title="Aroma Sensor Data Analysis"
                 >
-                    <LineChart size={14} /> Aroma
+                    <LineChart size={13} /> Aroma
                 </button>
                 <button
                     onClick={() => onPageChange?.('separability')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'separability' ? 'rgba(251,191,36,0.15)' : 'transparent',
-                        color: activePage === 'separability' ? '#fbbf24' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'separability', 'rgba(251,191,36,0.15)', '#fbbf24')}
                     title="Time-Resolved Separability Analysis"
                 >
-                    <Activity size={14} /> Separability
+                    <Activity size={13} /> Separability
                 </button>
                 <button
                     onClick={() => onPageChange?.('sensitivity')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'sensitivity' ? 'rgba(59,130,246,0.15)' : 'transparent',
-                        color: activePage === 'sensitivity' ? '#3b82f6' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'sensitivity', 'rgba(59,130,246,0.15)', '#3b82f6')}
                     title="Element Sensitivity & Performance Map"
                 >
-                    <Target size={14} /> Sensitivity
+                    <Target size={13} /> Sensitivity
                 </button>
                 <button
                     onClick={() => onPageChange?.('recoveryAnalysis')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 5,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        background: activePage === 'recoveryAnalysis' ? 'rgba(245,158,11,0.15)' : 'transparent',
-                        color: activePage === 'recoveryAnalysis' ? '#f59e0b' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'recoveryAnalysis', 'rgba(245,158,11,0.15)', '#f59e0b')}
                     title="Chronological Baseline Recovery & Drift Tracker"
                 >
-                    <Activity size={14} /> Drift Map
+                    <Activity size={13} /> Drift Map
+                </button>
+                <button
+                    onClick={() => onPageChange?.('manufacturing')}
+                    {...toolBtnProps(activePage === 'manufacturing', 'rgba(244,63,94,0.15)', '#f43f5e')}
+                    title="Manufacturing Variation and Yield Analysis"
+                >
+                    <Layers size={13} /> Mfg. Variation
                 </button>
                 <button
                     type="button"
                     onClick={() => onOpenSpreadsheetNav?.()}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'spreadsheet' ? 'rgba(52,211,153,0.15)' : 'transparent',
-                        color: activePage === 'spreadsheet' ? '#34d399' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'spreadsheet', 'rgba(52,211,153,0.15)', '#34d399')}
                     title="Edit the selected CSV in a grid; Save writes back to the workspace"
                 >
                     <Table2 size={13} /> Spreadsheet
                 </button>
-                <button
-                    type="button"
-                    onClick={() => onNewBlankSpreadsheet?.()}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: 'rgba(52,211,153,0.08)',
-                        color: '#6ee7b7',
-                    }}
-                    title="Create a blank CSV in the spreadsheets folder and open the editor"
-                >
-                    <FilePlus size={13} /> New sheet
-                </button>
+                {(() => {
+                    /* "New sheet" is an action, not a page — it has no active state,
+                       but still benefits from the shared geometry + hover polish. */
+                    const p = toolBtnProps(false, '', '');
+                    return (
+                        <button
+                            type="button"
+                            onClick={() => onNewBlankSpreadsheet?.()}
+                            className={p.className}
+                            style={{
+                                ...p.style,
+                                background: 'rgba(52,211,153,0.08)',
+                                color: '#6ee7b7',
+                            }}
+                            title="Create a blank CSV in the spreadsheets folder and open the editor"
+                        >
+                            <FilePlus size={13} /> New sheet
+                        </button>
+                    );
+                })()}
                 <button
                     type="button"
                     onClick={() => onOpenFileViewerNav?.()}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'fileViewer' ? 'rgba(147,197,253,0.15)' : 'transparent',
-                        color: activePage === 'fileViewer' ? '#93c5fd' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'fileViewer', 'rgba(147,197,253,0.15)', '#93c5fd')}
                     title="Preview code, JSON, notes, PDF, Word, images — with syntax colors for code"
                 >
                     <Eye size={13} /> Viewer
                 </button>
                 <button
                     onClick={() => onPageChange?.('aromaUnitCapture')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'aromaUnitCapture' ? 'rgba(45,212,191,0.15)' : 'transparent',
-                        color: activePage === 'aromaUnitCapture' ? '#2dd4bf' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'aromaUnitCapture', 'rgba(45,212,191,0.15)', '#2dd4bf')}
                     title="Capture SiAC / aroma unit over USB serial (Chrome)"
                 >
                     <Usb size={13} /> AU capture
                 </button>
                 <button
+                    onClick={() => onPageChange?.('gasMath')}
+                    {...toolBtnProps(activePage === 'gasMath', 'rgba(56,189,248,0.15)', '#38bdf8')}
+                    title="Gas-Dilution Math Tool"
+                >
+                    <FlaskConical size={13} /> Dilution
+                </button>
+                <button
                     onClick={() => onPageChange?.('serialMonitor')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'serialMonitor' ? 'rgba(56,189,248,0.15)' : 'transparent',
-                        color: activePage === 'serialMonitor' ? '#38bdf8' : 'var(--text-muted)',
-                    }}
+                    {...toolBtnProps(activePage === 'serialMonitor', 'rgba(56,189,248,0.15)', '#38bdf8')}
                     title="Read any USB serial device line-by-line (Web Serial)"
                 >
                     <Terminal size={13} /> Serial
                 </button>
-                <button
-                    onClick={() => onPageChange?.('manufacturing')}
-                    style={{
-                        flex: '1 1 40%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 3,
-                        padding: '6px 0',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.70rem',
-                        fontWeight: 600,
-                        background: activePage === 'manufacturing' ? 'rgba(244,63,94,0.15)' : 'transparent',
-                        color: activePage === 'manufacturing' ? '#f43f5e' : 'var(--text-muted)',
-                    }}
-                    title="Manufacturing Variation and Yield Analysis"
-                >
-                    <Layers size={13} /> Mfg. Variation
-                </button>
             </div>
-            )}
 
-            {/* Utility Tools Section */}
-            {!isCollapsed && (
-                <>
             <div className="sidebar-tools-grid" style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: 16, marginTop: 12 }}>
                 <button
                     onClick={() => onPageChange?.('gasDesign')}
@@ -686,6 +671,26 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 </button>
             </div>
 
+                <section ref={workspaceAnchorRef} className="sidebar-workspace-section">
+                    <button
+                        type="button"
+                        className="sidebar-workspace-section-toggle"
+                        onClick={toggleWorkspaceSection}
+                        aria-expanded={workspaceSectionOpen}
+                        title={workspaceSectionOpen ? 'Collapse workspace' : 'Expand workspace'}
+                    >
+                        {workspaceSectionOpen ? (
+                            <ChevronDown size={16} color="#38bdf8" aria-hidden />
+                        ) : (
+                            <ChevronRight size={16} color="#38bdf8" aria-hidden />
+                        )}
+                        <span className="sidebar-workspace-section-toggle-label">Workspace</span>
+                        <span className="sidebar-workspace-section-toggle-meta">
+                            {formatWorkspaceDataSize(workspaceTotalDataBytes)}
+                        </span>
+                    </button>
+                    {workspaceSectionOpen ? (
+                        <>
             <div className="upload-section">
                 <button className="btn-primary upload-btn" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }} onClick={() => handleFolderUploadClick()}>
                     <Folder className="icon" size={18} />
@@ -792,13 +797,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             <div className="file-list-container">
                 <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <div className="workspace-header-title-block">
-                        <h3 className="workspace-header-heading">Workspace</h3>
-                        <span
-                            className="workspace-header-total-size"
-                            title="Approximate total stored size of all workspace files (folders are metadata only)"
-                        >
-                            {formatWorkspaceDataSize(workspaceTotalDataBytes)}
-                        </span>
+                        <h3 className="workspace-header-heading">Files</h3>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {/* Session Restore Button */}
@@ -1265,7 +1264,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                 </div>
                                             </div>
                                             {(folderFiles.length > 0 && isExpanded) && (
-                                                <ul className="file-list" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
+                                                <ul className="file-list file-list--folder-scroll" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
                                                     {folderFiles.map(file => renderFileItem(file))}
                                                 </ul>
                                             )}
@@ -1354,7 +1353,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                                                 </div>
                                             </div>
                                             {(isRootExpanded) && (
-                                                <ul className="file-list" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
+                                                <ul className="file-list file-list--folder-scroll" style={{ paddingLeft: '8px', background: 'rgba(0,0,0,0.1)', paddingBottom: '4px' }}>
                                                     {allDataFiles.length === 0 ? <li style={{ padding: '8px', fontSize: '0.75rem', color: '#94a3b8' }}>No files uploaded</li> : allDataFiles.map(file => renderFileItem(file, 'df-'))}
                                                 </ul>
                                             )}
@@ -1366,7 +1365,10 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     })()}
                 </div>
             </div>
-            </>
+                        </>
+                    ) : null}
+                </section>
+            </div>
             )}
         </aside>
     );

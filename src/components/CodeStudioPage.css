@@ -1,0 +1,458 @@
+.code-studio-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: linear-gradient(165deg, rgba(15, 23, 42, 0.5), rgba(12, 17, 23, 0.92));
+    color: var(--text-primary);
+}
+
+.code-studio-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.code-studio-header-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px 8px;
+}
+
+.code-studio-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.code-studio-title h1 {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.code-studio-title-icon {
+    color: var(--accent-primary);
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+
+.code-studio-sub {
+    margin: 4px 0 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    max-width: 36rem;
+    line-height: 1.45;
+}
+
+.code-studio-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+}
+
+.code-studio-package-row {
+    padding: 10px 20px 14px;
+    background: rgba(12, 17, 23, 0.55);
+    border-top: 1px solid rgba(51, 65, 85, 0.45);
+}
+
+.code-studio-package-row-inner {
+    max-width: 52rem;
+}
+
+.code-studio-package-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.code-studio-package-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.code-studio-package-input {
+    flex: 1 1 220px;
+    min-width: 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: #0c1117;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.code-studio-package-input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-color));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent);
+}
+
+.code-studio-package-input:disabled {
+    opacity: 0.55;
+}
+
+.code-studio-package-install-btn {
+    flex-shrink: 0;
+}
+
+.code-studio-package-hint {
+    margin: 8px 0 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+    max-width: 48rem;
+}
+
+.code-studio-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: rgba(30, 41, 59, 0.6);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease;
+}
+
+.code-studio-btn:hover {
+    background: rgba(51, 65, 85, 0.55);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+}
+
+.code-studio-btn-primary {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    color: var(--accent-primary);
+}
+
+.code-studio-btn-primary:hover {
+    background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+    color: var(--accent-hover);
+}
+
+.code-studio-status {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.code-studio-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(200px, 260px) 1fr;
+    gap: 0;
+}
+
+@media (max-width: 840px) {
+    .code-studio-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+}
+
+.code-studio-files {
+    border-right: 1px solid var(--border-color);
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.code-studio-files-head {
+    padding: 12px 14px 8px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.code-studio-files-empty {
+    margin: 0 14px 14px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+.code-studio-file-list {
+    list-style: none;
+    margin: 0;
+    padding: 4px 8px 12px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.code-studio-file-tab {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    font-size: 0.8rem;
+    transition:
+        background 0.12s ease,
+        border-color 0.12s ease,
+        color 0.12s ease;
+}
+
+.code-studio-file-tab:hover {
+    background: rgba(30, 41, 59, 0.65);
+    color: var(--text-primary);
+}
+
+.code-studio-file-tab.is-active {
+    background: color-mix(in srgb, var(--accent-primary) 12%, rgba(30, 41, 59, 0.9));
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    color: var(--accent-primary);
+}
+
+.code-studio-file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.code-studio-file-del {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 6px;
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.code-studio-file-tab:hover .code-studio-file-del {
+    opacity: 1;
+}
+
+.code-studio-file-del:hover {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.12);
+}
+
+.code-studio-editor-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: #0c1117;
+}
+
+.code-studio-editor-chrome {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+    background: rgba(15, 23, 42, 0.85);
+    flex-shrink: 0;
+}
+
+.code-studio-chrome-spacer {
+    flex: 1;
+    min-width: 8px;
+}
+
+.code-studio-btn-run {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        opacity 0.15s ease;
+}
+
+.code-studio-btn-run:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+}
+
+.code-studio-btn-run:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.code-studio-btn-ghost-sm {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.code-studio-btn-ghost-sm:hover {
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+    background: rgba(30, 41, 59, 0.5);
+}
+
+.code-studio-output-panel {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 140px;
+    max-height: min(55vh, 520px);
+    border-top: 1px solid rgba(51, 65, 85, 0.65);
+    background: #070a0e;
+}
+
+.code-studio-output-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.45);
+}
+
+.code-studio-output-body {
+    flex: 1;
+    margin: 0;
+    padding: 10px 12px 12px;
+    overflow: auto;
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #e2e8f0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.code-studio-output-body.is-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.code-studio-mpl-wrap {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-top: 1px solid rgba(51, 65, 85, 0.45);
+    background: #05070a;
+}
+
+.code-studio-mpl-head {
+    padding: 5px 12px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.35);
+}
+
+.code-studio-mpl-target {
+    position: relative;
+    isolation: isolate;
+    min-height: 120px;
+    max-height: min(36vh, 360px);
+    overflow: auto;
+    padding: 8px 10px 12px;
+}
+
+/* Keep matplotlib canvas/widgets inside the scroll panel. */
+.code-studio-mpl-target canvas {
+    max-width: 100%;
+    height: auto;
+}
+
+.code-studio-output-err {
+    color: #fca5a5;
+}
+
+.code-studio-breadcrumb {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.code-studio-dirty {
+    font-size: 0.72rem;
+    color: #fbbf24;
+}
+
+.code-studio-monaco {
+    flex: 1;
+    min-height: 200px;
+    min-width: 0;
+}
+
+.code-studio-empty-editor {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 40px 24px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.code-studio-empty-editor p {
+    margin: 0;
+    max-width: 280px;
+    line-height: 1.5;
+    font-size: 0.9rem;
+}

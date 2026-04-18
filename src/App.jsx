@@ -22,6 +22,7 @@ import AromaAnalysisPage from './components/AromaAnalysisPage';
 import RecoveryAnalysisPage from './components/RecoveryAnalysisPage';
 import ManufacturingVariationPage from './components/ManufacturingVariationPage';
 import CSVPlotterPage from './components/CSVPlotterPage';
+import CodeStudioPage from './components/CodeStudioPage';
 import GasDilutionMathPage from './components/GasDilutionMathPage';
 import PolymerCBMixPage from './components/PolymerCBMixPage';
 import GasSystemDesignPage from './components/gas-design/GasSystemDesignPage';
@@ -33,6 +34,7 @@ import { Calculator as CalcIcon, FlaskConical, Network } from 'lucide-react';
 import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
+import HomePage from './components/HomePage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import SerialMonitorPage from './components/SerialMonitorPage';
 import SpreadsheetPage from './components/SpreadsheetPage';
@@ -44,6 +46,7 @@ import {
   fileBasename,
   isSpreadsheetEditableWorkspaceFile,
   SPREADSHEETS_WORKSPACE_FOLDER_NAME,
+  CODES_WORKSPACE_FOLDER_NAME,
 } from './utils/workspaceFilename.js';
 import { getBrowserStorageEstimate, uploadWorkloadHints } from './utils/browserCapacityHints.js';
 import { buildAuCaptureFileName } from './utils/auCaptureFilename.js';
@@ -67,7 +70,9 @@ import {
 } from './utils/fenoseSyntheticDataset.js';
 
 const RESERVED_WORKSPACE_FOLDER_NAMES = new Set(
-  [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME].map((s) => String(s).toLowerCase())
+  [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME, CODES_WORKSPACE_FOLDER_NAME].map((s) =>
+    String(s).toLowerCase()
+  )
 );
 
 /** Serial monitor exports (CSV/TXT with timestamps). */
@@ -100,7 +105,7 @@ function App() {
   const [selectedFileId, setSelectedFileId] = useState(null);
   const [parsedData, setParsedData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [activePage, setActivePage] = useState('dashboard');
+  const [activePage, setActivePage] = useState('home');
   const [spreadsheetTargetId, setSpreadsheetTargetId] = useState(null);
   const [fileViewerTargetId, setFileViewerTargetId] = useState(null);
 
@@ -836,6 +841,60 @@ function App() {
     return { fileId, folderId };
   }, []);
 
+  /** Code Studio: text / Python files under workspace folder `Codes`. */
+  const handleSaveCodeToWorkspace = useCallback(async ({ fileId, fileName, content }) => {
+    if (!fileName || typeof content !== 'string') {
+      throw new Error('Missing file name or content.');
+    }
+    const existing = await fileManager.getAllFiles();
+    let folderId = existing.find(
+      (f) => f.isFolder && String(f.name) === CODES_WORKSPACE_FOLDER_NAME
+    )?.id;
+    if (!folderId) {
+      folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+      await fileManager.saveFile({
+        id: folderId,
+        name: CODES_WORKSPACE_FOLDER_NAME,
+        isFolder: true,
+        createdAt: Date.now(),
+      });
+    }
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const nativeFile = new File([blob], fileName, { type: 'text/plain' });
+    const createdAt = Date.now();
+    let outId = fileId;
+
+    if (fileId) {
+      const prev = (await fileManager.getFile(fileId)) || existing.find((f) => f.id === fileId);
+      if (!prev || prev.isFolder) throw new Error('File not found.');
+      outId = fileId;
+      await fileManager.saveFile({
+        ...prev,
+        id: fileId,
+        name: fileName,
+        folderId: String(folderId),
+        file: nativeFile,
+        csvText: content,
+        size: blob.size,
+        createdAt: prev.createdAt ?? createdAt,
+      });
+    } else {
+      outId = Math.random().toString(36).substr(2, 9);
+      await fileManager.saveFile({
+        id: outId,
+        name: fileName,
+        folderId: String(folderId),
+        file: nativeFile,
+        csvText: content,
+        size: blob.size,
+        createdAt,
+      });
+    }
+    const refreshed = await fileManager.getAllFiles();
+    setFiles(workspaceFilesForReactState(refreshed));
+    return { fileId: outId, folderId };
+  }, []);
+
   const handleSaveJsonToWorkspace = useCallback(async ({ folderName, fileName, json }) => {
     if (!folderName || !fileName) throw new Error('Missing folderName or fileName');
     let folderId;
@@ -1071,7 +1130,7 @@ function App() {
     if (!folder) return;
     if (RESERVED_WORKSPACE_FOLDER_NAMES.has(String(folder.name).toLowerCase())) {
       window.alert(
-        `The folder "${folder.name}" is used by ML Studio (models or synthetic data) and cannot be renamed.`
+        `The folder "${folder.name}" is reserved by the app (ML Studio, Code Studio, etc.) and cannot be renamed.`
       );
       return;
     }
@@ -1087,7 +1146,7 @@ function App() {
       return;
     }
     if (RESERVED_WORKSPACE_FOLDER_NAMES.has(trimmed.toLowerCase())) {
-      window.alert(`The name "${trimmed}" is reserved for ML Studio. Choose a different name.`);
+      window.alert(`The name "${trimmed}" is reserved by the app. Choose a different name.`);
       return;
     }
     if (trimmed === folder.name) return;
@@ -1562,7 +1621,18 @@ function App() {
 
             {activePage !== 'aromaUnitCapture' && (
               <AnimatePresence mode="wait">
-                {activePage === 'help' ? (
+                {activePage === 'home' ? (
+                  <HomePage
+                    key="home"
+                    files={files}
+                    selectedFileId={selectedFileId}
+                    parsedData={parsedData}
+                    onPageChange={setActivePage}
+                    onBrowse={open}
+                    onFileSelect={handleFileSelect}
+                    userName={userName}
+                  />
+                ) : activePage === 'help' ? (
                   <HelpPage key="help" />
                 ) : activePage === 'gasDesign' ? (
                   <GasSystemDesignPage key="gasDesign" />
@@ -1619,7 +1689,14 @@ function App() {
                     availableFiles={files}
                   />
                 ) : activePage === 'csvPlotter' ? (
-                  <CSVPlotterPage key="csvPlotter" workspaceFiles={files} />
+                  <CSVPlotterPage key="csvPlotter" workspaceFiles={files} selectedFileId={selectedFileId} />
+                ) : activePage === 'codeStudio' ? (
+                  <CodeStudioPage
+                    key="codeStudio"
+                    workspaceFiles={files}
+                    onSaveCode={handleSaveCodeToWorkspace}
+                    onDeleteFile={deleteFile}
+                  />
                 ) : activePage === 'spreadsheet' ? (
                   <SpreadsheetPage
                     key="spreadsheet"

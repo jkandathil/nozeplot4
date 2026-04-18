@@ -11,6 +11,9 @@ export function fileBasename(fileName) {
 /** Workspace folder for in-app spreadsheets (blank + saved CSVs). */
 export const SPREADSHEETS_WORKSPACE_FOLDER_NAME = 'spreadsheets';
 
+/** Workspace folder for Monaco Code Studio (Python and other text). */
+export const CODES_WORKSPACE_FOLDER_NAME = 'Codes';
+
 /** CSV-only in-app spreadsheet editor (not .xlsx). */
 export function isSpreadsheetEditableWorkspaceFile(fileName) {
     return /\.csv$/i.test(fileBasename(fileName));

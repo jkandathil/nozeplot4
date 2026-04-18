@@ -4,6 +4,9 @@ import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import AuthGate from './components/AuthGate.jsx'
+import { initTheme } from './utils/theme.js'
+
+initTheme();
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

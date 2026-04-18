@@ -224,13 +224,14 @@ export default function SpreadsheetChartPanel({
                     .join(' ')}
             >
                 <div className="spreadsheet-chart-eca-tools">
-                    <div className="spreadsheet-chart-editor-tabs" role="tablist" aria-label="Chart tool tabs">
+                    <div className="spreadsheet-chart-editor-tabs" role="tablist" aria-label="Chart tool tabs" style={{ position: 'relative', zIndex: 10 }}>
                         <button
                             type="button"
                             role="tab"
                             aria-selected={editorTab === 'setup'}
                             className={`spreadsheet-chart-tab ${editorTab === 'setup' ? 'is-active' : ''}`}
-                            onClick={() => setEditorTab('setup')}
+                            onClick={(e) => { e.stopPropagation(); setEditorTab('setup'); }}
+                            style={{ position: 'relative', zIndex: 10, pointerEvents: 'auto', flex: 1 }}
                         >
                             Design
                         </button>
@@ -239,7 +240,8 @@ export default function SpreadsheetChartPanel({
                             role="tab"
                             aria-selected={editorTab === 'customize'}
                             className={`spreadsheet-chart-tab ${editorTab === 'customize' ? 'is-active' : ''}`}
-                            onClick={() => setEditorTab('customize')}
+                            onClick={(e) => { e.stopPropagation(); setEditorTab('customize'); }}
+                            style={{ position: 'relative', zIndex: 10, pointerEvents: 'auto', flex: 1 }}
                         >
                             Format
                         </button>

@@ -382,13 +382,42 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             const pid = e.pointerId;
             const gridRoot = dataGridRef.current?.element ?? null;
             let cleaned = false;
+            let autoScrollRafId;
+
             const cleanup = () => {
                 if (cleaned) return;
                 cleaned = true;
+                if (autoScrollRafId) cancelAnimationFrame(autoScrollRafId);
                 gridRoot?.removeEventListener('scroll', onScrollDuringDrag);
                 window.removeEventListener('pointermove', onPointerMove);
                 window.removeEventListener('pointerup', onPointerUp);
                 window.removeEventListener('pointercancel', onPointerUp);
+            };
+
+            const autoScrollLoop = () => {
+                if (!dragSelectingRef.current) return;
+                autoScrollRafId = requestAnimationFrame(autoScrollLoop);
+                
+                if (!gridRoot || !lastPointerClientRef.current) return;
+                
+                const p = lastPointerClientRef.current;
+                const rect = gridRoot.getBoundingClientRect();
+                
+                const threshold = 50; 
+                let dx = 0;
+                let dy = 0;
+                
+                // Vertical check
+                if (p.y > rect.bottom - threshold) dy = Math.min(30, (p.y - (rect.bottom - threshold)) * 0.8);
+                else if (p.y < rect.top + threshold) dy = Math.max(-30, (p.y - (rect.top + threshold)) * 0.8);
+                
+                // Horizontal check
+                if (p.x > rect.right - threshold) dx = Math.min(30, (p.x - (rect.right - threshold)) * 0.8);
+                else if (p.x < rect.left + 50) dx = Math.max(-30, (p.x - (rect.left + 50)) * 0.8);
+                
+                if (dx !== 0 || Math.floor(dy) !== 0) {
+                    gridRoot.scrollBy({ left: dx, top: dy });
+                }
             };
 
             const onScrollDuringDrag = () => {
@@ -412,6 +441,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
             window.addEventListener('pointermove', onPointerMove, { passive: true });
             window.addEventListener('pointerup', onPointerUp);
             window.addEventListener('pointercancel', onPointerUp);
+            autoScrollRafId = requestAnimationFrame(autoScrollLoop);
         },
         [extendRangeFromClientXY]
     );
@@ -591,6 +621,19 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
 
     const pickColumnForChart = useCallback(
         (fieldKey, e) => {
+            if (!fields.length || !rows.length) return;
+            
+            // Excel-style Full Column Selection
+            if (e.shiftKey && sheetRangeSelection) {
+                 const rect = normalizeSheetRect(sheetRangeSelection.cols[0], 0, fieldKey, rows.length - 1, fields);
+                 if (rect) setSheetRangeSelection(rect);
+            } else {
+                 const rect = normalizeSheetRect(fieldKey, 0, fieldKey, rows.length - 1, fields);
+                 if (rect) setSheetRangeSelection(rect);
+                 rangeAnchorRef.current = { colKey: fieldKey, rowIdx: 0 };
+            }
+
+            // Sync with legacy dropdowns
             if (chartKind === 'histogram') {
                 setChartYField(fieldKey);
                 return;
@@ -601,7 +644,7 @@ export default function SpreadsheetPage({ fileId, workspaceFiles, onSave, onClos
                 setChartYField(fieldKey);
             }
         },
-        [chartKind]
+        [chartKind, fields, rows.length, sheetRangeSelection]
     );
 
     /** Scatter: avoid X and Y mapping to the same column; drop stale column names if fields change. */

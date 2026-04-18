@@ -1,10 +1,19 @@
+import { createRequire } from 'node:module'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const require = createRequire(import.meta.url)
+const monacoEditorPlugin = require('vite-plugin-monaco-editor').default
 
 // https://vite.dev/config/
 export default defineConfig({
   base: '/nozeplot4/',
-  plugins: [react()],
+  plugins: [
+    react(),
+    monacoEditorPlugin({
+      languageWorkers: ['editorWorkerService', 'typescript', 'json', 'html', 'css'],
+    }),
+  ],
   server: {
     host: 'localhost',
     port: 5174,

@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+
+const MotionControlsPanel = motion.div;
 import Papa from 'papaparse';
 import { ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react';
+import { UploadCloud, Search, Trash2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
 import { parseFile } from '../utils/fileParser';
 import './AromaAnalysisPage.css'; // Reuse existing styles
 
@@ -78,7 +80,7 @@ function plotRechartsDomain(minStr, maxStr) {
     return ['auto', hi];
 }
 
-const CSVPlotterPage = ({ workspaceFiles = [] }) => {
+const CSVPlotterPage = ({ workspaceFiles = [], selectedFileId = null }) => {
     const [isSidebarVisible, setIsSidebarVisible] = useState(() => localStorage.getItem('zenMode') !== 'true');
 
     useEffect(() => {
@@ -102,72 +104,13 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
     const [brushEndIdx, setBrushEndIdx] = useState(null);
     const chartWrapperRef = useRef(null);
     const [sidebarWidth, setSidebarWidth] = useState(300);
-    const preferLocalUploadRef = useRef(false);
-    const [checkedWorkspaceFileId, setCheckedWorkspaceFileId] = useState(null);
-    const [expandedFolderIds, setExpandedFolderIds] = useState(() => new Set());
-    const [workspaceParsing, setWorkspaceParsing] = useState(false);
+    const [fileLoading, setFileLoading] = useState(false);
+    /** Bumps when user clears so we can reload the current sidebar selection if any */
+    const [fileLoadNonce, setFileLoadNonce] = useState(0);
+    const workspaceFilesRef = useRef(workspaceFiles);
+    workspaceFilesRef.current = workspaceFiles;
 
-    const folders = useMemo(
-        () => [...workspaceFiles].filter((f) => f?.isFolder && f?.id).sort((a, b) => String(a.name).localeCompare(String(b.name))),
-        [workspaceFiles]
-    );
-
-    const dataFiles = useMemo(
-        () => [...workspaceFiles].filter((f) => f && !f.isFolder && f.id && f.name).sort((a, b) => String(a.name).localeCompare(String(b.name))),
-        [workspaceFiles]
-    );
-
-    const rootDataFiles = useMemo(
-        () => dataFiles.filter((f) => f.folderId == null || String(f.folderId).trim() === ''),
-        [dataFiles]
-    );
-
-    const filesInFolder = useCallback(
-        (folderId) => dataFiles.filter((f) => String(f.folderId) === String(folderId)),
-        [dataFiles]
-    );
-
-    const folderIdsSig = useMemo(() => folders.map((f) => f.id).sort().join(','), [folders]);
-
-    /**
-     * Auto-expand new folders only. Depends on folderIdsSig only — not `folders` (new array each parent
-     * render would retrigger forever) and returns `prev` when unchanged to avoid React #185 update depth.
-     */
-    useEffect(() => {
-        if (!folderIdsSig) return;
-        const ids = folderIdsSig.split(',').filter(Boolean);
-        if (!ids.length) return;
-        setExpandedFolderIds((prev) => {
-            let changed = false;
-            const next = new Set(prev);
-            ids.forEach((id) => {
-                if (!prev.has(id)) {
-                    next.add(id);
-                    changed = true;
-                }
-            });
-            return changed ? next : prev;
-        });
-    }, [folderIdsSig]);
-
-    const expandAllFolders = useCallback(() => {
-        setExpandedFolderIds(new Set(folders.map((f) => f.id)));
-    }, [folders]);
-
-    const collapseAllFolders = useCallback(() => {
-        setExpandedFolderIds(new Set());
-    }, []);
-
-    const toggleFolderExpanded = useCallback((folderId) => {
-        setExpandedFolderIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(folderId)) next.delete(folderId);
-            else next.add(folderId);
-            return next;
-        });
-    }, []);
-
-    const ingestParsedRows = useCallback((data, name, source = 'workspace') => {
+    const ingestParsedRows = useCallback((data, name) => {
         if (!data || data.length === 0) return;
         const displayName = name ? String(name).split(/[/\\]/).pop() : 'data';
         setFileName(displayName);
@@ -201,8 +144,6 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
     }, []);
 
     const handleClear = useCallback(() => {
-        preferLocalUploadRef.current = false;
-        setCheckedWorkspaceFileId(null);
         setFileName('');
         setCsvData([]);
         setColumns([]);
@@ -215,38 +156,37 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         setPlotXMax('');
         setPlotYMin('');
         setPlotYMax('');
+        setFileLoadNonce((n) => n + 1);
     }, []);
 
-    const handleWorkspaceFileCheck = useCallback(
-        async (fileObj, checked) => {
-            if (!checked) {
-                if (checkedWorkspaceFileId === fileObj.id) {
-                    preferLocalUploadRef.current = false;
-                    handleClear();
-                }
-                return;
-            }
-            setCheckedWorkspaceFileId(fileObj.id);
-            preferLocalUploadRef.current = false;
-            setWorkspaceParsing(true);
+    useEffect(() => {
+        if (!selectedFileId) return;
+        const file = workspaceFilesRef.current.find((f) => f && f.id === selectedFileId && !f.isFolder);
+        if (!file) return;
+        let cancelled = false;
+        setFileLoading(true);
+        (async () => {
             try {
-                const parsed = await parseFile(fileObj);
+                const parsed = await parseFile(file);
+                if (cancelled) return;
                 if (parsed?.data?.length) {
-                    ingestParsedRows(parsed.data, parsed.fileName, 'workspace');
+                    ingestParsedRows(parsed.data, parsed.fileName);
                 } else {
                     alert('No rows in this file.');
-                    setCheckedWorkspaceFileId(null);
                 }
             } catch (err) {
-                console.error(err);
-                alert(err?.message || 'Could not load file.');
-                setCheckedWorkspaceFileId(null);
+                if (!cancelled) {
+                    console.error(err);
+                    alert(err?.message || 'Could not load file.');
+                }
             } finally {
-                setWorkspaceParsing(false);
+                if (!cancelled) setFileLoading(false);
             }
-        },
-        [checkedWorkspaceFileId, handleClear, ingestParsedRows]
-    );
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedFileId, fileLoadNonce, ingestParsedRows]);
 
     const handleMouseDown = useCallback((e) => {
         e.preventDefault();
@@ -380,7 +320,6 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         const file = e.target.files[0];
         if (!file) return;
 
-        preferLocalUploadRef.current = true;
         Papa.parse(file, {
             header: true,
             dynamicTyping: true,
@@ -388,8 +327,7 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
             complete: (results) => {
                 const data = results.data;
                 if (data.length > 0) {
-                    setCheckedWorkspaceFileId(null);
-                    ingestParsedRows(data, file.name, 'upload');
+                    ingestParsedRows(data, file.name);
                 }
             },
             error: (err) => {
@@ -547,148 +485,42 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
         return [...areaElements, ...lineElements];
     }, [selectedColumns, groupedColumns]);
 
-    const renderWorkspaceTree = (compact) => {
-        if (!dataFiles.length) {
-            return (
-                <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b', textAlign: compact ? 'left' : 'center', maxWidth: 400 }}>
-                    No files in the workspace yet. Add files or folders from the sidebar, then check one file below.
-                </p>
-            );
-        }
-
-        const fileRow = (f) => (
-            <label
-                key={f.id}
-                style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '5px 8px',
-                    cursor: workspaceParsing ? 'wait' : 'pointer',
-                    borderRadius: 4,
-                }}
-            >
-                <input
-                    type="checkbox"
-                    checked={checkedWorkspaceFileId === f.id}
-                    disabled={workspaceParsing}
-                    onChange={(e) => handleWorkspaceFileCheck(f, e.target.checked)}
-                    style={{ accentColor: '#a855f7', flexShrink: 0 }}
-                />
-                <span
-                    style={{
-                        fontSize: compact ? '0.76rem' : '0.82rem',
-                        color: '#e2e8f0',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                    }}
-                    title={f.name}
-                >
-                    {f.name}
-                </span>
-            </label>
-        );
-
-        return (
-            <div
-                style={{
-                    width: '100%',
-                    maxWidth: compact ? '100%' : 440,
-                    maxHeight: compact ? 220 : 380,
-                    overflowY: 'auto',
-                    padding: 10,
-                    background: '#0f172a',
-                    borderRadius: 8,
-                    border: '1px solid #334155',
-                    textAlign: 'left',
-                }}
-            >
-                <div
-                    style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 600,
-                        color: '#64748b',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        marginBottom: 8,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                    }}
-                >
-                    <FolderOpen size={14} />
-                    Workspace{compact ? ' — switch file' : ''}
-                </div>
-                <p style={{ margin: '0 0 10px 0', fontSize: '0.72rem', color: '#475569', lineHeight: 1.4 }}>
-                    Same folders as the sidebar. Check <strong style={{ color: '#94a3b8' }}>one</strong> file to plot; another check replaces it. Uncheck to clear.
-                </p>
-                {folders.length > 0 && (
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-                        <button
-                            type="button"
-                            onClick={expandAllFolders}
-                            style={{ fontSize: '0.7rem', padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: 'rgba(168,85,247,0.12)', color: '#c4b5fd', cursor: 'pointer' }}
-                        >
-                            Expand all folders
-                        </button>
-                        <button
-                            type="button"
-                            onClick={collapseAllFolders}
-                            style={{ fontSize: '0.7rem', padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}
-                        >
-                            Collapse all
-                        </button>
-                    </div>
-                )}
-                {folders.map((folder) => {
-                    const kids = filesInFolder(folder.id);
-                    const expanded = expandedFolderIds.has(folder.id);
+    const axisBoundsPanel = (
+        <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '8px' }}>Axis bounds (optional)</label>
+            <p style={{ margin: '0 0 8px 0', fontSize: '0.7rem', color: '#64748b', lineHeight: 1.35 }}>
+                Leave blank for auto. X min/max apply only when the X column is numeric.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                {['X min', 'X max', 'Y min', 'Y max'].map((label, i) => {
+                    const vals = [plotXMin, plotXMax, plotYMin, plotYMax];
+                    const setters = [setPlotXMin, setPlotXMax, setPlotYMin, setPlotYMax];
                     return (
-                        <div key={folder.id} style={{ marginBottom: 4 }}>
-                            <button
-                                type="button"
-                                onClick={() => toggleFolderExpanded(folder.id)}
+                        <label key={label} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#94a3b8' }}>
+                            {label}
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                value={vals[i]}
+                                onChange={(e) => setters[i](e.target.value)}
+                                placeholder="auto"
                                 style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 6,
                                     width: '100%',
-                                    textAlign: 'left',
-                                    background: 'transparent',
-                                    border: 'none',
-                                    color: '#cbd5e1',
-                                    cursor: 'pointer',
                                     padding: '6px 8px',
-                                    fontSize: '0.82rem',
+                                    fontSize: '0.78rem',
+                                    background: '#0f172a',
+                                    border: '1px solid #334155',
+                                    color: '#f8fafc',
                                     borderRadius: 6,
+                                    boxSizing: 'border-box',
                                 }}
-                            >
-                                {expanded ? <ChevronDown size={14} color="#94a3b8" /> : <ChevronRight size={14} color="#94a3b8" />}
-                                <FolderOpen size={14} color="#a855f7" />
-                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder.name}</span>
-                                <span style={{ color: '#64748b', fontSize: '0.72rem' }}>{kids.length}</span>
-                            </button>
-                            {expanded && <div style={{ paddingLeft: 12, borderLeft: '1px solid rgba(51,65,85,0.6)', marginLeft: 10 }}>{kids.map(fileRow)}</div>}
-                        </div>
+                            />
+                        </label>
                     );
                 })}
-                {rootDataFiles.length > 0 && (
-                    <div style={{ marginTop: folders.length ? 10 : 0 }}>
-                        {folders.length > 0 && (
-                            <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 600, marginBottom: 6, paddingLeft: 4 }}>
-                                Library root
-                            </div>
-                        )}
-                        {rootDataFiles.map(fileRow)}
-                    </div>
-                )}
-                {workspaceParsing && (
-                    <p style={{ margin: '10px 0 0', fontSize: '0.75rem', color: '#a855f7' }}>Loading file…</p>
-                )}
             </div>
-        );
-    };
+        </div>
+    );
 
     return (
         <div className="aroma-analysis-container">
@@ -703,21 +535,18 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
 
             <div className="aroma-content" style={{ display: 'flex', gap: '20px', flexDirection: 'column' }}>
                 {!csvData.length ? (
-                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155', gap: 20 }}>
+                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center', background: '#1e293b', borderRadius: '12px', border: '1px dashed #334155', gap: 16 }}>
                         <UploadCloud size={48} color="#94a3b8" style={{ marginBottom: '4px' }} />
-                        <h2 style={{ color: '#f8fafc', marginBottom: '4px' }}>Load data for SE Analysis</h2>
-                        <p style={{ color: '#94a3b8', marginBottom: '4px', maxWidth: 520 }}>
-                            Browse your workspace (folders and root files), check one file to plot, or upload a CSV from disk.
+                        <h2 style={{ color: '#f8fafc', margin: 0 }}>Load data for SE Analysis</h2>
+                        <p style={{ color: '#94a3b8', margin: 0, maxWidth: 480, lineHeight: 1.5 }}>
+                            {fileLoading && selectedFileId
+                                ? 'Loading the selected workspace file…'
+                                : 'Choose a data file in the workspace sidebar, or upload a CSV from your computer.'}
                         </p>
-
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, justifyContent: 'center', alignItems: 'flex-start', width: '100%', maxWidth: 900 }}>
-                            {renderWorkspaceTree(false)}
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 24 }}>
-                                <span style={{ color: '#475569', fontSize: '0.75rem' }}>or</span>
                         <label
                             className="btn-primary"
                             style={{
-                                cursor: 'pointer',
+                                cursor: fileLoading ? 'wait' : 'pointer',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
@@ -726,24 +555,14 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                 borderRadius: '8px',
                                 background: '#a855f7',
                                 color: '#fff',
-                                flex: 'none',
-                                width: 'fit-content',
-                                margin: '0 auto',
                                 border: 'none',
                                 fontWeight: '600',
-                                alignSelf: 'center'
+                                opacity: fileLoading ? 0.7 : 1,
                             }}
                         >
-                            <UploadCloud size={18} /> Select CSV File
-                            <input
-                                type="file"
-                                accept=".csv"
-                                onChange={handleFileUpload}
-                                style={{ display: 'none' }}
-                            />
+                            <UploadCloud size={18} /> Upload CSV
+                            <input type="file" accept=".csv" onChange={handleFileUpload} style={{ display: 'none' }} disabled={fileLoading} />
                         </label>
-                            </div>
-                        </div>
                     </div>
                 ) : (
                     <div
@@ -756,7 +575,7 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                         {/* Sidebar controls */}
                         <AnimatePresence>
                         {isSidebarVisible && (
-                        <motion.div 
+                        <MotionControlsPanel
                             initial={{ width: 0, opacity: 0 }}
                             animate={{ width: sidebarWidth, opacity: 1 }}
                             exit={{ width: 0, opacity: 0 }}
@@ -785,8 +604,6 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                 </button>
                             </div>
 
-                            <div style={{ marginBottom: 14 }}>{renderWorkspaceTree(true)}</div>
-
                             <div style={{ marginBottom: '16px' }}>
                                 <label style={{ display: 'block', fontSize: '0.85rem', color: '#94a3b8', marginBottom: '6px' }}>X-Axis</label>
                                 <select
@@ -799,6 +616,72 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                     ))}
                                 </select>
                             </div>
+
+                            {axisBoundsPanel}
+
+                            {csvData.length > 0 && selectedColumns.length > 0 && (
+                                <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                                    <button
+                                        type="button"
+                                        onClick={handleZoomInBtn}
+                                        title="Zoom in (fewer points)"
+                                        style={{
+                                            padding: '6px 8px',
+                                            borderRadius: 6,
+                                            border: '1px solid #334155',
+                                            cursor: 'pointer',
+                                            background: 'rgba(168,85,247,0.12)',
+                                            color: '#c4b5fd',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                        }}
+                                    >
+                                        <ZoomIn size={16} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleZoomOutBtn}
+                                        title="Zoom out (more points)"
+                                        style={{
+                                            padding: '6px 8px',
+                                            borderRadius: 6,
+                                            border: '1px solid #334155',
+                                            cursor: 'pointer',
+                                            background: 'rgba(168,85,247,0.12)',
+                                            color: '#c4b5fd',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                        }}
+                                    >
+                                        <ZoomOut size={16} />
+                                    </button>
+                                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setBrushStartIdx(0);
+                                                setBrushEndIdx(null);
+                                            }}
+                                            title="Reset zoom"
+                                            style={{
+                                                padding: '6px 8px',
+                                                borderRadius: 6,
+                                                border: '1px solid #334155',
+                                                cursor: 'pointer',
+                                                background: 'transparent',
+                                                color: '#94a3b8',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            <RefreshCw size={14} />
+                                        </button>
+                                    )}
+                                    <span style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 2 }}>
+                                        {visibleData.length} / {csvData.length} pts
+                                    </span>
+                                </div>
+                            )}
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#0f172a', padding: '8px', borderRadius: '6px', border: '1px solid #334155', marginBottom: '12px' }}>
                                 <Search size={14} color="#94a3b8" />
@@ -839,81 +722,28 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                 )}
                             </div>
                             </div>
-                        </motion.div>
+                        </MotionControlsPanel>
                         )}
                         </AnimatePresence>
 
                         {/* Chart Area */}
-                        <div style={{ flex: 1, background: '#1e293b', borderRadius: '12px', border: '1px solid #334155', padding: '20px', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                                <h2 style={{ fontSize: '1.2rem', color: '#f8fafc', margin: 0 }}>Plot View</h2>
-
-                                {csvData.length > 0 && selectedColumns.length > 0 && (
-                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                        <button type="button" className="icon-btn small" onClick={handleZoomInBtn} title="Zoom In (fewer points)" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.1)', color: '#a855f7', display: 'flex', alignItems: 'center' }}>
-                                            <ZoomIn size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Zoom In</span>
+                        <div style={{ flex: 1, background: '#1e293b', borderRadius: '12px', border: '1px solid #334155', padding: '16px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                            {!isSidebarVisible && csvData.length > 0 && selectedColumns.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10, justifyContent: 'flex-end' }}>
+                                    <button type="button" onClick={handleZoomInBtn} title="Zoom in" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.12)', color: '#c4b5fd', display: 'flex', alignItems: 'center' }}>
+                                        <ZoomIn size={16} />
+                                    </button>
+                                    <button type="button" onClick={handleZoomOutBtn} title="Zoom out" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.12)', color: '#c4b5fd', display: 'flex', alignItems: 'center' }}>
+                                        <ZoomOut size={16} />
+                                    </button>
+                                    {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
+                                        <button type="button" onClick={() => { setBrushStartIdx(0); setBrushEndIdx(null); }} title="Reset zoom" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #334155', cursor: 'pointer', background: 'transparent', color: '#94a3b8', display: 'flex', alignItems: 'center' }}>
+                                            <RefreshCw size={14} />
                                         </button>
-                                        <button type="button" className="icon-btn small" onClick={handleZoomOutBtn} title="Zoom Out (more points)" style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'rgba(168,85,247,0.1)', color: '#a855f7', display: 'flex', alignItems: 'center' }}>
-                                            <ZoomOut size={18} /> <span style={{ fontSize: '0.8rem', marginLeft: 4, fontWeight: 600 }}>Zoom Out</span>
-                                        </button>
-                                        {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
-                                            <button type="button" className="icon-btn small" onClick={() => { setBrushStartIdx(0); setBrushEndIdx(null); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #334155', cursor: 'pointer', background: 'transparent', color: '#94a3b8', display: 'flex', alignItems: 'center' }}>
-                                                <RefreshCw size={14} style={{ marginRight: 4 }} /> Reset Zoom
-                                            </button>
-                                        )}
-                                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: '8px' }}>
-                                            {visibleData.length} / {csvData.length} pts
-                                        </span>
-                                    </div>
-                                )}
-                                {csvData.length > 0 && selectedColumns.length > 0 && (
-                                    <div
-                                        style={{
-                                            display: 'flex',
-                                            flexWrap: 'wrap',
-                                            gap: '8px',
-                                            alignItems: 'flex-end',
-                                            marginTop: 10,
-                                            paddingTop: 10,
-                                            borderTop: '1px solid rgba(51,65,85,0.6)',
-                                        }}
-                                    >
-                                        <span style={{ fontSize: '0.72rem', color: '#94a3b8', width: '100%' }}>
-                                            Axis min / max (optional). Leave blank for auto. X range applies only when the X
-                                            column values are numeric.
-                                        </span>
-                                        {['X min', 'X max', 'Y min', 'Y max'].map((label, i) => {
-                                            const vals = [plotXMin, plotXMax, plotYMin, plotYMax];
-                                            const setters = [setPlotXMin, setPlotXMax, setPlotYMin, setPlotYMax];
-                                            return (
-                                                <label
-                                                    key={label}
-                                                    style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.7rem', color: '#94a3b8' }}
-                                                >
-                                                    {label}
-                                                    <input
-                                                        type="text"
-                                                        inputMode="decimal"
-                                                        value={vals[i]}
-                                                        onChange={(e) => setters[i](e.target.value)}
-                                                        placeholder="auto"
-                                                        style={{
-                                                            width: 72,
-                                                            padding: '4px 8px',
-                                                            fontSize: '0.75rem',
-                                                            background: '#1e293b',
-                                                            border: '1px solid #334155',
-                                                            color: '#f8fafc',
-                                                            borderRadius: 4,
-                                                        }}
-                                                    />
-                                                </label>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-
+                                    )}
+                                    <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{visibleData.length} / {csvData.length} pts</span>
+                                </div>
+                            )}
                             {selectedColumns.length === 0 ? (
                                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
                                     Select columns from the left sidebar to generate a plot
@@ -921,38 +751,8 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                             ) : (
                                 <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
                                     {(brushStartIdx > 0 || (brushEndIdx !== null && brushEndIdx < csvData.length - 1)) && (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: 'rgba(0,0,0,0.2)', marginBottom: 8, borderRadius: 8, flexShrink: 0 }}>
-                                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>X-Axis Interval:</span>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                <input
-                                                    type="text"
-                                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
-                                                    value={String(csvData[brushStartIdx]?.[xAxisKey] || '')}
-                                                    onChange={(e) => {
-                                                        const targetX = e.target.value;
-                                                        const idx = csvData.findIndex(r => String(r[xAxisKey]).startsWith(targetX));
-                                                        if (idx !== -1 && idx <= (brushEndIdx || csvData.length - 1)) {
-                                                            setBrushStartIdx(idx);
-                                                        }
-                                                    }}
-                                                    title="Start X"
-                                                />
-                                                <span style={{ color: '#94a3b8' }}>to</span>
-                                                <input
-                                                    type="text"
-                                                    style={{ width: 80, padding: '4px 8px', fontSize: '0.75rem', background: '#1e293b', border: '1px solid #334155', color: '#f8fafc', borderRadius: 4 }}
-                                                    value={String(csvData[brushEndIdx !== null ? brushEndIdx : csvData.length - 1]?.[xAxisKey] || '')}
-                                                    onChange={(e) => {
-                                                        const targetX = e.target.value;
-                                                        const idx = csvData.findIndex(r => String(r[xAxisKey]).startsWith(targetX));
-                                                        if (idx !== -1 && idx >= brushStartIdx) {
-                                                            setBrushEndIdx(idx);
-                                                        }
-                                                    }}
-                                                    title="End X"
-                                                />
-                                            </div>
-                                            <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: 8 }}>Scroll/Pan:</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', marginBottom: 6, flexShrink: 0 }}>
+                                            <span style={{ fontSize: '0.72rem', color: '#64748b', whiteSpace: 'nowrap' }}>Pan</span>
                                             <input
                                                 type="range"
                                                 min={0}
@@ -965,12 +765,13 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                                     setBrushEndIdx(Math.min(csvData.length - 1, newStart + currentSpan));
                                                 }}
                                                 style={{ flex: 1, height: 6, accentColor: '#a855f7', cursor: 'pointer' }}
+                                                aria-label="Pan visible window along series"
                                             />
                                         </div>
                                     )}
                                     <div style={{ flex: 1, minHeight: 0 }} ref={chartWrapperRef}>
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <ComposedChart data={plotDataForChart} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                                            <ComposedChart data={plotDataForChart} margin={{ top: 8, right: 16, left: 4, bottom: 52 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                                                 <XAxis
                                                     type={xAxisNumericForPlot ? 'number' : undefined}
@@ -978,7 +779,7 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                                     stroke="#94a3b8"
                                                     tick={{ fill: '#94a3b8', fontSize: 12 }}
                                                     tickLine={{ stroke: '#334155' }}
-                                                    label={{ value: xAxisKey, position: 'insideBottom', offset: -15, fill: '#94a3b8' }}
+                                                    label={{ value: xAxisKey, position: 'insideBottom', offset: -12, fill: '#94a3b8', fontSize: 11 }}
                                                     {...(xAxisNumericForPlot
                                                         ? {
                                                               domain: chartXDomain ?? ['auto', 'auto'],
@@ -998,9 +799,14 @@ const CSVPlotterPage = ({ workspaceFiles = [] }) => {
                                                     content={<CustomTooltip />}
                                                     wrapperStyle={{ zIndex: 100 }}
                                                 />
-                                                <Legend verticalAlign="top" height={36} wrapperStyle={{ paddingBottom: '20px' }} />
-
                                                 {plotElements}
+                                                <Legend
+                                                    verticalAlign="bottom"
+                                                    layout="horizontal"
+                                                    align="center"
+                                                    wrapperStyle={{ paddingTop: 10, fontSize: '11px' }}
+                                                    iconSize={8}
+                                                />
                                             </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>

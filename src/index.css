@@ -51,6 +51,993 @@
   /* Transitions */
   --transition-fast: 0.15s ease;
   --transition-normal: 0.3s ease;
+
+  /* ── Semantic surface tokens (used by components that previously
+        hardcoded inline rgba values). Override per-theme below. ── */
+  --surface-panel-bg: rgba(15, 23, 42, 0.4);
+  --surface-panel-bg-strong: rgba(15, 23, 42, 0.55);
+  --surface-panel-border: rgba(148, 163, 184, 0.2);
+  --surface-input-bg: rgba(2, 6, 23, 0.6);
+  --surface-input-border: rgba(148, 163, 184, 0.25);
+  --surface-input-text: #e2e8f0;
+  /* Terminal/log surface stays dark even in light mode (standard UX for
+     REPL/terminal panels — matches VS Code terminal, Chrome DevTools, etc.). */
+  --surface-log-bg: rgba(2, 6, 23, 0.85);
+  --surface-log-text: #a5f3fc;
+  --surface-log-border: rgba(51, 65, 85, 0.5);
+  /* Pastel text colors on tinted soft-buttons — dimmed in light mode. */
+  --btn-soft-text-danger: #fca5a5;
+  --btn-soft-text-warn: #fcd34d;
+  --btn-soft-text-teal: #5eead4;
+  --btn-soft-text-success: #86efac;
+  --btn-soft-text-success-2: #bbf7d0;
+  --btn-soft-text-muted: #cbd5e1;
+}
+
+/* ----- Theme overrides (applied by data-theme on <html>) -----
+   Default (no attribute) = Noze mode, which is :root above.
+   'dark'  = near-black OLED-friendly. 'light' = light surfaces, Noze green accent preserved.
+   Only CSS tokens are overridden; individual components that hardcoded hex colors still
+   look mostly like Noze mode until their inline styles are migrated.
+*/
+
+html[data-theme="dark"] {
+  --bg-primary: #05080f;
+  --bg-secondary: #0b1320;
+  --bg-tertiary: #1a2437;
+
+  --text-primary: #f5f7fa;
+  --text-secondary: #a6b1c2;
+  --text-muted: #7a8699;
+
+  --border-color: #1f2a3d;
+  --accent-glow: rgba(0, 222, 147, 0.4);
+}
+
+html[data-theme="light"] {
+  /* Canvas is a tinted gray so white cards/sidebar read as elevated surfaces.
+     Pure-white canvas causes glare and flattens the card/chart hierarchy. */
+  --bg-primary: #eef2f7;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e2e8f0;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --accent-primary: #05c07d;
+  --accent-secondary: #10b981;
+  --accent-hover: #058a5a;
+  --accent-glow: rgba(5, 192, 125, 0.35);
+  --gradient-primary: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+
+  --border-color: #cbd5e1;
+
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
+
+  /* Light semantic surfaces (consumed by inline-styled pages like Serial Monitor) */
+  --surface-panel-bg: #ffffff;
+  --surface-panel-bg-strong: #ffffff;
+  --surface-panel-border: rgba(15, 23, 42, 0.1);
+  --surface-input-bg: #ffffff;
+  --surface-input-border: rgba(15, 23, 42, 0.15);
+  --surface-input-text: #0f172a;
+  /* Terminal stays dark-on-light (conventional) — keep --surface-log-* unchanged */
+  --btn-soft-text-danger: #b91c1c;
+  --btn-soft-text-warn: #854d0e;
+  --btn-soft-text-teal: #0f766e;
+  --btn-soft-text-success: #15803d;
+  --btn-soft-text-success-2: #16a34a;
+  --btn-soft-text-muted: #475569;
+}
+
+/* Light: flip main content from white (bg-secondary) to gray canvas (bg-primary)
+   so cards/charts float. App.css defaults to bg-secondary which would be pure white. */
+html[data-theme="light"] .main-content {
+  background-color: var(--bg-primary);
+  box-shadow: -4px 0 12px rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] body {
+  color-scheme: light;
+}
+
+/* Light-mode polish for shared chrome classes that live in this file.
+   Component-level CSS files still use their own colors and keep their current look. */
+html[data-theme="light"] .glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(15, 23, 42, 0.1);
+  color: var(--text-primary);
+}
+
+html[data-theme="light"] .btn-primary {
+  color: #ffffff;
+}
+
+html[data-theme="light"] .btn-secondary {
+  color: #0f172a;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+  border-color: rgba(15, 23, 42, 0.18);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+html[data-theme="light"] .btn-secondary:hover:not(:disabled) {
+  color: #0f172a;
+  background: linear-gradient(180deg, #ffffff 0%, #e2e8f0 100%);
+  border-color: rgba(5, 192, 125, 0.55);
+  box-shadow: 0 4px 12px rgba(5, 192, 125, 0.15);
+}
+
+/* ─── Light-mode fixes for hardcoded dark surfaces in component CSS ─── */
+
+/* Auth session bar (top strip) */
+html[data-theme="light"] .auth-session-bar {
+  background: #ffffff;
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+
+/* App shell */
+html[data-theme="light"] .top-bar {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .drag-overlay {
+  background: rgba(248, 250, 252, 0.9);
+  color: var(--text-primary);
+}
+
+/* Sidebar chrome — pure white rail against the gray main canvas */
+html[data-theme="light"] .sidebar {
+  background: #ffffff;
+  border-right-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 1px 0 0 rgba(15, 23, 42, 0.03);
+}
+html[data-theme="light"] .sidebar-body-scroll::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+}
+html[data-theme="light"] .sidebar-scroll-jump {
+  background: #eef2f7;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .sidebar-scroll-jump-btn {
+  color: #475569;
+}
+html[data-theme="light"] .sidebar-scroll-jump-btn:hover:not(.is-active) {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+html[data-theme="light"] .sidebar-scroll-jump-btn.is-active {
+  background: #ffffff;
+  color: var(--accent-primary);
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+/* Sidebar page/tool nav buttons: the default hover tint is a white wash,
+   which disappears on the white light-mode sidebar. Flip to a subtle dark
+   tint so hover reads clearly in light mode. */
+html[data-theme="light"] .sidebar-nav-btn:hover:not(.is-active) {
+  background: rgba(15, 23, 42, 0.05) !important;
+  color: var(--text-primary) !important;
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .sidebar-nav-btn-home:hover:not(.is-active) {
+  background: rgba(5, 192, 125, 0.1) !important;
+  color: var(--accent-primary) !important;
+}
+html[data-theme="light"] .sidebar-workspace-section-toggle {
+  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+html[data-theme="light"] .sidebar-workspace-section-toggle:hover {
+  background: rgba(5, 192, 125, 0.08);
+  border-color: rgba(5, 192, 125, 0.3);
+}
+html[data-theme="light"] .upload-section .btn-primary {
+  background: linear-gradient(135deg, rgba(5, 192, 125, 0.12), rgba(16, 185, 129, 0.14));
+  border-color: rgba(5, 192, 125, 0.35);
+  color: var(--accent-hover);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .upload-section .btn-primary:hover {
+  background: linear-gradient(135deg, rgba(5, 192, 125, 0.2), rgba(16, 185, 129, 0.22));
+  box-shadow: 0 4px 12px rgba(5, 192, 125, 0.18);
+}
+html[data-theme="light"] .upload-btn-folder {
+  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .upload-btn-folder:hover {
+  background: #e2e8f0;
+}
+/* Workspace search box — the input was hardcoded to a dark navy rgba,
+   which looked like a black pill on the white sidebar in light mode. */
+html[data-theme="light"] .search-input {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.12);
+  color: var(--text-primary);
+}
+html[data-theme="light"] .search-input::placeholder {
+  color: #94a3b8;
+}
+html[data-theme="light"] .search-input:focus {
+  background: #ffffff;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(5, 192, 125, 0.15);
+}
+html[data-theme="light"] .search-icon {
+  color: #94a3b8;
+}
+/* File-list rows: dark-mode used a white-on-white tint for hover/active which
+   disappears on a white sidebar. Replace with a subtle dark-on-light tint. */
+html[data-theme="light"] .file-item {
+  color: var(--text-secondary);
+}
+html[data-theme="light"] .file-item:hover {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .file-item.active {
+  background: linear-gradient(90deg, rgba(5, 192, 125, 0.12), rgba(5, 192, 125, 0.03));
+  border-color: rgba(5, 192, 125, 0.3);
+  color: #065f46;
+}
+html[data-theme="light"] .file-item.compare-active {
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.18), rgba(251, 191, 36, 0.04));
+  border-color: rgba(180, 120, 10, 0.35);
+  color: #78350f;
+}
+html[data-theme="light"] .file-item.compare-active .file-icon {
+  color: #b45309;
+}
+/* Folder wrappers (inline styled in Sidebar.jsx with near-white tints that
+   disappear on white). Use attribute selectors to override the inline bg/
+   border only when they match the exact dark-mode values. */
+html[data-theme="light"] .file-list-container [style*="rgba(255,255,255,0.05)"],
+html[data-theme="light"] .file-list-container [style*="rgba(255, 255, 255, 0.05)"] {
+  border-color: rgba(15, 23, 42, 0.1) !important;
+}
+html[data-theme="light"] .file-list-container [style*="rgba(255,255,255,0.02)"],
+html[data-theme="light"] .file-list-container [style*="rgba(255, 255, 255, 0.02)"] {
+  background: #f8fafc !important;
+}
+html[data-theme="light"] .file-list-container [style*="rgba(0,0,0,0.1)"],
+html[data-theme="light"] .file-list-container [style*="rgba(0, 0, 0, 0.1)"] {
+  background: #eef2f7 !important;
+}
+/* Delete-all button tooltip row in the workspace header: the trash icon
+   color (`#ef4444`) is fine in both themes; no change needed. */
+
+/* Help page (visible panels in light mode need light surfaces) */
+html[data-theme="light"] .help-page-layout {
+  background: transparent;
+  backdrop-filter: none;
+}
+html[data-theme="light"] .help-header {
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .help-subtitle {
+  color: #475569;
+}
+html[data-theme="light"] .glass-toc {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .help-toc-title {
+  color: #64748b;
+}
+html[data-theme="light"] .help-toc-link {
+  color: #334155;
+}
+html[data-theme="light"] .help-toc-link:hover {
+  background: rgba(5, 192, 125, 0.1);
+  color: #0f172a;
+}
+html[data-theme="light"] .help-section-card {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .help-section-card:hover {
+  border-color: rgba(5, 192, 125, 0.3);
+}
+html[data-theme="light"] .help-section-icon {
+  color: var(--accent-primary);
+}
+html[data-theme="light"] .help-section-title {
+  color: #0f172a;
+}
+html[data-theme="light"] .help-section-subtitle {
+  color: #64748b;
+}
+html[data-theme="light"] .help-section-intro,
+html[data-theme="light"] .help-list,
+html[data-theme="light"] .help-steps,
+html[data-theme="light"] .help-eq-para {
+  color: #334155;
+}
+html[data-theme="light"] .help-list strong,
+html[data-theme="light"] .help-steps strong {
+  color: #0f172a;
+}
+html[data-theme="light"] .help-subheading {
+  color: #6366f1;
+}
+html[data-theme="light"] .help-footer-banner {
+  background: rgba(5, 192, 125, 0.08);
+  border-color: rgba(5, 192, 125, 0.28);
+}
+html[data-theme="light"] .help-footer-banner .footer-text h4 {
+  color: #0f172a;
+}
+
+/* Modals and generic dark overlays */
+html[data-theme="light"] .modal-overlay {
+  background: rgba(15, 23, 42, 0.35);
+}
+html[data-theme="light"] .modal-content {
+  background: #ffffff;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15);
+}
+
+/* Help: math blocks, theory boxes, inline code (these ship with dark gradients) */
+html[data-theme="light"] .help-eq-para code {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+html[data-theme="light"] .help-math-inline,
+html[data-theme="light"] .help-math-block {
+  color: #0f172a;
+}
+html[data-theme="light"] .help-math-block {
+  background: linear-gradient(165deg, #f8fafc, #eef2f7);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+html[data-theme="light"] .help-math-den,
+html[data-theme="light"] .help-math-sqrt-prefix,
+html[data-theme="light"] .help-math-set {
+  color: #334155;
+}
+html[data-theme="light"] .help-math-op,
+html[data-theme="light"] .help-math-sum-sub,
+html[data-theme="light"] .help-math-punct,
+html[data-theme="light"] .help-math-times-between,
+html[data-theme="light"] .help-math-caption,
+html[data-theme="light"] .help-math-desc-inline,
+html[data-theme="light"] .help-math-row-implies {
+  color: #64748b;
+}
+html[data-theme="light"] .help-math-minus,
+html[data-theme="light"] .help-math-abs,
+html[data-theme="light"] .help-math-op.help-math-minus {
+  color: #0f172a;
+}
+html[data-theme="light"] .help-math-fn {
+  color: #6366f1;
+}
+html[data-theme="light"] .help-math-num {
+  border-bottom-color: rgba(15, 23, 42, 0.3);
+}
+html[data-theme="light"] .help-math-sqrt-content {
+  border-left-color: rgba(15, 23, 42, 0.25);
+  border-top-color: rgba(15, 23, 42, 0.25);
+}
+html[data-theme="light"] .help-theory-box {
+  background: rgba(99, 102, 241, 0.06);
+  border-color: rgba(99, 102, 241, 0.22);
+  border-left-color: rgba(99, 102, 241, 0.65);
+}
+html[data-theme="light"] .help-theory-lead,
+html[data-theme="light"] .help-theory-list {
+  color: #334155;
+}
+html[data-theme="light"] .help-theory-list strong {
+  color: #0f172a;
+}
+html[data-theme="light"] .help-eq-note {
+  background: rgba(202, 138, 4, 0.08);
+  border-left-color: rgba(202, 138, 4, 0.45);
+  color: #475569;
+}
+
+/* ═════════════════════════════════════════════════════════════════
+   LIGHT THEME – per-page overrides
+   Each page ships its own CSS with hardcoded dark rgba surfaces.
+   These rules swap those for light equivalents WITHOUT changing dark mode.
+   ═════════════════════════════════════════════════════════════════ */
+
+/* ── Dashboard / ChartArea ───────────────────────────────── */
+html[data-theme="light"] .chart-grid-item {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .chart-grid-header {
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .label {
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .custom-tooltip {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+html[data-theme="light"] .icon-btn.active {
+  background: rgba(5, 192, 125, 0.14);
+}
+
+/* ── ML Studio (FeNOse) ──────────────────────────────────── */
+html[data-theme="light"] .ml-fenose-tabs {
+  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .ml-fenose-tab:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .ml-fenose-tab--active {
+  color: #0f172a;
+  background: rgba(5, 192, 125, 0.16);
+  box-shadow: 0 0 0 1px rgba(5, 192, 125, 0.35);
+}
+html[data-theme="light"] .ml-fenose-synth-au-block,
+html[data-theme="light"] .ml-fenose-train-folder-scope,
+html[data-theme="light"] .ml-fenose-batch-chart-hint,
+html[data-theme="light"] .ml-fenose-file-list,
+html[data-theme="light"] .ml-fenose-chart-surface {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .ml-fenose-chart-card,
+html[data-theme="light"] .ml-fenose-params-fieldset {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .ml-fenose-synth-au-row:hover,
+html[data-theme="light"] .ml-fenose-train-folder-row:hover,
+html[data-theme="light"] .ml-fenose-file-row:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .ml-fenose-model-select-sleek {
+  background-color: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2305c07d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+}
+html[data-theme="light"] .ml-fenose-model-select-sleek:hover:not(:disabled) {
+  background-color: #f8fafc;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(5, 192, 125, 0.12);
+}
+html[data-theme="light"] .ml-fenose-train-loss-placeholder {
+  background: #f1f5f9;
+  color: #334155;
+  border-color: rgba(5, 192, 125, 0.35);
+}
+html[data-theme="light"] .ml-fenose-batch-table-scroll {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+html[data-theme="light"] .ml-fenose-batch-table th {
+  background: #f1f5f9;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .ml-fenose-batch-table th,
+html[data-theme="light"] .ml-fenose-batch-table td {
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .ml-fenose-batch-table tbody tr:nth-child(even) td {
+  background: rgba(15, 23, 42, 0.03);
+}
+html[data-theme="light"] .ml-fenose-batch-table tbody tr:hover td {
+  background: rgba(5, 192, 125, 0.08);
+}
+html[data-theme="light"] .ml-fenose-batch-table-err {
+  color: #b91c1c;
+}
+html[data-theme="light"] .ml-fenose-batch-table-ok {
+  color: #058a5a;
+}
+html[data-theme="light"] .ml-fenose-import-toggle {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .ml-fenose-import-toggle:hover {
+  background: #f8fafc;
+  border-color: var(--accent-primary);
+  box-shadow: 0 4px 14px rgba(5, 192, 125, 0.12);
+}
+html[data-theme="light"] .ml-fenose-import-disclosure--open .ml-fenose-import-toggle {
+  background: #f8fafc;
+  border-color: var(--accent-primary);
+}
+html[data-theme="light"] .ml-fenose-model-import {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .ml-fenose-model-import__code {
+  background: rgba(15, 23, 42, 0.06);
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+html[data-theme="light"] .ml-fenose-model-import__subtitle strong {
+  color: #0f172a;
+}
+html[data-theme="light"] .ml-fenose-model-import__actions {
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .ml-fenose-btn-generate {
+  color: #0f172a;
+  background: linear-gradient(165deg, rgba(5, 192, 125, 0.1) 0%, #f8fafc 60%, #ffffff 100%);
+  box-shadow: 0 0 0 1px rgba(5, 192, 125, 0.25), 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .ml-fenose-btn-generate:hover:not(:disabled) {
+  background: linear-gradient(165deg, rgba(5, 192, 125, 0.14) 0%, #ffffff 60%, #ffffff 100%);
+}
+html[data-theme="light"] .ml-fenose-btn-generate:disabled {
+  background: #f1f5f9;
+}
+html[data-theme="light"] .ml-sidebar.glass-panel {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .target-item {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+/* ── AU Capture ──────────────────────────────────────────── */
+html[data-theme="light"] .au-capture-page {
+  background: var(--bg-primary);
+}
+html[data-theme="light"] .au-capture-header {
+  background: #ffffff;
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .au-capture-card {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .au-field select,
+html[data-theme="light"] .au-field input[type='number'],
+html[data-theme="light"] .au-field input[type='text'],
+html[data-theme="light"] .au-flow-value-wrap input[type='number'] {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+}
+html[data-theme="light"] .au-telemetry-preset-btn {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #334155;
+}
+html[data-theme="light"] .au-telemetry-preset-btn:hover:not(:disabled) {
+  background: rgba(5, 192, 125, 0.1);
+  border-color: rgba(5, 192, 125, 0.35);
+  color: #0f172a;
+}
+html[data-theme="light"] .au-preview {
+  background: #f1f5f9;
+  color: #4338ca;
+}
+html[data-theme="light"] .au-device-row {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+html[data-theme="light"] .au-device-row:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: rgba(5, 192, 125, 0.4);
+}
+html[data-theme="light"] .au-device-row--selected,
+html[data-theme="light"] .au-device-row--checked {
+  background: rgba(5, 192, 125, 0.08);
+  border-color: rgba(5, 192, 125, 0.45);
+}
+html[data-theme="light"] .au-multi-toggle {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #334155;
+}
+html[data-theme="light"] .au-collection-progress-track {
+  background: #e2e8f0;
+  border-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .au-sequence-list {
+  background: rgba(15, 23, 42, 0.02);
+}
+html[data-theme="light"] .au-custom-event-add input {
+  background: #ffffff;
+  color: #0f172a;
+}
+html[data-theme="light"] .au-btn-primary {
+  background: rgba(5, 192, 125, 0.12);
+  border-color: rgba(5, 192, 125, 0.4);
+  color: #058a5a;
+}
+html[data-theme="light"] .au-btn-secondary {
+  background: rgba(2, 132, 199, 0.1);
+  border-color: rgba(2, 132, 199, 0.35);
+  color: #0284c7;
+}
+html[data-theme="light"] .au-link-btn {
+  color: #0284c7;
+}
+html[data-theme="light"] .au-device-type-badge {
+  background: rgba(2, 132, 199, 0.1);
+  color: #0284c7;
+  border-color: rgba(2, 132, 199, 0.3);
+}
+html[data-theme="light"] .au-pump-flow-msg {
+  color: #058a5a;
+}
+
+/* ── Aroma Analysis ──────────────────────────────────────── */
+html[data-theme="light"] .text-input {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+}
+html[data-theme="light"] .active-files-info {
+  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .zoomable-plot-modal {
+  background: rgba(248, 250, 252, 0.98);
+}
+html[data-theme="light"] .zoomable-plot-modal .modal-body {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .baseline-tooltip-content {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .baseline-tooltip-content::before {
+  border-right-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .baseline-tooltip-header {
+  color: #64748b;
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .baseline-tooltip-bullet {
+  color: #0284c7;
+}
+
+/* ── Normalize ───────────────────────────────────────────── */
+html[data-theme="light"] .normalize-header {
+  background: #ffffff;
+}
+html[data-theme="light"] .normalize-concentration-bar {
+  background: #f8fafc;
+}
+html[data-theme="light"] .normalize-conc-label {
+  color: #64748b;
+}
+html[data-theme="light"] .normalize-conc-toggle {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #475569;
+}
+html[data-theme="light"] .norm-badge {
+  color: #058a5a;
+}
+
+/* ── Sensitivity ─────────────────────────────────────────── */
+html[data-theme="light"] .sensitivity-analysis-page .page-header {
+  background: #ffffff;
+}
+html[data-theme="light"] .sensitivity-analysis-page .page-title {
+  color: #0f172a;
+}
+html[data-theme="light"] .chart-container-glass {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .control-select {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+}
+html[data-theme="light"] .control-select:hover {
+  border-color: var(--accent-primary);
+}
+html[data-theme="light"] .info-card {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .info-card-value {
+  color: #0f172a;
+}
+html[data-theme="light"] .info-card-label {
+  color: #64748b;
+}
+
+/* ── Separability ────────────────────────────────────────── */
+html[data-theme="light"] .separability-header,
+html[data-theme="light"] .control-sidebar,
+html[data-theme="light"] .plot-main {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .styled-input {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+}
+html[data-theme="light"] .styled-button {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+html[data-theme="light"] .styled-button:disabled {
+  background: #e2e8f0;
+  color: #94a3b8;
+}
+
+/* ── Dilution math ───────────────────────────────────────── */
+html[data-theme="light"] .math-content .glass-panel {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .input-with-unit {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+}
+html[data-theme="light"] .unit {
+  background: #f1f5f9;
+  border-left-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .result-card,
+html[data-theme="light"] .mfc-card {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .warning-text {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* ── File Viewer ─────────────────────────────────────────── */
+html[data-theme="light"] .file-viewer-back {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+}
+html[data-theme="light"] .file-viewer-back:hover {
+  background: #f1f5f9;
+}
+html[data-theme="light"] .file-viewer-banner {
+  background: #f8fafc;
+  color: #475569;
+}
+html[data-theme="light"] .file-viewer-banner--error {
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+}
+html[data-theme="light"] .file-viewer-banner--warn {
+  background: rgba(202, 138, 4, 0.1);
+  color: #854d0e;
+}
+html[data-theme="light"] .file-viewer-frame,
+html[data-theme="light"] .file-viewer-code-wrap {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .file-viewer-plain {
+  background: #f8fafc;
+  color: #0f172a;
+}
+html[data-theme="light"] .file-viewer-secondary {
+  background: rgba(5, 192, 125, 0.08);
+  border-color: rgba(5, 192, 125, 0.4);
+  color: #058a5a;
+}
+html[data-theme="light"] .file-viewer-secondary:hover {
+  background: rgba(5, 192, 125, 0.14);
+}
+
+/* ── Code Studio (chrome around the Monaco editor) ───────
+   The Monaco editor itself, the output terminal and the matplotlib canvas
+   stay dark on purpose — a terminal/REPL on a white page is uncomfortable
+   (same convention as VS Code's terminal). Only the chrome flips. */
+html[data-theme="light"] .code-studio-page {
+  background: linear-gradient(165deg, #f8fafc, #eef2f7);
+  color: var(--text-primary);
+}
+html[data-theme="light"] .code-studio-files {
+  background: #f8fafc;
+  border-right-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .code-studio-package-row {
+  background: #f8fafc;
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .code-studio-package-input {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+  color: var(--text-primary);
+}
+html[data-theme="light"] .code-studio-breadcrumb {
+  color: #64748b;
+}
+html[data-theme="light"] .code-studio-file-tab {
+  color: #475569;
+}
+html[data-theme="light"] .code-studio-file-tab:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: #0f172a;
+}
+html[data-theme="light"] .code-studio-file-tab.is-active {
+  background: color-mix(in srgb, var(--accent-primary) 10%, #ffffff);
+  border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  color: var(--accent-primary);
+}
+html[data-theme="light"] .code-studio-btn {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+  color: #334155;
+}
+html[data-theme="light"] .code-studio-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+html[data-theme="light"] .code-studio-btn-ghost-sm {
+  color: #64748b;
+}
+html[data-theme="light"] .code-studio-btn-ghost-sm:hover {
+  background: rgba(15, 23, 42, 0.05);
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+}
+/* Editor chrome strip sits above the Monaco editor → keep it dark so the seam
+   between chrome and editor looks intentional. But lighten the border. */
+html[data-theme="light"] .code-studio-editor-chrome {
+  border-bottom-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .code-studio-output-err {
+  color: #b91c1c;
+}
+html[data-theme="light"] .code-studio-dirty {
+  color: #b45309;
+}
+
+/* ── Shared: color tokens used across many pages in light ── */
+html[data-theme="light"] .section-title {
+  color: #64748b;
+}
+
+/* ── MultiFileSelect ─────────────────────────────────────── */
+html[data-theme="light"] .multi-select-trigger {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+}
+html[data-theme="light"] .multi-select-trigger:hover {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.25);
+}
+html[data-theme="light"] .multi-select-dropdown {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .multi-select-option:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .chip {
+  background: rgba(5, 192, 125, 0.14);
+  color: #058a5a;
+}
+html[data-theme="light"] .more-chip {
+  background: rgba(15, 23, 42, 0.08);
+  color: #475569;
+}
+html[data-theme="light"] .select-all {
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .checkbox.checked {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
+}
+
+/* ── Dashboard Baseline modal ────────────────────────────── */
+html[data-theme="light"] .dashboard-baseline-overlay {
+  background: rgba(15, 23, 42, 0.35);
+}
+html[data-theme="light"] .dashboard-baseline-panel {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+html[data-theme="light"] .dashboard-baseline-heading-icon,
+html[data-theme="light"] .dashboard-baseline-card-cta {
+  color: var(--accent-primary);
+}
+html[data-theme="light"] .dashboard-baseline-sub,
+html[data-theme="light"] .dashboard-baseline-card-copy p,
+html[data-theme="light"] .dashboard-baseline-oor,
+html[data-theme="light"] .dashboard-baseline-tooltip-row.muted {
+  color: #475569;
+}
+html[data-theme="light"] .dashboard-baseline-tooltip {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+}
+html[data-theme="light"] .dashboard-baseline-tooltip-title {
+  color: #0f172a;
+}
+html[data-theme="light"] .dashboard-baseline-tooltip-row {
+  color: #334155;
+}
+html[data-theme="light"] .chart-grid-item.dashboard-baseline-card {
+  background: linear-gradient(145deg, #ffffff, #f8fafc);
+  border-color: rgba(5, 192, 125, 0.3);
+}
+html[data-theme="light"] .dashboard-baseline-card:hover {
+  box-shadow: 0 0 0 1px rgba(5, 192, 125, 0.45), 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .dashboard-baseline-mini {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .dashboard-baseline-tooltip-red strong {
+  color: #dc2626;
+}
+html[data-theme="light"] .dashboard-baseline-tooltip-yellow strong {
+  color: #b45309;
+}
+
+/* ── Gas System Design (flow canvas) ─────────────────────── */
+html[data-theme="light"] .toolbox-panel {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .tool-item {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .tool-item:hover {
+  background: #eef2f7;
+}
+html[data-theme="light"] .flow-area {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .custom-node {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .node-header {
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+
+/* ── Empty state (active drop target) ────────────────────── */
+html[data-theme="light"] .empty-state.active {
+  background: rgba(5, 192, 125, 0.08);
 }
 
 .spin {

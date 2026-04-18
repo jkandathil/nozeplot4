@@ -390,7 +390,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         background: 'rgba(248, 113, 113, 0.12)',
                         border: '1px solid rgba(248, 113, 113, 0.35)',
-                        color: '#fecaca',
+                        color: 'var(--btn-soft-text-danger)',
                         marginBottom: 12,
                         fontSize: '0.9rem',
                     }}
@@ -407,7 +407,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         background: 'rgba(251, 191, 36, 0.1)',
                         border: '1px solid rgba(251, 191, 36, 0.35)',
-                        color: '#fcd34d',
+                        color: 'var(--btn-soft-text-warn)',
                         marginBottom: 12,
                         fontSize: '0.85rem',
                     }}
@@ -426,8 +426,8 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                     marginBottom: 12,
                     padding: '14px 16px',
                     borderRadius: 10,
-                    border: '1px solid rgba(148, 163, 184, 0.2)',
-                    background: 'rgba(15, 23, 42, 0.35)',
+                    border: '1px solid var(--surface-panel-border)',
+                    background: 'var(--surface-panel-bg)',
                 }}
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200, flex: '1 1 200px' }}>
@@ -439,9 +439,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         style={{
                             padding: '8px 10px',
                             borderRadius: 8,
-                            border: '1px solid rgba(148, 163, 184, 0.25)',
-                            background: 'rgba(2, 6, 23, 0.6)',
-                            color: '#e2e8f0',
+                            border: '1px solid var(--surface-input-border)',
+                            background: 'var(--surface-input-bg)',
+                            color: 'var(--surface-input-text)',
                             fontSize: '0.85rem',
                         }}
                     >
@@ -466,9 +466,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         style={{
                             padding: '8px 10px',
                             borderRadius: 8,
-                            border: '1px solid rgba(148, 163, 184, 0.25)',
-                            background: 'rgba(2, 6, 23, 0.6)',
-                            color: '#e2e8f0',
+                            border: '1px solid var(--surface-input-border)',
+                            background: 'var(--surface-input-bg)',
+                            color: 'var(--surface-input-text)',
                             fontSize: '0.85rem',
                         }}
                     >
@@ -492,7 +492,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         border: '1px solid rgba(45, 212, 191, 0.35)',
                         background: 'rgba(45, 212, 191, 0.12)',
-                        color: '#5eead4',
+                        color: 'var(--btn-soft-text-teal)',
                         fontWeight: 600,
                         fontSize: '0.8rem',
                         cursor: supported && !busy ? 'pointer' : 'not-allowed',
@@ -513,9 +513,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         gap: 6,
                         padding: '9px 12px',
                         borderRadius: 8,
-                        border: '1px solid rgba(148, 163, 184, 0.25)',
-                        background: 'rgba(30, 41, 59, 0.5)',
-                        color: '#94a3b8',
+                        border: '1px solid var(--surface-input-border)',
+                        background: 'var(--surface-panel-bg)',
+                        color: 'var(--text-muted)',
                         cursor: supported && !busy ? 'pointer' : 'not-allowed',
                     }}
                 >
@@ -556,7 +556,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         border: '1px solid rgba(248, 113, 113, 0.35)',
                         background: 'rgba(248, 113, 113, 0.1)',
-                        color: '#fca5a5',
+                        color: 'var(--btn-soft-text-danger)',
                         fontWeight: 600,
                         fontSize: '0.8rem',
                         cursor: status !== 'Disconnected' || busy ? 'pointer' : 'not-allowed',
@@ -576,9 +576,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         gap: 6,
                         padding: '9px 12px',
                         borderRadius: 8,
-                        border: '1px solid rgba(148, 163, 184, 0.2)',
-                        background: 'rgba(30, 41, 59, 0.4)',
-                        color: '#cbd5e1',
+                        border: '1px solid var(--surface-panel-border)',
+                        background: 'var(--surface-panel-bg)',
+                        color: 'var(--btn-soft-text-muted)',
                         fontSize: '0.8rem',
                         cursor: lines.length ? 'pointer' : 'not-allowed',
                         opacity: lines.length ? 1 : 0.45,
@@ -600,7 +600,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         border: '1px solid rgba(34, 197, 94, 0.35)',
                         background: 'rgba(34, 197, 94, 0.1)',
-                        color: '#86efac',
+                        color: 'var(--btn-soft-text-success)',
                         fontSize: '0.8rem',
                         fontWeight: 600,
                         cursor: canSaveLog ? 'pointer' : 'not-allowed',
@@ -623,7 +623,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         border: '1px solid rgba(34, 197, 94, 0.25)',
                         background: 'rgba(34, 197, 94, 0.06)',
-                        color: '#bbf7d0',
+                        color: 'var(--btn-soft-text-success-2)',
                         fontSize: '0.8rem',
                         fontWeight: 600,
                         cursor: canSaveLog ? 'pointer' : 'not-allowed',
@@ -641,7 +641,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                     padding: '14px 16px',
                     borderRadius: 10,
                     border: '1px solid rgba(56, 189, 248, 0.22)',
-                    background: 'rgba(15, 23, 42, 0.45)',
+                    background: 'var(--surface-panel-bg-strong)',
                 }}
             >
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 8 }}>
@@ -669,9 +669,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                             minWidth: 200,
                             padding: '10px 12px',
                             borderRadius: 8,
-                            border: '1px solid rgba(148, 163, 184, 0.25)',
-                            background: 'rgba(2, 6, 23, 0.65)',
-                            color: '#e2e8f0',
+                            border: '1px solid var(--surface-input-border)',
+                            background: 'var(--surface-input-bg)',
+                            color: 'var(--surface-input-text)',
                             fontSize: '0.85rem',
                             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
                             resize: 'vertical',
@@ -689,9 +689,9 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                             style={{
                                 padding: '8px 10px',
                                 borderRadius: 8,
-                                border: '1px solid rgba(148, 163, 184, 0.25)',
-                                background: 'rgba(2, 6, 23, 0.6)',
-                                color: '#e2e8f0',
+                                border: '1px solid var(--surface-input-border)',
+                                background: 'var(--surface-input-bg)',
+                                color: 'var(--surface-input-text)',
                                 fontSize: '0.85rem',
                             }}
                         >
@@ -724,13 +724,13 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                 </div>
             </div>
 
-            <div style={{ ...panelChrome, fontSize: '0.8rem', color: '#94a3b8', marginBottom: 8 }}>
-                Status: <span style={{ color: '#e2e8f0' }}>{status}</span>
+            <div style={{ ...panelChrome, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+                Status: <span style={{ color: 'var(--text-primary)' }}>{status}</span>
                 {lines.length > 0 && (
                     <span style={{ marginLeft: 12 }}>
                         Lines in buffer: {lines.length}
                         {lines.length >= MAX_LINES && totalReceivedRef.current > MAX_LINES && (
-                            <span style={{ color: '#64748b' }}> (older lines trimmed)</span>
+                            <span style={{ color: 'var(--text-muted)' }}> (older lines trimmed)</span>
                         )}
                     </span>
                 )}
@@ -745,7 +745,7 @@ export default function SerialMonitorPage({ onSaveSerialLogToWorkspace }) {
                         borderRadius: 8,
                         background: 'rgba(34, 197, 94, 0.12)',
                         border: '1px solid rgba(34, 197, 94, 0.35)',
-                        color: '#86efac',
+                        color: 'var(--btn-soft-text-success)',
                         fontSize: '0.82rem',
                     }}
                 >

@@ -23,6 +23,10 @@ import {
     Usb,
     Layers,
     Terminal,
+    Code2,
+    Table2,
+    Eye,
+    Crosshair,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -989,11 +993,18 @@ const GUIDE_SECTIONS = [
             'CSV and Excel (.xlsx / .xls) import and parsing',
             'Session save/restore via .noze workspace files',
             '**AU capture:** live USB serial capture from supported aroma units (Chrome / Edge)',
+            '**SE Analysis:** generic multi-column CSV plotting (workspace file or upload)',
+            '**Code Studio:** Monaco editor for `.py` and text under the **Codes** folder; Run uses **Pyodide** in the browser',
+            '**Spreadsheet** grid with formulas (**HyperFormula**) and optional charts; **Viewer** for code, JSON, PDF, Word, and images',
+            '**Sensitivity** map for wide FeNO-style exports; **Serial monitor** for any USB UART device',
+            '**Polymer–CB** calculator (wt% ↔ volume % with densities)',
+            'Sidebar **Workspace** / **Menu** jump buttons; click the logo to collapse (**Zen**) to an icon rail',
         ],
         steps: [
             'On first launch, enter your display name (stored locally).',
             'Upload files or a folder from the sidebar; select a main file and optionally add comparison files.',
-            'Open the page you need from the sidebar (Dashboard, Normalize, Aroma, etc.).',
+            'Use **Workspace** / **Menu** in the sidebar to jump between file list and page buttons.',
+            'Open the module you need (Dashboard, SE Analysis, Normalize, Aroma, Drift Map, ML Studio, t-SNE, Code Studio, etc.).',
         ],
     },
     {
@@ -1018,6 +1029,31 @@ const GUIDE_SECTIONS = [
             'Select a main file in the sidebar.',
             'Optionally add comparison files and pick series from the compare UI.',
             'Click a small chart to open the zoomable single-chart view.',
+        ],
+    },
+    {
+        id: 'se-analysis',
+        icon: FileSpreadsheet,
+        title: 'SE Analysis',
+        subtitle: 'Plot any CSV (workspace or upload)',
+        intro:
+            '**SE Analysis** is a flexible plotting workspace for **tabular CSV data** that is not tied to the Aroma-specific pipeline. Pick numeric columns for the X axis and one or more Y series, optionally stack areas, and inspect the chart with zoom controls.',
+        fundamentals: [
+            '**Generic columns:** any CSV with a header row works; the app parses rows and lets you assign which column drives the horizontal axis.',
+            '**Workspace or disk:** load a file already in the workspace from the sidebar, or use **Upload CSV** to import from your computer.',
+            '**Composed chart:** lines and filled areas help compare multiple traces on one time or index axis.',
+        ],
+        implemented: [
+            'Workspace file selection plus local CSV upload',
+            'X-axis column picker and multi-column Y selection',
+            'Resizable control sidebar; optional axis min/max overrides',
+            'Zoom in / zoom out / reset chart extent',
+            'Clear file and start over without leaving the page',
+        ],
+        steps: [
+            'Open **SE Analysis** from the sidebar.',
+            'Choose a CSV from the workspace or click **Upload CSV**.',
+            'Select **X-Axis** and the columns to plot; adjust zoom or axis bounds if needed.',
         ],
     },
     {
@@ -1091,6 +1127,29 @@ const GUIDE_SECTIONS = [
         ],
     },
     {
+        id: 'sensitivity',
+        icon: Crosshair,
+        title: 'Sensitivity',
+        subtitle: 'Element map from wide aroma summaries',
+        intro:
+            '**Sensitivity** (sidebar: **Sensitivity**) is aimed at **wide tables** such as `aroma_analysis_*.csv` exports. It builds a **per-element (A1–H8)** view that combines **magnitude of response**, **separability-style** discrimination, and baseline context so you can see which cells carry the most usable signal.',
+        fundamentals: [
+            '**Wide vs long:** the page expects many sensor columns in one row per run — typical of batch aroma summaries rather than raw time-series CSVs.',
+            '**Together with Separability:** separability scores how well a sensor separates two concentration groups; sensitivity adds where the strongest %dR/R appears and how stable the baseline is.',
+            '**Preset element groups:** the UI can highlight known wiring / layout groups for quicker visual scanning.',
+        ],
+        implemented: [
+            'Scatter or map-style views over the 8×8 grid with tooltips (sensitivity %, separability S, baseline Ω, spread)',
+            'Concentration-aware colouring when metadata is available',
+            'Zoom and focus controls for dense layouts',
+        ],
+        steps: [
+            'Put an aroma summary (or compatible wide CSV) in the workspace and select it as the **main** file.',
+            'Open **Sensitivity** from the sidebar.',
+            'Explore the chart: hover nodes for metrics; cross-check with **Separability** for ranking sensors.',
+        ],
+    },
+    {
         id: 'ml-studio',
         icon: Brain,
         title: 'ML Studio',
@@ -1142,8 +1201,8 @@ const GUIDE_SECTIONS = [
     {
         id: 'recovery',
         icon: TrendingUp,
-        title: 'Recovery analysis',
-        subtitle: 'Adsorption & Desorption Kinetics',
+        title: 'Recovery analysis (Drift Map)',
+        subtitle: 'Adsorption, desorption, and baseline drift',
         intro:
             'Sensor "Recovery" is the time it takes for gas molecules to unbind from the sensor surface. This section analyzes the **speed and completeness** of that return to baseline.',
         fundamentals: [
@@ -1207,6 +1266,28 @@ const GUIDE_SECTIONS = [
         steps: [
             'Drag nodes from the palette to model your mass-flow rig.',
             'Connect components to show the flow path from tanks to the array.',
+        ],
+    },
+    {
+        id: 'polymer-cb',
+        icon: Blend,
+        title: 'Polymer–CB mix',
+        subtitle: 'Weight percent ↔ volume fraction',
+        intro:
+            'The **Polymer–CB** tool (sidebar tools grid) converts **carbon black loading** between **weight percent (wt%)** and **volume fraction (vol%)** for a polymer composite, using **carbon black density**, **polymer density**, and **ideal volume additivity**. It also shows **phr** (parts per hundred resin) readouts where applicable.',
+        fundamentals: [
+            '**Why densities matter:** wt% is measured on a mass balance; volume fraction needs each phase’s density to translate mass into occupied volume.',
+            '**Ideal mixing assumption:** the calculator uses the same closed-form mix as the app’s `polymerCbMix` utilities — suitable for lab estimates, not packed-bed or void-fraction corrections.',
+        ],
+        implemented: [
+            'Bidirectional mode: **wt% CB → vol%** or **vol% CB → wt%**',
+            'Editable ρ (carbon black) and ρ (polymer) defaults',
+            'Live-updating volume fraction, wt%, and phr display',
+        ],
+        steps: [
+            'Open **Polymer–CB** from the lower sidebar tools grid.',
+            'Pick the conversion direction and enter wt% or vol%.',
+            'Adjust densities if your materials differ from the defaults.',
         ],
     },
     {
@@ -1295,6 +1376,78 @@ const GUIDE_SECTIONS = [
         ],
     },
     {
+        id: 'code-studio',
+        icon: Code2,
+        title: 'Code Studio',
+        subtitle: 'Python and text in the Codes folder',
+        intro:
+            '**Code Studio** is a browser-based editor for scripts and notes stored under the **`Codes`** workspace folder. Python files can be **Run** with **Pyodide** (same major version as the bundled `pyodide` package). Output streams to the panel; **matplotlib** figures render in the dedicated **Plots** area instead of covering the whole page.',
+        fundamentals: [
+            '**No server Python:** execution is WASM in your tab — great for privacy, but not every **pip** package has a compatible wheel.',
+            '**micropip:** use **Install packages** for extra libraries when a Pyodide wheel exists; failures usually mean the package is not built for the browser.',
+            '**Save often:** **Ctrl/⌘+S** saves the active file into the workspace; **Ctrl/⌘+Enter** runs a `.py` file.',
+        ],
+        implemented: [
+            'Monaco editor with syntax highlighting for common languages',
+            'Files constrained to the **Codes** folder via the app workspace model',
+            'Run stdout/stderr capture with cooperative **time.sleep** mapping',
+            'Optional **micropip** installs; matplotlib mount target for in-app figures',
+        ],
+        steps: [
+            'Open **Code Studio** from the sidebar.',
+            'Create or open a file under **Codes**; edit your script.',
+            'For extra packages, type names in **Install packages** and install, then **import** in your script.',
+            'Click **Run** on a `.py` file to execute; read text output and **Plots (matplotlib)** below it.',
+        ],
+    },
+    {
+        id: 'spreadsheet',
+        icon: Table2,
+        title: 'Spreadsheet',
+        subtitle: 'Edit CSV in a grid; formulas and charts',
+        intro:
+            '**Spreadsheet** opens the selected workspace CSV in a **react-data-grid** editor with optional **HyperFormula** spreadsheet formulas and a **chart** panel for selections. **Save** writes the grid back to the workspace file so downstream tools (Dashboard, SE Analysis, etc.) see the new values.',
+        fundamentals: [
+            '**Same file everywhere:** saving updates the single workspace blob — treat large sheets carefully and export backups when needed.',
+            '**Formulas:** after enabling formula mode, use normal spreadsheet expressions compatible with HyperFormula in the app.',
+            '**Charts:** select ranges to define series; the chart is for visual QA, not a full BI suite.',
+        ],
+        implemented: [
+            'Grid editing with frozen row labels, column navigation, and a formula bar (`=SUM(A1:A10)`-style **HyperFormula** expressions)',
+            'Chart panel: **Set X** / **Set Y** / **+ X** / **+ Y** from highlighted cell ranges, **Plot XY**, **Clear ranges**, chart show/hide and **Max plot**',
+            '**Save** writes computed values back to the workspace CSV',
+            '**New sheet** in the sidebar creates a blank CSV in the spreadsheets area',
+        ],
+        steps: [
+            'Select a CSV in the workspace, then open **Spreadsheet** (or use **New sheet** for a blank file).',
+            'Edit cells; add formulas if enabled in the UI.',
+            'Click **Save** when finished; reopen other tools to use the updated data.',
+        ],
+    },
+    {
+        id: 'file-viewer',
+        icon: Eye,
+        title: 'Viewer',
+        subtitle: 'Preview code, documents, and media',
+        intro:
+            '**Viewer** opens a read-only preview of the selected workspace file. Text formats use syntax-friendly rendering where applicable; **PDF**, **Word (.docx)**, and **images** render in the browser when supported. Very large text files are **truncated** with a clear notice.',
+        fundamentals: [
+            '**Not an editor for everything:** binary-heavy workflows should still use desktop tools; Viewer is for quick inspection inside NozePlot.',
+            '**Spreadsheet vs Viewer:** editable tabular work goes to **Spreadsheet**; Viewer is best for code, logs, JSON, and documents.',
+        ],
+        implemented: [
+            'Kind detection for CSV-as-text, JSON, code, PDF, DOCX, and common image types',
+            'Syntax-coloured code blocks where the app recognises the language',
+            'Large-text guard (~1.2M characters) with truncation message',
+            '**Open in spreadsheet** button when the file is an editable workspace CSV',
+        ],
+        steps: [
+            'Select a file in the workspace and choose **Viewer** from the sidebar.',
+            'Scroll or read inline; for compatible CSVs use **Open in spreadsheet** to jump to the grid editor.',
+            'Close the viewer when done to return to your previous flow.',
+        ],
+    },
+    {
         id: 'equations-theory',
         icon: Sigma,
         title: 'Equations & statistical theory',
@@ -1305,6 +1458,7 @@ const GUIDE_SECTIONS = [
             'Normalize: fractional vs percent change definitions',
             'Aroma: moving average, absolute humidity, and median-based baselines',
             'Separability: detailed S-score formula with unbiased variance',
+            'Sensitivity view: σ-bands and normalised means for wide tables (see **Sensitivity** section)',
             'ML Studio: v1/v2 pipelines and PCA eigenvectors',
             't-SNE Explorer: FeNOse feature extraction per A1–H8, matrix normalisation, and t-SNE embedding (see the t-SNE Explorer guide section)',
         ],
@@ -1321,15 +1475,18 @@ const GUIDE_SECTIONS = [
         fundamentals: [
             '**Persistent State:** Settings like sensor names, filter windows, and selected models are saved to your browser database.',
             '**.noze Archives:** These files don\'t just contain data—they contain the "Analysis Session," including which files were being compared.',
-            '**File Immutability:** The app never "edits" your original CSV files; it creates "virtual views" of the data to preserve the original findings.',
+            '**File Immutability:** the app does not silently overwrite uploads on disk; workspace **Spreadsheet** saves and editor saves in **Codes** do update the stored workspace copy you are editing.',
         ],
         implemented: [
-            'Folder-based organization and batch file export',
+            'Folder-based organization, search, and multi-select where pages support **compare** files',
+            '**Upload Folder** / file upload row in the workspace strip; storage usage indicator',
             'Session Save/Restore via binary `.noze` snapshots',
             'Direct Excel to CSV conversion in the browser',
+            'Dedicated **Codes** folder for Code Studio assets; spreadsheet templates via **New sheet**',
         ],
         steps: [
             'Use folders to group replicates or concentrations.',
+            'Use **Workspace** / **Menu** jumps when the sidebar is long.',
             'Download a `.noze` session at the end of the day to backup your progress.',
         ],
     },
