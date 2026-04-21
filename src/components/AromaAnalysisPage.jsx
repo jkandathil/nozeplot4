@@ -1364,10 +1364,10 @@ const AromaAnalysisPage = ({ data, fileName, compareDataList = [], availableFile
                                 type="checkbox"
                                 checked={filterUnknown}
                                 onChange={(e) => setFilterUnknown(e.target.checked)}
-                                id="filter-unknown-chk"
+                                id="aroma-filter-unknown-chk"
                                 style={{ width: 14, height: 14, accentColor: '#10b981', cursor: 'pointer' }}
                             />
-                            <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem' }}>No Unknowns</label>
+                            <label htmlFor="aroma-filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.8rem' }}>No Unknowns</label>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <input

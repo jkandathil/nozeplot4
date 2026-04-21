@@ -1280,10 +1280,10 @@ const RecoveryAnalysisPage = ({
                             type="checkbox"
                             checked={filterUnknown}
                             onChange={(e) => setFilterUnknown(e.target.checked)}
-                            id="filter-unknown-chk"
+                            id="recovery-filter-unknown-chk"
                             style={{ width: 14, height: 14, accentColor: '#f59e0b', cursor: 'pointer', flexShrink: 0, marginTop: '2px' }}
                         />
-                        <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
+                        <label htmlFor="recovery-filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
                             <strong>No Unknowns</strong> <br />
                             <span style={{ color: '#94a3b8' }}>Ignores files that are not “known” plots: ppb/ppm in the name, raw ASU-style CSVs, catalog paths, in-file concentration columns, or SiAC32-V2 serial captures (CHR/RRF rows).</span>
                         </label>

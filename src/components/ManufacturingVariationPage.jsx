@@ -381,10 +381,10 @@ const ManufacturingVariationPage = ({ availableFiles = [], data, fileName, compa
                             type="checkbox"
                             checked={filterUnknown}
                             onChange={(e) => setFilterUnknown(e.target.checked)}
-                            id="filter-unknown-chk"
+                            id="mfg-filter-unknown-chk"
                             style={{ width: 14, height: 14, accentColor: '#f43f5e', cursor: 'pointer', flexShrink: 0, marginTop: '2px' }}
                         />
-                        <label htmlFor="filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
+                        <label htmlFor="mfg-filter-unknown-chk" style={{ margin: 0, cursor: 'pointer', fontSize: '0.75rem', lineHeight: 1.4, color: '#e2e8f0' }}>
                             <strong>No Unknowns</strong> <br />
                             <span style={{ color: '#94a3b8' }}>Ignores files that do not have a mapped concentration (e.g. unknown ppb/ppm) in their filename.</span>
                         </label>

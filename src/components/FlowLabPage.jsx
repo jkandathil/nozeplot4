@@ -3252,13 +3252,24 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             workerRef.current.postMessage({ type: 'start' });
             setRunning(true);
             setSolverWarning(null);
-            /* Steady-state auto-pause is allowed to re-fire on every
-               Resume — steadyReached oscillation handles the gating.
-               Duration-based pause is NOT re-armed here: a resume
+            /* Keep the steady-state auto-pause SUPPRESSED on resume.
+               At the moment the user clicks Run after convergence,
+               `residualHistory` is still full of sub-threshold entries,
+               so `steadyReached` is still true. If we reset
+               `autoPausedOnceRef` to false here the auto-pause effect
+               would immediately re-fire on the very next render and
+               pause the solver again — Run would appear to do nothing.
+               Leaving the ref at `true` means the pause only re-arms
+               once residuals destabilise (pulse, BC change, parameter
+               edit), which is handled by:
+                   `if (!steadyReached) autoPausedOnceRef.current = false`
+               in the steady-state effect below. This matches the
+               intended "keep marching past steady state" behaviour.
+               Duration-based pause is also NOT re-armed here: a resume
                without changing the Sim time means "keep marching past
                the previous target"; re-arm happens when the user
                bumps the target, handled by a separate effect below. */
-            autoPausedOnceRef.current = false;
+            autoPausedOnceRef.current = true;
         } else {
             startSolver();
         }

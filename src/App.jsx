@@ -8,7 +8,6 @@ import {
   BarChart2,
   Folder
 } from 'lucide-react';
-import { AnimatePresence } from 'framer-motion';
 import './App.css';
 import { fileManager } from './utils/db';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
@@ -109,13 +108,18 @@ function App() {
   const [activePage, setActivePage] = useState('home');
   const [spreadsheetTargetId, setSpreadsheetTargetId] = useState(null);
   const [fileViewerTargetId, setFileViewerTargetId] = useState(null);
-  /* Flow Lab hosts a live LBM worker + large sim state (residuals,
-     sensor histories, pulse banner, etc). Swapping it in & out of the
-     AnimatePresence would tear the worker down on every navigation.
-     We instead mount it once the user first visits the page and keep
-     it mounted thereafter, hiding / showing via CSS. Same pattern as
-     `au-capture-persistent-session` for the AU capture / serial flow. */
-  const [flowLabEverOpened, setFlowLabEverOpened] = useState(false);
+  /* Multi-tasking across the whole app: every page is lazily mounted
+     on first visit and then kept mounted (hidden via CSS) so its
+     long-running work survives navigation. This lets the user start a
+     Flow Lab LBM sim, jump to the Data Visualizer, open ML Studio,
+     edit a spreadsheet, etc., and come back to each feature exactly
+     where they left off — with workers, editor buffers, scroll state,
+     chart filters and unsaved edits all preserved.
+
+     AU capture is eagerly mounted (original behaviour) because its
+     Web Serial session / pump telemetry may run before the user
+     actively navigates to that page. */
+  const [everOpenedPages, setEverOpenedPages] = useState(() => new Set(['home']));
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
@@ -250,13 +254,18 @@ function App() {
     }
   }, [activePage]);
 
-  /* Remember the first visit to Flow Lab so the persistent mount below
-     actually renders. Subsequent navigations just toggle its `display`. */
+  /* Track the set of pages the user has opened at least once. The
+     persistent mount below renders a hidden container for each, so
+     navigating away and back doesn't tear down its state. */
   useEffect(() => {
-    if (activePage === 'flowLab' && !flowLabEverOpened) {
-      setFlowLabEverOpened(true);
-    }
-  }, [activePage, flowLabEverOpened]);
+    if (!activePage) return;
+    setEverOpenedPages((prev) => {
+      if (prev.has(activePage)) return prev;
+      const next = new Set(prev);
+      next.add(activePage);
+      return next;
+    });
+  }, [activePage]);
 
   // Common handler for adding files to processing queue
   const addFiles = useCallback(async (newFiles, targetFolderId = null) => {
@@ -1651,9 +1660,18 @@ function App() {
         ) : (
           <div className="content-area">
             {/*
-              Only AU capture stays mounted when hidden so Web Serial + timers keep running.
-              Other routes mount one at a time: mounting every page duplicated DOM ids (e.g. filter-unknown-chk)
-              so labels and focus targeted the wrong hidden controls.
+              Full-app multi-tasking: every page the user visits is
+              lazily mounted and then kept mounted inside a persistent
+              container that only toggles `display`. That way long-
+              running features (Flow Lab LBM worker, AU capture Web
+              Serial session, ML Studio / t-SNE computations, Code
+              Studio Monaco buffers, Spreadsheet edits, Serial monitor
+              streams, …) survive navigation — hop between them
+              freely and pick up each one exactly where you left off.
+
+              AU capture is eagerly mounted (even before the user's
+              first visit) to preserve the pre-existing behaviour for
+              its Web Serial + pump telemetry wiring.
             */}
             <div
               className="au-capture-persistent-session"
@@ -1666,168 +1684,219 @@ function App() {
               />
             </div>
 
-            {/* Flow Lab persistent session — once first opened, stays
-                mounted so the LBM worker + sim state survive navigation
-                to other pages (Data Visualizer, ML Studio, etc.). The
-                container uses `display: flex` only when active so the
-                page's internal flex layout still fills correctly. */}
-            {flowLabEverOpened && (
-              <div
-                className="flow-lab-persistent-session"
-                style={{
-                  display: activePage === 'flowLab' ? 'block' : 'none',
+            {/*
+              Lazy persistent mounts for every other page. We render the
+              page ONLY once it has been visited at least once; after
+              that it stays in the DOM and we simply toggle `display`
+              on navigation. This is why everOpenedPages is a growing
+              Set rather than a single ref — order stays stable across
+              renders.
+            */}
+            {[...everOpenedPages]
+              .filter((pageId) => pageId !== 'aromaUnitCapture' && pageId !== 'folderCompareAroma')
+              .map((pageId) => {
+                const isActive = activePage === pageId;
+                const shellStyle = {
+                  display: isActive ? 'block' : 'none',
                   height: '100%',
                   width: '100%',
-                }}
-                aria-hidden={activePage !== 'flowLab'}
-              >
-                <FlowLabPage
-                  workspaceFiles={files}
-                  onSaveJson={handleSaveJsonToWorkspace}
-                  onDeleteFile={deleteFile}
-                />
-              </div>
-            )}
-
-            {activePage !== 'aromaUnitCapture' && activePage !== 'flowLab' && (
-              <AnimatePresence mode="wait">
-                {activePage === 'home' ? (
-                  <HomePage
-                    key="home"
-                    files={files}
-                    selectedFileId={selectedFileId}
-                    parsedData={parsedData}
-                    onPageChange={setActivePage}
-                    onBrowse={open}
-                    onFileSelect={handleFileSelect}
-                    userName={userName}
-                  />
-                ) : activePage === 'help' ? (
-                  <HelpPage key="help" />
-                ) : activePage === 'gasDesign' ? (
-                  <GasSystemDesignPage key="gasDesign" />
-                ) : activePage === 'gasMath' ? (
-                  <GasDilutionMathPage key="gasMath" />
-                ) : activePage === 'polymerCbMix' ? (
-                  <PolymerCBMixPage key="polymerCbMix" />
-                ) : activePage === 'normalize' ? (
-                  <NormalizePage
-                    key="normalize"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                  />
-                ) : activePage === 'aromaAnalysis' ? (
-                  <AromaAnalysisPage
-                    key="aromaAnalysis"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                    availableFiles={files}
-                    onPageChange={setActivePage}
-                  />
-                ) : activePage === 'separability' ? (
-                  <SeparabilityAnalysisPage
-                    key="separability"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                    availableFiles={files}
-                    onPageChange={setActivePage}
-                  />
-                ) : activePage === 'sensitivity' ? (
-                  <SensitivityAnalysisPage
-                    key="sensitivity"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                  />
-                ) : activePage === 'recoveryAnalysis' ? (
-                  <RecoveryAnalysisPage
-                    key="recoveryAnalysis"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                    availableFiles={files}
-                    primaryFileId={selectedFileId}
-                  />
-                ) : activePage === 'manufacturing' ? (
-                  <ManufacturingVariationPage
-                    key="manufacturing"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                    availableFiles={files}
-                  />
-                ) : activePage === 'csvPlotter' ? (
-                  <CSVPlotterPage key="csvPlotter" workspaceFiles={files} selectedFileId={selectedFileId} />
-                ) : activePage === 'codeStudio' ? (
-                  <CodeStudioPage
-                    key="codeStudio"
-                    workspaceFiles={files}
-                    onSaveCode={handleSaveCodeToWorkspace}
-                    onDeleteFile={deleteFile}
-                  />
-                ) : activePage === 'spreadsheet' ? (
-                  <SpreadsheetPage
-                    key="spreadsheet"
-                    fileId={spreadsheetTargetId ?? selectedFileId}
-                    workspaceFiles={files}
-                    onSave={handleSaveWorkspaceCsv}
-                    onClose={() => setActivePage('dashboard')}
-                  />
-                ) : activePage === 'fileViewer' ? (
-                  <FileViewerPage
-                    key="fileViewer"
-                    fileId={fileViewerTargetId ?? selectedFileId}
-                    workspaceFiles={files}
-                    onClose={() => setActivePage('dashboard')}
-                    onOpenSpreadsheet={openSpreadsheetFromViewer}
-                  />
-                ) : activePage === 'serialMonitor' ? (
-                  <SerialMonitorPage
-                    key="serialMonitor"
-                    onSaveSerialLogToWorkspace={handleSaveSerialLogToWorkspace}
-                  />
-                ) : activePage === 'mlStudio' ? (
-                  <MLStudioPage
-                    key="mlStudio"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    compareDataList={compareDataList}
-                    workspaceFiles={files}
-                    workspaceSelectedFileId={selectedFileId}
-                    workspaceCompareFileIds={compareFileIds}
-                    onSaveJsonToWorkspace={handleSaveJsonToWorkspace}
-                    onUploadModelJsonToWorkspace={handleUploadModelJsonToWorkspace}
-                    onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
-                  />
-                ) : activePage === 'tsnePage' ? (
-                  <TSNEPage
-                    key="tsnePage"
-                    workspaceFiles={files}
-                    onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
-                  />
-                ) : !selectedFileId ? (
-                  <EmptyState
-                    key="empty"
-                    isDragActive={isDragActive}
-                    hasFiles={files.length > 0}
-                    onBrowse={open}
-                  />
-                ) : (
-                  <ChartArea
-                    key="chart"
-                    data={parsedData?.data}
-                    fileName={parsedData?.fileName}
-                    loading={loading}
-                    compareDataList={compareDataList}
-                    availableFiles={files.filter(f => f.id !== selectedFileId)}
-                    onCompareSelect={handleCompareSelect}
-                    compareFileIds={compareFileIds}
-                  />
-                )}
-              </AnimatePresence>
-            )}
+                };
+                let content = null;
+                switch (pageId) {
+                  case 'home':
+                    content = (
+                      <HomePage
+                        files={files}
+                        selectedFileId={selectedFileId}
+                        parsedData={parsedData}
+                        onPageChange={setActivePage}
+                        onBrowse={open}
+                        onFileSelect={handleFileSelect}
+                        userName={userName}
+                      />
+                    );
+                    break;
+                  case 'help':
+                    content = <HelpPage />;
+                    break;
+                  case 'gasDesign':
+                    content = <GasSystemDesignPage />;
+                    break;
+                  case 'gasMath':
+                    content = <GasDilutionMathPage />;
+                    break;
+                  case 'polymerCbMix':
+                    content = <PolymerCBMixPage />;
+                    break;
+                  case 'normalize':
+                    content = (
+                      <NormalizePage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                      />
+                    );
+                    break;
+                  case 'aromaAnalysis':
+                    content = (
+                      <AromaAnalysisPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                        availableFiles={files}
+                        onPageChange={setActivePage}
+                      />
+                    );
+                    break;
+                  case 'separability':
+                    content = (
+                      <SeparabilityAnalysisPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                        availableFiles={files}
+                        onPageChange={setActivePage}
+                      />
+                    );
+                    break;
+                  case 'sensitivity':
+                    content = (
+                      <SensitivityAnalysisPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                      />
+                    );
+                    break;
+                  case 'recoveryAnalysis':
+                    content = (
+                      <RecoveryAnalysisPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                        availableFiles={files}
+                        primaryFileId={selectedFileId}
+                      />
+                    );
+                    break;
+                  case 'manufacturing':
+                    content = (
+                      <ManufacturingVariationPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                        availableFiles={files}
+                      />
+                    );
+                    break;
+                  case 'csvPlotter':
+                    content = (
+                      <CSVPlotterPage workspaceFiles={files} selectedFileId={selectedFileId} />
+                    );
+                    break;
+                  case 'codeStudio':
+                    content = (
+                      <CodeStudioPage
+                        workspaceFiles={files}
+                        onSaveCode={handleSaveCodeToWorkspace}
+                        onDeleteFile={deleteFile}
+                      />
+                    );
+                    break;
+                  case 'flowLab':
+                    content = (
+                      <FlowLabPage
+                        workspaceFiles={files}
+                        onSaveJson={handleSaveJsonToWorkspace}
+                        onDeleteFile={deleteFile}
+                      />
+                    );
+                    break;
+                  case 'spreadsheet':
+                    content = (
+                      <SpreadsheetPage
+                        fileId={spreadsheetTargetId ?? selectedFileId}
+                        workspaceFiles={files}
+                        onSave={handleSaveWorkspaceCsv}
+                        onClose={() => setActivePage('dashboard')}
+                      />
+                    );
+                    break;
+                  case 'fileViewer':
+                    content = (
+                      <FileViewerPage
+                        fileId={fileViewerTargetId ?? selectedFileId}
+                        workspaceFiles={files}
+                        onClose={() => setActivePage('dashboard')}
+                        onOpenSpreadsheet={openSpreadsheetFromViewer}
+                      />
+                    );
+                    break;
+                  case 'serialMonitor':
+                    content = (
+                      <SerialMonitorPage
+                        onSaveSerialLogToWorkspace={handleSaveSerialLogToWorkspace}
+                      />
+                    );
+                    break;
+                  case 'mlStudio':
+                    content = (
+                      <MLStudioPage
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        compareDataList={compareDataList}
+                        workspaceFiles={files}
+                        workspaceSelectedFileId={selectedFileId}
+                        workspaceCompareFileIds={compareFileIds}
+                        onSaveJsonToWorkspace={handleSaveJsonToWorkspace}
+                        onUploadModelJsonToWorkspace={handleUploadModelJsonToWorkspace}
+                        onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
+                      />
+                    );
+                    break;
+                  case 'tsnePage':
+                    content = (
+                      <TSNEPage
+                        workspaceFiles={files}
+                        onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
+                      />
+                    );
+                    break;
+                  case 'dashboard':
+                  default:
+                    /* Dashboard behaves dynamically: empty state when
+                       no file is picked, ChartArea otherwise. Mounting
+                       it once and letting props drive the swap is fine
+                       because both branches are cheap. */
+                    content = !selectedFileId ? (
+                      <EmptyState
+                        isDragActive={isDragActive}
+                        hasFiles={files.length > 0}
+                        onBrowse={open}
+                      />
+                    ) : (
+                      <ChartArea
+                        data={parsedData?.data}
+                        fileName={parsedData?.fileName}
+                        loading={loading}
+                        compareDataList={compareDataList}
+                        availableFiles={files.filter((f) => f.id !== selectedFileId)}
+                        onCompareSelect={handleCompareSelect}
+                        compareFileIds={compareFileIds}
+                      />
+                    );
+                    break;
+                }
+                return (
+                  <div
+                    key={pageId}
+                    className={`persistent-page persistent-page--${pageId}`}
+                    style={shellStyle}
+                    aria-hidden={!isActive}
+                  >
+                    {content}
+                  </div>
+                );
+              })}
           </div>
         )}
       </main>
