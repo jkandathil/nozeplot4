@@ -491,7 +491,7 @@ html[data-theme="light"] .fl-sensor-summary {
     line-height: 1;
     backdrop-filter: blur(6px);
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
-    animation: fl-pulse-banner-in 0.22s ease-out, fl-pulse-banner-out 0.35s ease-in 2.65s forwards;
+    animation: fl-pulse-banner-in 0.22s ease-out;
     white-space: nowrap;
 }
 .fl-pulse-banner--start {
@@ -534,10 +534,6 @@ html[data-theme="light"] .fl-pulse-banner--end {
 @keyframes fl-pulse-banner-in {
     from { opacity: 0; transform: translate(-50%, -6px); }
     to   { opacity: 1; transform: translate(-50%, 0); }
-}
-@keyframes fl-pulse-banner-out {
-    from { opacity: 1; transform: translate(-50%, 0); }
-    to   { opacity: 0; transform: translate(-50%, -6px); }
 }
 @keyframes fl-pulse-banner-pulse {
     0%, 100% { transform: scale(1); opacity: 1; }
@@ -2721,4 +2717,316 @@ html[data-theme="light"] .fl-tour-step-label { color: #4f46e5; }
     }
 }
 
+
+/* ───────── Data Visualizer modal ─────────
+   Dashboard-style multi-chart layout with per-plot legend chips, metric
+   selector, and drag-handle-free reorder (↑/↓ buttons). Built to sit
+   on top of .fl-fx-modal from the generic file-picker modal kit. */
+.fl-viz-modal {
+    width: min(1240px, 96vw);
+    height: min(860px, 92vh);
+}
+.fl-viz-subtitle {
+    margin-left: 10px;
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 11.5px;
+}
+.fl-viz-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.015), transparent);
+    flex-wrap: wrap;
+}
+.fl-viz-tb-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.fl-viz-tb-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-right: 2px;
+}
+.fl-viz-tb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.14);
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, transform 0.05s;
+}
+.fl-viz-tb-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.24);
+    border-color: rgba(129, 140, 248, 0.75);
+}
+.fl-viz-tb-btn:active:not(:disabled) { transform: translateY(1px); }
+.fl-viz-tb-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.fl-viz-tb-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+.fl-viz-tb-field > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+.fl-viz-tb-field select {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font-size: 11.5px;
+}
+.fl-viz-tb-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+.fl-viz-tb-check input[type="checkbox"] {
+    accent-color: #6366f1;
+    margin: 0;
+}
+
+.fl-viz-body {
+    flex: 1;
+    overflow: auto;
+    padding: 14px;
+    background: var(--bg-panel, #1e293b);
+    display: grid;
+    gap: 14px;
+}
+.fl-viz-body--cols-1 { grid-template-columns: 1fr; }
+.fl-viz-body--cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.fl-viz-empty {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 240px;
+    color: var(--text-muted);
+    text-align: center;
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    padding: 24px;
+}
+.fl-viz-empty-ttl {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+    margin-top: 6px;
+}
+.fl-viz-empty-sub { font-size: 11.5px; }
+
+.fl-viz-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+.fl-viz-card:hover {
+    border-color: rgba(99, 102, 241, 0.45);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.fl-viz-card-hd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.025), transparent);
+}
+.fl-viz-card-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    outline: none;
+    transition: background 0.1s, border-color 0.1s;
+}
+.fl-viz-card-title:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border-color);
+}
+.fl-viz-card-title:focus {
+    background: var(--bg-body, #0f172a);
+    border-color: rgba(99, 102, 241, 0.65);
+}
+.fl-viz-card-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.fl-viz-metric-select {
+    background: var(--bg-body, #0f172a);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font-size: 11.5px;
+    margin-right: 4px;
+}
+.fl-viz-card-iconbtn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    border-radius: 4px;
+    padding: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.08s, color 0.08s, border-color 0.08s;
+}
+.fl-viz-card-iconbtn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+.fl-viz-card-iconbtn:disabled { opacity: 0.35; cursor: not-allowed; }
+.fl-viz-card-iconbtn--danger:hover:not(:disabled) {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(248, 113, 113, 0.12);
+}
+
+.fl-viz-card-legend {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+.fl-viz-legend-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+}
+.fl-viz-chip {
+    --viz-chip-color: #60a5fa;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, color 0.1s, opacity 0.1s;
+    opacity: 0.55;
+}
+.fl-viz-chip:hover { opacity: 1; border-color: var(--viz-chip-color); color: var(--text-primary); }
+.fl-viz-chip.is-on {
+    opacity: 1;
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--viz-chip-color) 14%, transparent);
+    border-color: color-mix(in srgb, var(--viz-chip-color) 55%, transparent);
+}
+.fl-viz-chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--viz-chip-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--viz-chip-color) 30%, transparent);
+    flex: 0 0 auto;
+}
+.fl-viz-chip-label {
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fl-viz-legend-tools {
+    display: inline-flex;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.fl-viz-ghostbtn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.fl-viz-ghostbtn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+.fl-viz-card-chart {
+    padding: 8px 12px 12px 8px;
+    min-height: 260px;
+}
+.fl-viz-chart-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 11.5px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+}
+
+/* Light-theme overrides */
+html[data-theme="light"] .fl-viz-modal {
+    background: #ffffff;
+}
+html[data-theme="light"] .fl-viz-chip.is-on {
+    background: color-mix(in srgb, var(--viz-chip-color) 18%, #ffffff);
+    color: #0f172a;
+}
+html[data-theme="light"] .fl-viz-body {
+    background: #f8fafc;
+}
 

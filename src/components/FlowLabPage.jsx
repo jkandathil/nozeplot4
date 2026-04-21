@@ -11,6 +11,7 @@ import {
     Combine, Minus as SubtractIcon, SquareAsterisk, Shuffle, Shapes,
     MoveHorizontal, FlipHorizontal, RotateCw, ArrowUpRight, Link2,
     Activity, Gauge, Droplets, Waves, Crosshair, BarChart2,
+    Plus, ChevronUp, LayoutGrid,
 } from 'lucide-react';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip,
@@ -7795,111 +7796,360 @@ function downloadFileToDisk(file) {
     }
 }
 
-const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
-    // Convert dictionary of arrays to array of objects for Recharts
-    const keys = Object.keys(sensorHistory || {});
-    if (keys.length === 0) return null;
-    
-    // Find the master time array (the one with the most samples)
-    const masterKey = keys.reduce((a, b) =>
-        sensorHistory[a].t_s.length >= sensorHistory[b].t_s.length ? a : b);
-    const timeArray = sensorHistory[masterKey].t_s;
-    
-    const chartData = timeArray.map((t, i) => {
-        const row = { t: Number(t.toFixed(4)) };
-        for (const k of keys) {
-            const arr = sensorHistory[k];
-            const idx = Math.min(i, arr.t_s.length - 1);
-            if (speciesEnabled && Number.isFinite(arr.c[idx])) {
-                row[`${k}_c`] = Number(arr.c[idx].toFixed(4));
-            }
-            if (Number.isFinite(arr.u[idx])) {
-                row[`${k}_u`] = Number(arr.u[idx].toFixed(4));
-            }
-        }
-        return row;
-    });
+/* ───────────────────────────────────────────────────────────────────
+ * Data Visualizer
+ *
+ * A dashboard-style modal that lets the user add / remove / reorder as
+ * many charts as they want, each with independent metric selection
+ * (concentration, velocity, or c·|u| flux) and per-series visibility
+ * toggles. Chart data is computed once and shared across cards so
+ * toggling series is O(1) — only the rendered <Line> set changes.
+ * ─────────────────────────────────────────────────────────────────── */
+const VIZ_METRIC_LABELS = {
+    c: { title: 'Concentration c(t)', yLabel: 'c', short: 'c' },
+    u: { title: 'Velocity |u|(t)',    yLabel: '|u|', short: '|u|' },
+    cu:{ title: 'Flux c·|u|(t)',      yLabel: 'c·|u|', short: 'c·|u|' },
+};
+const VIZ_PALETTE = ['#60a5fa', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb923c', '#4ade80', '#22d3ee'];
+let _vizPlotCounter = 0;
+const makeVizPlot = (metric, keys) => {
+    _vizPlotCounter += 1;
+    return {
+        id: `viz_${_vizPlotCounter}_${Math.random().toString(36).slice(2, 6)}`,
+        title: VIZ_METRIC_LABELS[metric]?.title || metric,
+        metric,
+        /* Default all series visible. Sensor keys absent on construction
+           (e.g. a probe added later in the run) will be added lazily in
+           the per-plot legend effect. */
+        series: Object.fromEntries(keys.map((k) => [k, true])),
+    };
+};
 
-    const palette = ['#60a5fa', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb923c', '#4ade80'];
+const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
+    const keys = Object.keys(sensorHistory || {});
+
+    /* Master time array — longest history wins so all sensors fit. */
+    const masterKey = keys.length
+        ? keys.reduce((a, b) => (sensorHistory[a].t_s.length >= sensorHistory[b].t_s.length ? a : b))
+        : null;
+    const timeArray = masterKey ? sensorHistory[masterKey].t_s : [];
+    const tMaxAll = timeArray.length ? timeArray[timeArray.length - 1] : 0;
+
+    const colorFor = useCallback((k) => {
+        if (k === 'INLET') return '#94a3b8';
+        const idx = Math.max(0, keys.indexOf(k));
+        return VIZ_PALETTE[idx % VIZ_PALETTE.length];
+    }, [keys]);
+
+    /* Dashboard state — plots array is authoritative. */
+    const [plots, setPlots] = useState(() => {
+        const initial = [];
+        if (speciesEnabled) initial.push(makeVizPlot('c', keys));
+        initial.push(makeVizPlot('u', keys));
+        return initial;
+    });
+    const [timeRangeS, setTimeRangeS] = useState(0);   // 0 = all
+    const [columns, setColumns] = useState(1);
+    const [showMarkers, setShowMarkers] = useState(false);
+    const [smooth, setSmooth] = useState(true);
+    const [logY, setLogY] = useState(false);
+
+    /* Lazily fill in newly-appeared sensor keys on each render so if a
+       user adds a point probe mid-run, the existing plots pick it up
+       with visibility ON. */
+    useEffect(() => {
+        setPlots((prev) => {
+            let changed = false;
+            const next = prev.map((p) => {
+                const missing = keys.filter((k) => !(k in p.series));
+                if (!missing.length) return p;
+                changed = true;
+                const series = { ...p.series };
+                for (const k of missing) series[k] = true;
+                return { ...p, series };
+            });
+            return changed ? next : prev;
+        });
+    }, [keys.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const addPlot = useCallback((metric) => {
+        setPlots((ps) => [...ps, makeVizPlot(metric, keys)]);
+    }, [keys]);
+    const removePlot = useCallback((id) => setPlots((ps) => ps.filter((p) => p.id !== id)), []);
+    const movePlot = useCallback((id, dir) => setPlots((ps) => {
+        const idx = ps.findIndex((p) => p.id === id);
+        if (idx < 0) return ps;
+        const j = idx + dir;
+        if (j < 0 || j >= ps.length) return ps;
+        const next = ps.slice();
+        const [item] = next.splice(idx, 1);
+        next.splice(j, 0, item);
+        return next;
+    }), []);
+    const setPlotTitle = useCallback((id, title) => setPlots((ps) => ps.map((p) => (p.id === id ? { ...p, title } : p))), []);
+    const setPlotMetric = useCallback((id, metric) => setPlots((ps) => ps.map((p) => (p.id === id ? { ...p, metric } : p))), []);
+    const toggleSeries = useCallback((id, key) => setPlots((ps) => ps.map((p) => {
+        if (p.id !== id) return p;
+        return { ...p, series: { ...p.series, [key]: !(p.series[key] !== false) } };
+    })), []);
+    const setAllSeries = useCallback((id, on) => setPlots((ps) => ps.map((p) => {
+        if (p.id !== id) return p;
+        const series = {};
+        for (const k of keys) series[k] = !!on;
+        return { ...p, series };
+    })), [keys]);
+
+    /* Build chart rows once, with optional trailing-window filter. A
+       single shared array feeds every plot — Recharts picks out the
+       metric-specific dataKeys it needs. */
+    const tCutoff = timeRangeS > 0 ? Math.max(0, tMaxAll - timeRangeS) : -Infinity;
+    const chartData = useMemo(() => {
+        if (!timeArray.length) return [];
+        const out = [];
+        for (let i = 0; i < timeArray.length; i++) {
+            const t = timeArray[i];
+            if (t < tCutoff) continue;
+            const row = { t: Number(t.toFixed(4)) };
+            for (const k of keys) {
+                const arr = sensorHistory[k];
+                if (!arr) continue;
+                const idx = Math.min(i, arr.t_s.length - 1);
+                const c = arr.c?.[idx];
+                const u = arr.u?.[idx];
+                if (Number.isFinite(c)) row[`${k}_c`] = c;
+                if (Number.isFinite(u)) row[`${k}_u`] = u;
+                if (Number.isFinite(c) && Number.isFinite(u)) row[`${k}_cu`] = c * u;
+            }
+            out.push(row);
+        }
+        return out;
+    }, [timeArray, keys, sensorHistory, tCutoff]);
+
+    if (keys.length === 0) return null;
+
+    const cardHeightCss = columns === 1 ? 'min(62vh, 520px)' : 'min(50vh, 420px)';
 
     return createPortal(
-        <div className="fl-fx-backdrop" role="dialog" aria-modal="true" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-            <div className="fl-fx-modal" style={{ width: '80%', height: '80%', display: 'flex', flexDirection: 'column' }}>
+        <div
+            className="fl-fx-backdrop"
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        >
+            <div className="fl-fx-modal fl-viz-modal">
                 <div className="fl-fx-hd">
                     <div className="fl-fx-title">
                         <BarChart2 size={16} /> Data Visualizer
+                        <span className="fl-viz-subtitle">
+                            {plots.length} plot{plots.length === 1 ? '' : 's'} · {keys.length} series · {tMaxAll.toFixed(2)} s of data
+                        </span>
                     </div>
-                    <button className="fl-fx-close" onClick={onClose}><CloseIcon size={16} /></button>
+                    <button className="fl-fx-close" onClick={onClose} aria-label="Close"><CloseIcon size={16} /></button>
                 </div>
-                <div className="fl-fx-body" style={{ flex: 1, padding: 24, overflow: 'auto', backgroundColor: 'var(--bg-panel, #1e293b)' }}>
-                    {speciesEnabled && (
-                        <div style={{ height: '45%', minHeight: 300, marginBottom: 32 }}>
-                            <h3 style={{ margin: '0 0 16px 0', fontSize: 14, color: 'var(--text-bright)' }}>Concentration c(t)</h3>
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #334155)" />
-                                    <XAxis 
-                                        dataKey="t" 
-                                        type="number" 
-                                        domain={['auto', 'auto']}
-                                        tickFormatter={(t) => `${t.toFixed(2)}s`}
-                                        stroke="var(--text-muted, #94a3b8)"
-                                    />
-                                    <YAxis stroke="var(--text-muted, #94a3b8)" />
-                                    <RechartsTooltip 
-                                        contentStyle={{ backgroundColor: 'var(--bg-body, #0f172a)', borderColor: 'var(--border-color, #334155)', color: 'var(--text-bright, #f8fafc)' }}
-                                        labelFormatter={(t) => `Time: ${t}s`}
-                                    />
-                                    <Legend />
-                                    {keys.map((k, i) => (
-                                        <Line
-                                            key={`${k}_c`}
-                                            type="monotone"
-                                            dataKey={`${k}_c`}
-                                            name={sensorHistory[k].label || k}
-                                            stroke={k === 'INLET' ? '#94a3b8' : palette[i % palette.length]}
-                                            strokeDasharray={k === 'INLET' ? '5 5' : ''}
-                                            dot={false}
-                                            isAnimationActive={false}
-                                        />
-                                    ))}
-                                </LineChart>
-                            </ResponsiveContainer>
-                        </div>
-                    )}
-                    <div style={{ height: '45%', minHeight: 300 }}>
-                        <h3 style={{ margin: '0 0 16px 0', fontSize: 14, color: 'var(--text-bright)' }}>Velocity |u|(t)</h3>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #334155)" />
-                                <XAxis 
-                                    dataKey="t" 
-                                    type="number" 
-                                    domain={['auto', 'auto']}
-                                    tickFormatter={(t) => `${t.toFixed(2)}s`}
-                                    stroke="var(--text-muted, #94a3b8)"
-                                />
-                                <YAxis stroke="var(--text-muted, #94a3b8)" />
-                                <RechartsTooltip 
-                                    contentStyle={{ backgroundColor: 'var(--bg-body, #0f172a)', borderColor: 'var(--border-color, #334155)', color: 'var(--text-bright, #f8fafc)' }}
-                                    labelFormatter={(t) => `Time: ${t}s`}
-                                />
-                                <Legend />
-                                {keys.map((k, i) => (
-                                    <Line
-                                        key={`${k}_u`}
-                                        type="monotone"
-                                        dataKey={`${k}_u`}
-                                        name={sensorHistory[k].label || k}
-                                        stroke={k === 'INLET' ? '#94a3b8' : palette[i % palette.length]}
-                                        strokeDasharray={k === 'INLET' ? '5 5' : ''}
-                                        dot={false}
-                                        isAnimationActive={false}
-                                    />
-                                ))}
-                            </LineChart>
-                        </ResponsiveContainer>
+
+                <div className="fl-viz-toolbar">
+                    <div className="fl-viz-tb-group">
+                        <span className="fl-viz-tb-label">Add plot</span>
+                        <button
+                            type="button"
+                            className="fl-viz-tb-btn"
+                            onClick={() => addPlot('c')}
+                            disabled={!speciesEnabled}
+                            title={speciesEnabled ? 'Add a concentration c(t) plot' : 'Enable Species transport to plot concentration'}
+                        >
+                            <Plus size={12} /> c(t)
+                        </button>
+                        <button type="button" className="fl-viz-tb-btn" onClick={() => addPlot('u')} title="Add a velocity |u|(t) plot">
+                            <Plus size={12} /> |u|(t)
+                        </button>
+                        <button
+                            type="button"
+                            className="fl-viz-tb-btn"
+                            onClick={() => addPlot('cu')}
+                            disabled={!speciesEnabled}
+                            title={speciesEnabled ? 'Add a flux c·|u|(t) plot' : 'Enable Species transport to plot flux'}
+                        >
+                            <Plus size={12} /> c·|u|(t)
+                        </button>
                     </div>
+
+                    <div className="fl-viz-tb-group">
+                        <label className="fl-viz-tb-field" title="Trailing window: show only the last N seconds of data. Useful for pulse close-ups.">
+                            <span>Window</span>
+                            <select value={timeRangeS} onChange={(e) => setTimeRangeS(Number(e.target.value))}>
+                                <option value={0}>All</option>
+                                <option value={1}>Last 1 s</option>
+                                <option value={2}>Last 2 s</option>
+                                <option value={5}>Last 5 s</option>
+                                <option value={10}>Last 10 s</option>
+                                <option value={30}>Last 30 s</option>
+                            </select>
+                        </label>
+                        <label className="fl-viz-tb-field" title="Stack all plots in one column (easier comparison of same time axis) or side-by-side.">
+                            <span><LayoutGrid size={11} /> Layout</span>
+                            <select value={columns} onChange={(e) => setColumns(Number(e.target.value))}>
+                                <option value={1}>1 column</option>
+                                <option value={2}>2 columns</option>
+                            </select>
+                        </label>
+                        <label className="fl-viz-tb-check" title="Render dots on each sample so individual data points are visible.">
+                            <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
+                            <span>Markers</span>
+                        </label>
+                        <label className="fl-viz-tb-check" title="Catmull-Rom smoothing between samples (monotone). Uncheck for raw step-accurate traces.">
+                            <input type="checkbox" checked={smooth} onChange={(e) => setSmooth(e.target.checked)} />
+                            <span>Smooth</span>
+                        </label>
+                        <label className="fl-viz-tb-check" title="Use a log-scaled Y axis (useful for decay tails spanning orders of magnitude).">
+                            <input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} />
+                            <span>Log Y</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div className={`fl-viz-body fl-viz-body--cols-${columns}`}>
+                    {plots.length === 0 ? (
+                        <div className="fl-viz-empty">
+                            <BarChart2 size={28} />
+                            <div className="fl-viz-empty-ttl">No plots yet</div>
+                            <div className="fl-viz-empty-sub">Use the buttons above to add a concentration, velocity, or flux chart.</div>
+                        </div>
+                    ) : plots.map((p, pi) => {
+                        const metricLabel = VIZ_METRIC_LABELS[p.metric] || { yLabel: p.metric };
+                        const visibleKeys = keys.filter((k) => p.series[k] !== false);
+                        return (
+                            <div key={p.id} className="fl-viz-card">
+                                <div className="fl-viz-card-hd">
+                                    <input
+                                        className="fl-viz-card-title"
+                                        value={p.title}
+                                        onChange={(e) => setPlotTitle(p.id, e.target.value)}
+                                        spellCheck={false}
+                                        aria-label="Plot title"
+                                    />
+                                    <div className="fl-viz-card-tools">
+                                        <select
+                                            value={p.metric}
+                                            onChange={(e) => setPlotMetric(p.id, e.target.value)}
+                                            className="fl-viz-metric-select"
+                                            title="Metric plotted on the Y axis"
+                                        >
+                                            <option value="c" disabled={!speciesEnabled}>Concentration c</option>
+                                            <option value="u">Velocity |u|</option>
+                                            <option value="cu" disabled={!speciesEnabled}>Flux c·|u|</option>
+                                        </select>
+                                        <button
+                                            type="button"
+                                            className="fl-viz-card-iconbtn"
+                                            onClick={() => movePlot(p.id, -1)}
+                                            disabled={pi === 0}
+                                            title="Move up"
+                                            aria-label="Move plot up"
+                                        >
+                                            <ChevronUp size={13} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="fl-viz-card-iconbtn"
+                                            onClick={() => movePlot(p.id, +1)}
+                                            disabled={pi === plots.length - 1}
+                                            title="Move down"
+                                            aria-label="Move plot down"
+                                        >
+                                            <ChevronDown size={13} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="fl-viz-card-iconbtn fl-viz-card-iconbtn--danger"
+                                            onClick={() => removePlot(p.id)}
+                                            title="Remove plot"
+                                            aria-label="Remove plot"
+                                        >
+                                            <Trash2 size={13} />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="fl-viz-card-legend">
+                                    <div className="fl-viz-legend-chips">
+                                        {keys.map((k) => {
+                                            const on = p.series[k] !== false;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={k}
+                                                    className={`fl-viz-chip${on ? ' is-on' : ''}`}
+                                                    onClick={() => toggleSeries(p.id, k)}
+                                                    title={on ? `Hide ${sensorHistory[k].label || k}` : `Show ${sensorHistory[k].label || k}`}
+                                                    style={{ '--viz-chip-color': colorFor(k) }}
+                                                >
+                                                    <span className="fl-viz-chip-dot" />
+                                                    <span className="fl-viz-chip-label">{sensorHistory[k].label || k}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="fl-viz-legend-tools">
+                                        <button type="button" className="fl-viz-ghostbtn" onClick={() => setAllSeries(p.id, true)}>Show all</button>
+                                        <button type="button" className="fl-viz-ghostbtn" onClick={() => setAllSeries(p.id, false)}>Hide all</button>
+                                    </div>
+                                </div>
+
+                                <div className="fl-viz-card-chart" style={{ height: cardHeightCss }}>
+                                    {visibleKeys.length === 0 ? (
+                                        <div className="fl-viz-chart-empty">No series selected — click a chip above to show a sensor.</div>
+                                    ) : (
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <LineChart data={chartData} margin={{ top: 8, right: 24, left: 8, bottom: 28 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #334155)" />
+                                                <XAxis
+                                                    dataKey="t"
+                                                    type="number"
+                                                    domain={['auto', 'auto']}
+                                                    tickFormatter={(t) => `${Number(t).toFixed(2)}s`}
+                                                    stroke="var(--text-muted, #94a3b8)"
+                                                    label={{ value: 'time (s)', position: 'insideBottom', offset: -8, fill: 'var(--text-muted, #94a3b8)', fontSize: 11 }}
+                                                />
+                                                <YAxis
+                                                    stroke="var(--text-muted, #94a3b8)"
+                                                    scale={logY ? 'log' : 'auto'}
+                                                    domain={logY ? ['auto', 'auto'] : ['auto', 'auto']}
+                                                    allowDataOverflow={logY}
+                                                    label={{ value: metricLabel.yLabel, angle: -90, position: 'insideLeft', fill: 'var(--text-muted, #94a3b8)', fontSize: 11 }}
+                                                />
+                                                <RechartsTooltip
+                                                    contentStyle={{
+                                                        backgroundColor: 'var(--bg-body, #0f172a)',
+                                                        borderColor: 'var(--border-color, #334155)',
+                                                        color: 'var(--text-bright, #f8fafc)',
+                                                        fontSize: 12,
+                                                    }}
+                                                    labelFormatter={(t) => `t = ${Number(t).toFixed(4)} s`}
+                                                    formatter={(value, name) => [Number(value).toExponential(3), name]}
+                                                />
+                                                <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
+                                                {visibleKeys.map((k) => (
+                                                    <Line
+                                                        key={`${k}_${p.metric}`}
+                                                        type={smooth ? 'monotone' : 'linear'}
+                                                        dataKey={`${k}_${p.metric}`}
+                                                        name={sensorHistory[k].label || k}
+                                                        stroke={colorFor(k)}
+                                                        strokeWidth={k === 'INLET' ? 1.5 : 2}
+                                                        strokeDasharray={k === 'INLET' ? '5 5' : ''}
+                                                        dot={showMarkers ? { r: 2 } : false}
+                                                        activeDot={{ r: 4 }}
+                                                        isAnimationActive={false}
+                                                        connectNulls={false}
+                                                    />
+                                                ))}
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
         </div>,
