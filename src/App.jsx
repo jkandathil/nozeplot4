@@ -109,6 +109,13 @@ function App() {
   const [activePage, setActivePage] = useState('home');
   const [spreadsheetTargetId, setSpreadsheetTargetId] = useState(null);
   const [fileViewerTargetId, setFileViewerTargetId] = useState(null);
+  /* Flow Lab hosts a live LBM worker + large sim state (residuals,
+     sensor histories, pulse banner, etc). Swapping it in & out of the
+     AnimatePresence would tear the worker down on every navigation.
+     We instead mount it once the user first visits the page and keep
+     it mounted thereafter, hiding / showing via CSS. Same pattern as
+     `au-capture-persistent-session` for the AU capture / serial flow. */
+  const [flowLabEverOpened, setFlowLabEverOpened] = useState(false);
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
@@ -242,6 +249,14 @@ function App() {
       setFileViewerTargetId(null);
     }
   }, [activePage]);
+
+  /* Remember the first visit to Flow Lab so the persistent mount below
+     actually renders. Subsequent navigations just toggle its `display`. */
+  useEffect(() => {
+    if (activePage === 'flowLab' && !flowLabEverOpened) {
+      setFlowLabEverOpened(true);
+    }
+  }, [activePage, flowLabEverOpened]);
 
   // Common handler for adding files to processing queue
   const addFiles = useCallback(async (newFiles, targetFolderId = null) => {
@@ -1651,7 +1666,30 @@ function App() {
               />
             </div>
 
-            {activePage !== 'aromaUnitCapture' && (
+            {/* Flow Lab persistent session — once first opened, stays
+                mounted so the LBM worker + sim state survive navigation
+                to other pages (Data Visualizer, ML Studio, etc.). The
+                container uses `display: flex` only when active so the
+                page's internal flex layout still fills correctly. */}
+            {flowLabEverOpened && (
+              <div
+                className="flow-lab-persistent-session"
+                style={{
+                  display: activePage === 'flowLab' ? 'block' : 'none',
+                  height: '100%',
+                  width: '100%',
+                }}
+                aria-hidden={activePage !== 'flowLab'}
+              >
+                <FlowLabPage
+                  workspaceFiles={files}
+                  onSaveJson={handleSaveJsonToWorkspace}
+                  onDeleteFile={deleteFile}
+                />
+              </div>
+            )}
+
+            {activePage !== 'aromaUnitCapture' && activePage !== 'flowLab' && (
               <AnimatePresence mode="wait">
                 {activePage === 'home' ? (
                   <HomePage
@@ -1727,13 +1765,6 @@ function App() {
                     key="codeStudio"
                     workspaceFiles={files}
                     onSaveCode={handleSaveCodeToWorkspace}
-                    onDeleteFile={deleteFile}
-                  />
-                ) : activePage === 'flowLab' ? (
-                  <FlowLabPage
-                    key="flowLab"
-                    workspaceFiles={files}
-                    onSaveJson={handleSaveJsonToWorkspace}
                     onDeleteFile={deleteFile}
                   />
                 ) : activePage === 'spreadsheet' ? (

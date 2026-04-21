@@ -144,6 +144,19 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
 
     const [csvExportBusy, setCsvExportBusy] = useState(false);
     const [auDevicesExpanded, setAuDevicesExpanded] = useState(false);
+    /* Flow Lab broadcasts its running state via `flowlab-running-change`
+       so the nav button can show a live "sim running" dot even while
+       the user is on a different page (the Flow Lab component stays
+       mounted in the background — see App.jsx). */
+    const [flowLabRunning, setFlowLabRunning] = useState(
+        () => (typeof window !== 'undefined' && !!window.__flowLabRunning)
+    );
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const onChange = (e) => setFlowLabRunning(!!e?.detail?.running);
+        window.addEventListener('flowlab-running-change', onChange);
+        return () => window.removeEventListener('flowlab-running-change', onChange);
+    }, []);
     /** Which sticky jump control matches scroll position: page nav (top) vs workspace block */
     const [sidebarJumpActive, setSidebarJumpActive] = useState('menu');
 
@@ -324,34 +337,54 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'mlStudio', title: 'FeNOse ML Studio', Icon: Brain },
                         { page: 'tsnePage', title: 't-SNE explorer', Icon: Atom },
                         { page: 'help', title: 'Help', Icon: BookOpen },
-                    ].map(({ page, title, Icon }) => (
-                        <button
-                            key={page}
-                            type="button"
-                            onClick={() => onPageChange?.(page)}
-                            title={title}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: 40,
-                                height: 34,
-                                padding: 0,
-                                border: 'none',
-                                borderRadius: 8,
-                                cursor: 'pointer',
-                                background:
-                                    activePage === page
-                                        ? page === 'codeStudio'
-                                            ? 'rgba(0, 222, 147, 0.16)'
-                                            : 'rgba(56, 189, 248, 0.18)'
-                                        : 'transparent',
-                                color: activePage === page ? 'var(--accent-primary)' : 'var(--text-muted)',
-                            }}
-                        >
-                            <Icon size={15} strokeWidth={activePage === page ? 2.25 : 2} />
-                        </button>
-                    ))}
+                    ].map(({ page, title, Icon }) => {
+                        const showFlowLabDot = page === 'flowLab' && flowLabRunning;
+                        return (
+                            <button
+                                key={page}
+                                type="button"
+                                onClick={() => onPageChange?.(page)}
+                                title={showFlowLabDot ? `${title} — simulation running` : title}
+                                style={{
+                                    position: 'relative',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: 40,
+                                    height: 34,
+                                    padding: 0,
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    cursor: 'pointer',
+                                    background:
+                                        activePage === page
+                                            ? page === 'codeStudio'
+                                                ? 'rgba(0, 222, 147, 0.16)'
+                                                : 'rgba(56, 189, 248, 0.18)'
+                                            : 'transparent',
+                                    color: activePage === page ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                }}
+                            >
+                                <Icon size={15} strokeWidth={activePage === page ? 2.25 : 2} />
+                                {showFlowLabDot && (
+                                    <span
+                                        aria-hidden
+                                        className="sidebar-live-dot"
+                                        style={{
+                                            position: 'absolute',
+                                            top: 4,
+                                            right: 6,
+                                            width: 6,
+                                            height: 6,
+                                            borderRadius: '50%',
+                                            background: '#22c55e',
+                                            boxShadow: '0 0 0 2px rgba(34,197,94,0.25)',
+                                        }}
+                                    />
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
             )}
 
@@ -465,13 +498,38 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                 >
                     <Code2 size={13} /> Code Studio
                 </button>
-                <button
-                    onClick={() => onPageChange?.('flowLab')}
-                    {...toolBtnProps(activePage === 'flowLab', 'rgba(56,189,248,0.18)', '#38bdf8')}
-                    title="Flow Lab — draw 2D gas path, set inlet/outlet/walls, simulate flow"
-                >
-                    <Wind size={13} /> Flow Lab
-                </button>
+                {(() => {
+                    const flp = toolBtnProps(activePage === 'flowLab', 'rgba(56,189,248,0.18)', '#38bdf8');
+                    return (
+                        <button
+                            onClick={() => onPageChange?.('flowLab')}
+                            className={flp.className}
+                            style={{ ...flp.style, position: 'relative' }}
+                            title={
+                                flowLabRunning
+                                    ? 'Flow Lab — simulation running in background'
+                                    : 'Flow Lab — draw 2D gas path, set inlet/outlet/walls, simulate flow'
+                            }
+                        >
+                            <Wind size={13} /> Flow Lab
+                            {flowLabRunning && (
+                                <span
+                                    aria-hidden
+                                    className="sidebar-live-dot"
+                                    style={{
+                                        marginLeft: 2,
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: '50%',
+                                        background: '#22c55e',
+                                        boxShadow: '0 0 0 2px rgba(34,197,94,0.25)',
+                                        flexShrink: 0,
+                                    }}
+                                />
+                            )}
+                        </button>
+                    );
+                })()}
                 <button
                     onClick={() => onPageChange?.('normalize')}
                     {...toolBtnProps(activePage === 'normalize', 'rgba(251,191,36,0.15)', '#fbbf24')}

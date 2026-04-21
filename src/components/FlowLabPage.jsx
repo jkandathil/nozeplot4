@@ -805,6 +805,19 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const [inletU_m_s, setInletU_m_s] = useState(0.1);
     const [colormap, setColormap] = useState('turbo');
     const [running, setRunning] = useState(false);
+    /* Broadcast running state so other parts of the app (e.g. the
+       Sidebar's Flow Lab nav button) can show a "sim running" dot while
+       the user is on a different page. The Sidebar listens for this
+       event; if nobody listens, this is a cheap no-op. */
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.__flowLabRunning = !!running;
+            window.dispatchEvent(
+                new CustomEvent('flowlab-running-change', { detail: { running: !!running } })
+            );
+        } catch { /* ignore */ }
+    }, [running]);
     const [solverInfo, setSolverInfo] = useState(null); // {nx, ny, tau, dx_m, dt_s, bbox}
     const [field, setField] = useState(null); // {nx, ny, umag, umax, iter, residual}
     const [solverWarning, setSolverWarning] = useState(null);
@@ -3217,6 +3230,17 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const pauseSolver = useCallback(() => {
         if (workerRef.current) workerRef.current.postMessage({ type: 'pause' });
         setRunning(false);
+        /* Drop the pulse banner on pause — it's a run-time indicator, so
+           when the solver is parked the banner is no longer meaningful.
+           Reset prevCInletRef so the edge detector re-fires on the next
+           field post (pulse active → "in progress" banner returns on
+           Resume; pulse already ended → no banner, as intended). */
+        if (pulseBannerTimerRef.current) {
+            clearTimeout(pulseBannerTimerRef.current);
+            pulseBannerTimerRef.current = null;
+        }
+        setPulseBanner(null);
+        prevCInletRef.current = 0;
     }, []);
 
     /** Resume an already-initialised (paused) solver, or start a fresh
