@@ -38,6 +38,7 @@
     "nanoid": "^5.1.6",
     "onnxruntime-web": "^1.24.3",
     "papaparse": "^5.5.3",
+    "polygon-clipping": "^0.15.7",
     "pyodide": "^0.26.4",
     "react": "^19.2.0",
     "react-data-grid": "^7.0.0-beta.47",

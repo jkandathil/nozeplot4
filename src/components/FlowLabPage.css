@@ -1,0 +1,2724 @@
+/**
+ * Flow Lab — 2D gas-path designer.
+ *
+ * Layout is a vertical stack:
+ *   [toolbar] [main (3-col grid)] [status]
+ * The middle row fills all remaining height, and the canvas column
+ * grabs any leftover width after the fixed left/right panels.
+ */
+
+.fl-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+}
+
+/* ───────── Toolbar ───────── */
+.fl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+    overflow-x: auto;
+}
+.fl-toolgroup {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.fl-sep {
+    width: 1px;
+    align-self: stretch;
+    min-height: 22px;
+    background: var(--border-color);
+    margin: 2px 4px;
+    opacity: 0.7;
+    flex-shrink: 0;
+}
+.fl-spacer { flex: 1; }
+
+.fl-toolbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 9px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 500;
+    flex-shrink: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.fl-toolbtn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+.fl-toolbtn.is-active {
+    background: rgba(5, 192, 125, 0.15);
+    color: var(--accent-primary);
+    border-color: rgba(5, 192, 125, 0.35);
+}
+.fl-toolbtn-primary {
+    background: linear-gradient(135deg, rgba(5, 192, 125, 0.25), rgba(16, 185, 129, 0.22));
+    color: var(--accent-primary);
+    border-color: rgba(5, 192, 125, 0.45);
+}
+.fl-toolbtn[disabled], .fl-toolbtn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* ── Ribbon-style toolgroup (caption + button row) ───────── */
+.fl-tg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px 6px 3px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid transparent;
+    flex-shrink: 0;
+    flex-grow: 0;
+    flex-basis: auto;
+}
+.fl-tg:hover {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.05);
+}
+.fl-tg-label {
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    opacity: 0.55;
+    padding: 1px 4px 0;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+.fl-tg-body {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+}
+.fl-tg-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(5, 192, 125, 0.22);
+    color: var(--accent-primary);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    opacity: 1;
+    border: 1px solid rgba(5, 192, 125, 0.35);
+    line-height: 1;
+}
+html[data-theme="light"] .fl-tg:hover {
+    background: rgba(15, 23, 42, 0.035);
+    border-color: rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .fl-tg-label {
+    color: #475569;
+    opacity: 0.85;
+}
+html[data-theme="light"] .fl-tg-badge {
+    background: rgba(5, 192, 125, 0.15);
+    color: #047857;
+    border-color: rgba(5, 192, 125, 0.4);
+}
+
+/* ── Open-project dropdown ── */
+.fl-open-project {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px 0 9px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+.fl-open-project:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+.fl-open-select {
+    background: transparent;
+    color: inherit;
+    border: none;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 5px 4px;
+    max-width: 180px;
+}
+.fl-open-select:disabled { cursor: not-allowed; opacity: 0.55; }
+.fl-open-select option { background: var(--bg-elevated, #111827); color: var(--text-primary); }
+
+.fl-save-status {
+    font-size: 0.75rem;
+    color: var(--accent-primary);
+    margin-right: 8px;
+    max-width: 260px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fl-current-file {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    margin-right: 10px;
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.2px;
+}
+html[data-theme="light"] .fl-current-file { color: #475569; }
+
+.fl-unit-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-left: 4px;
+}
+.fl-unit-toggle button {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    padding: 5px 9px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+.fl-unit-toggle button:hover { color: var(--text-primary); }
+.fl-unit-toggle button.is-active {
+    background: var(--accent-primary);
+    color: #0b1220;
+}
+
+/* Simulation ↔ CAD mode segmented toggle (lives in the toolbar ribbon). */
+.fl-mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.35);
+}
+.fl-mode-toggle button {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.fl-mode-toggle button + button {
+    border-left: 1px solid var(--border-color);
+}
+.fl-mode-toggle button:hover {
+    color: var(--text-primary);
+    background: rgba(56, 189, 248, 0.08);
+}
+.fl-mode-toggle button.is-active {
+    background: var(--accent-primary);
+    color: #0b1220;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+html[data-theme="light"] .fl-mode-toggle {
+    background: rgba(255, 255, 255, 0.6);
+}
+html[data-theme="light"] .fl-mode-toggle button.is-active {
+    color: #ffffff;
+}
+
+.fl-re-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.12);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* ───────── Main area ───────── */
+.fl-main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 220px 1fr 280px;
+    min-height: 0;
+    overflow: hidden;
+    transition: grid-template-columns 0.18s ease;
+}
+
+.fl-left, .fl-right {
+    padding: 10px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: padding 0.18s ease, border-width 0.18s ease;
+}
+.fl-right {
+    border-right: none;
+    border-left: 1px solid var(--border-color);
+}
+
+/* Collapsed side panels — the grid column collapses to 0 (set inline
+ * via style.gridTemplateColumns), but we also have to neutralise the
+ * panel chrome so no padding / border bleeds into the canvas. */
+.fl-left.is-collapsed,
+.fl-right.is-collapsed {
+    padding: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: 0;
+}
+.fl-main--no-left .fl-left,
+.fl-main--no-right .fl-right {
+    min-width: 0;
+}
+
+/* Floating edge toggles that sit on the canvas so the panels can be
+ * restored even while they are fully collapsed. */
+.fl-canvas-wrap { position: relative; }
+.fl-edge-toggle {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 45;
+    width: 20px;
+    height: 48px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: rgba(15, 23, 42, 0.55);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 6px;
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    opacity: 0.55;
+    transition: opacity 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+.fl-edge-toggle:hover {
+    opacity: 1;
+    background: rgba(30, 41, 59, 0.85);
+}
+.fl-edge-toggle--left { left: 4px; }
+.fl-edge-toggle--right { right: 4px; }
+.fl-edge-toggle.is-closed {
+    opacity: 0.9;
+    background: rgba(59, 130, 246, 0.35);
+    border-color: rgba(96, 165, 250, 0.5);
+}
+html[data-theme="light"] .fl-edge-toggle {
+    background: rgba(255, 255, 255, 0.82);
+    color: #0f172a;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .fl-edge-toggle:hover {
+    background: #ffffff;
+}
+html[data-theme="light"] .fl-edge-toggle.is-closed {
+    background: rgba(59, 130, 246, 0.14);
+    border-color: rgba(59, 130, 246, 0.38);
+    color: #1d4ed8;
+}
+
+.fl-panel {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.fl-panel-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+}
+
+.fl-entity-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    margin-bottom: 3px;
+    border: 1px solid transparent;
+}
+.fl-entity-row:hover { background: rgba(255, 255, 255, 0.04); }
+.fl-entity-row.is-sel {
+    background: rgba(5, 192, 125, 0.12);
+    border-color: rgba(5, 192, 125, 0.3);
+    color: var(--accent-primary);
+}
+.fl-entity-type { font-weight: 600; text-transform: capitalize; }
+.fl-entity-sub  { color: var(--text-muted); font-size: 0.72rem; }
+
+.fl-entity-hint {
+    font-size: 0.68rem;
+    line-height: 1.4;
+    margin: -2px 0 8px;
+    padding: 0 2px;
+}
+.fl-entity-list-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+.fl-entity-cb {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding-left: 2px;
+    cursor: pointer;
+}
+.fl-entity-cb input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent-primary, #05b07d);
+    cursor: pointer;
+}
+.fl-entity-list-row .fl-entity-row {
+    flex: 1;
+    margin-bottom: 0;
+    min-width: 0;
+}
+.fl-entity-row.is-multi:not(.is-sel) {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.08);
+}
+.fl-marquee-overlay {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+    border: 1px dashed rgba(96, 165, 250, 0.95);
+    background: rgba(59, 130, 246, 0.14);
+    box-sizing: border-box;
+}
+html[data-theme="light"] .fl-marquee-overlay {
+    border-color: rgba(37, 99, 235, 0.85);
+    background: rgba(59, 130, 246, 0.12);
+}
+
+/* Sim-time + residence-time summary above the sensor charts.
+   Two-column kv grid plus an optional full-width hint row. */
+.fl-sensor-summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.06);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    font-size: 0.72rem;
+}
+html[data-theme="light"] .fl-sensor-summary {
+    background: rgba(59, 130, 246, 0.05);
+    border-color: rgba(37, 99, 235, 0.18);
+}
+
+/* Aroma-pulse start / end banner. Pins to the top-centre of the
+   canvas wrap and fades itself in/out. `--start` = teal success,
+   `--end` = amber warning. No pointer events so it never hijacks
+   drawing. */
+.fl-pulse-banner {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    line-height: 1;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+    animation: fl-pulse-banner-in 0.22s ease-out, fl-pulse-banner-out 0.35s ease-in 2.65s forwards;
+    white-space: nowrap;
+}
+.fl-pulse-banner--start {
+    background: rgba(16, 185, 129, 0.18);
+    border: 1px solid rgba(16, 185, 129, 0.55);
+    color: #a7f3d0;
+}
+.fl-pulse-banner--end {
+    background: rgba(245, 158, 11, 0.18);
+    border: 1px solid rgba(245, 158, 11, 0.55);
+    color: #fde68a;
+}
+html[data-theme="light"] .fl-pulse-banner--start {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(5, 150, 105, 0.7);
+    color: #065f46;
+}
+html[data-theme="light"] .fl-pulse-banner--end {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(217, 119, 6, 0.75);
+    color: #92400e;
+}
+.fl-pulse-banner-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+    animation: fl-pulse-banner-pulse 1s ease-in-out infinite;
+}
+.fl-pulse-banner-ttl { font-weight: 600; }
+.fl-pulse-banner-sub {
+    opacity: 0.85;
+    font-weight: 400;
+    font-size: 0.72rem;
+    padding-left: 6px;
+    border-left: 1px solid currentColor;
+    margin-left: 2px;
+}
+@keyframes fl-pulse-banner-in {
+    from { opacity: 0; transform: translate(-50%, -6px); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes fl-pulse-banner-out {
+    from { opacity: 1; transform: translate(-50%, 0); }
+    to   { opacity: 0; transform: translate(-50%, -6px); }
+}
+@keyframes fl-pulse-banner-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.35); opacity: 0.7; }
+}
+html[data-theme="light"] .fl-entity-row.is-multi:not(.is-sel) {
+    border-color: rgba(217, 119, 6, 0.5);
+    background: rgba(251, 191, 36, 0.12);
+}
+
+.fl-help {
+    list-style: none;
+    padding: 0; margin: 0;
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.fl-help li + li { margin-top: 4px; }
+.fl-help kbd {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 0.7rem;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ───────── Canvas ───────── */
+.fl-canvas-wrap {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-primary);
+    user-select: none;
+}
+
+/* ── XY axes gizmo (bottom-left, fixed) ── */
+.fl-axes-gizmo {
+    position: absolute;
+    left: 10px;
+    bottom: 34px;            /* clear the status bar */
+    z-index: 4;
+    pointer-events: none;    /* purely informational */
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+.fl-axes-bg {
+    fill: rgba(15, 23, 42, 0.55);
+    stroke: rgba(148, 163, 184, 0.35);
+    stroke-width: 1;
+    backdrop-filter: blur(4px);
+}
+.fl-axes-origin { fill: #e2e8f0; }
+.fl-axes-x,
+.fl-axes-x-head { stroke: #f87171; fill: #f87171; stroke-width: 1.8; stroke-linecap: round; }
+.fl-axes-x-head { stroke: none; }
+.fl-axes-y,
+.fl-axes-y-head { stroke: #34d399; fill: #34d399; stroke-width: 1.8; stroke-linecap: round; }
+.fl-axes-y-head { stroke: none; }
+.fl-axes-label-x,
+.fl-axes-label-y {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 10px;
+    font-weight: 700;
+}
+.fl-axes-label-x { fill: #f87171; }
+.fl-axes-label-y { fill: #34d399; }
+.fl-axes-caption {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 8.5px;
+    fill: rgba(226, 232, 240, 0.8);
+}
+html[data-theme="light"] .fl-axes-bg {
+    fill: rgba(255, 255, 255, 0.75);
+    stroke: rgba(15, 23, 42, 0.18);
+}
+html[data-theme="light"] .fl-axes-origin { fill: #0f172a; }
+html[data-theme="light"] .fl-axes-x,
+html[data-theme="light"] .fl-axes-x-head,
+html[data-theme="light"] .fl-axes-label-x { color: #dc2626; fill: #dc2626; stroke: #dc2626; }
+html[data-theme="light"] .fl-axes-y,
+html[data-theme="light"] .fl-axes-y-head,
+html[data-theme="light"] .fl-axes-label-y { color: #059669; fill: #059669; stroke: #059669; }
+html[data-theme="light"] .fl-axes-x-head,
+html[data-theme="light"] .fl-axes-y-head { stroke: none; }
+html[data-theme="light"] .fl-axes-caption { fill: rgba(15, 23, 42, 0.72); }
+
+/* ── World-origin marker (tracks pan/zoom) ── */
+.fl-origin-marker {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+}
+.fl-origin-x  { stroke: #f87171; stroke-width: 1.6; stroke-linecap: round; }
+.fl-origin-y  { stroke: #34d399; stroke-width: 1.6; stroke-linecap: round; }
+.fl-origin-dot  { fill: #fbbf24; stroke: rgba(15, 23, 42, 0.7); stroke-width: 1; }
+.fl-origin-label {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 9.5px;
+    fill: rgba(226, 232, 240, 0.9);
+    paint-order: stroke;
+    stroke: rgba(15, 23, 42, 0.6);
+    stroke-width: 2.5;
+}
+html[data-theme="light"] .fl-origin-x  { stroke: #dc2626; }
+html[data-theme="light"] .fl-origin-y  { stroke: #059669; }
+html[data-theme="light"] .fl-origin-dot { fill: #f59e0b; stroke: rgba(15, 23, 42, 0.45); }
+html[data-theme="light"] .fl-origin-label {
+    fill: rgba(15, 23, 42, 0.9);
+    stroke: rgba(255, 255, 255, 0.9);
+}
+
+.fl-svg {
+    display: block;
+    position: relative;
+    z-index: 2;
+}
+.fl-heatmap {
+    position: absolute;
+    z-index: 1;
+    image-rendering: pixelated;
+    opacity: 0.85;
+    pointer-events: none;
+}
+
+.fl-grid-minor {
+    stroke: rgba(255, 255, 255, 0.05);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+.fl-grid-major {
+    stroke: rgba(255, 255, 255, 0.11);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+.fl-axis { stroke-width: 2; }
+.fl-axis-x { stroke: rgba(239, 68, 68, 0.7); }
+.fl-axis-y { stroke: rgba(16, 185, 129, 0.7); }
+
+.fl-entity-fill {
+    fill: rgba(56, 189, 248, 0.04);
+    stroke: none;
+}
+.fl-entity.is-sel .fl-entity-fill {
+    fill: rgba(5, 192, 125, 0.08);
+}
+
+.fl-edge {
+    stroke-width: 2;
+    fill: none;
+    cursor: pointer;
+}
+.fl-edge-wall   { stroke: #cbd5e1; }
+.fl-edge-inlet  { stroke: #38bdf8; stroke-width: 3; }
+.fl-edge-outlet { stroke: #f87171; stroke-width: 3; }
+/* Sensor edges — distinctive violet dashed stroke that can't be
+   confused with inlet (cyan) or outlet (red). The stroke-dasharray
+   makes them immediately legible as "probe" boundaries even on
+   small-scale geometries. */
+.fl-edge-sensor { stroke: #c084fc; stroke-width: 3; stroke-dasharray: 6 3; }
+.fl-edge.is-selected { stroke: var(--accent-primary) !important; stroke-width: 4; }
+
+.fl-entity.is-preview .fl-edge { stroke-dasharray: 4 3; opacity: 0.7; }
+.fl-entity.is-preview .fl-entity-fill { fill: rgba(5, 192, 125, 0.04); }
+
+.fl-vertex {
+    fill: rgba(255, 255, 255, 0.6);
+    stroke: rgba(0, 0, 0, 0.35);
+    stroke-width: 0.8;
+    pointer-events: none;
+}
+.fl-entity.is-sel .fl-vertex { fill: var(--accent-primary); }
+/* Larger hit target feedback on all vertices of the selected entity. */
+.fl-vertex.is-visible {
+    stroke: rgba(5, 192, 125, 0.9);
+    stroke-width: 1.1;
+}
+.fl-vertex.is-selected {
+    fill: #facc15;
+    stroke: #000;
+    stroke-width: 1.3;
+}
+
+/* ── Open polylines (Line tool "sketch" geometry) ── */
+.fl-entity.is-open .fl-entity-fill { display: none; }
+.fl-edge-open {
+    stroke: #eab308;
+    stroke-width: 1.5;
+    stroke-dasharray: 5 3;
+    fill: none;
+    cursor: pointer;
+    opacity: 0.85;
+}
+.fl-edge-open.is-selected {
+    stroke: var(--accent-primary) !important;
+    stroke-width: 3;
+    stroke-dasharray: none;
+}
+
+.fl-snap-glyph {
+    fill: none;
+    stroke: var(--accent-primary);
+    stroke-width: 1;
+    opacity: 0.6;
+}
+
+/* ── Streamlines overlay ── */
+.fl-streamline {
+    stroke: rgba(255, 255, 255, 0.55);
+    stroke-width: 1.1;
+    fill: none;
+    stroke-linecap: round;
+    pointer-events: none;
+}
+html[data-theme="light"] .fl-streamline {
+    stroke: rgba(15, 23, 42, 0.55);
+}
+
+/* ── Color-scale legend ── */
+.fl-legend {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    z-index: 3;
+    pointer-events: none;
+}
+.fl-legend-bg {
+    fill: rgba(15, 23, 42, 0.75);
+    stroke: rgba(255, 255, 255, 0.1);
+    stroke-width: 1;
+}
+html[data-theme="light"] .fl-legend-bg {
+    fill: rgba(255, 255, 255, 0.9);
+    stroke: rgba(15, 23, 42, 0.15);
+}
+.fl-legend-tick {
+    stroke: var(--text-muted);
+    stroke-width: 1;
+}
+.fl-legend-label,
+.fl-legend-title {
+    fill: var(--text-secondary);
+    font-size: 9px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-legend-title {
+    font-size: 8.5px;
+    fill: var(--text-muted);
+}
+
+/* ── Checkbox toggle (Streamlines, etc.) ── */
+.fl-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin: 4px 0 8px;
+    cursor: pointer;
+    user-select: none;
+}
+.fl-checkbox input {
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+}
+
+/* ── Section probe line (live velocity profile marker) ── */
+.fl-section-line {
+    stroke-dasharray: 6 3;
+    fill: none;
+    pointer-events: stroke;
+    stroke-linecap: round;
+    transition: stroke-width 0.12s ease;
+}
+.fl-section-end {
+    stroke: #1e293b;
+    stroke-width: 1;
+    pointer-events: none;
+}
+.fl-section { pointer-events: auto; }
+.fl-section.is-selected .fl-section-line {
+    stroke-dasharray: none;
+    filter: drop-shadow(0 0 4px currentColor);
+}
+.fl-section.is-preview .fl-section-line { opacity: 0.65; stroke: #fb923c; }
+.fl-section-label {
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-weight: 600;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: rgba(15, 23, 42, 0.85);
+    stroke-width: 2.5;
+    stroke-linejoin: round;
+}
+html[data-theme="light"] .fl-section-label {
+    stroke: rgba(255, 255, 255, 0.95);
+}
+
+/* ── Post-sim analysis: section list + stats card ── */
+.fl-section-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 8px 0 4px;
+}
+.fl-section-row {
+    display: grid;
+    grid-template-columns: 14px 1fr auto 22px 22px 22px;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    cursor: pointer;
+    transition: background 0.1s ease, border-color 0.1s ease;
+}
+.fl-section-row:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+.fl-section-row.is-selected {
+    border-color: var(--accent-primary);
+    background: rgba(56, 189, 248, 0.08);
+}
+.fl-section-row.is-hidden { opacity: 0.5; }
+.fl-section-chip {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    display: inline-block;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.fl-section-label-txt {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fl-section-label-input {
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid var(--accent-primary);
+    border-radius: 3px;
+    padding: 1px 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    width: 100%;
+    min-width: 0;
+}
+.fl-section-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-icon-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+.fl-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+.fl-icon-btn-danger:hover {
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(248, 113, 113, 0.1);
+}
+
+.fl-section-stats {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(14, 165, 233, 0.06);
+    border: 1px solid rgba(14, 165, 233, 0.25);
+}
+.fl-section-stats-hd {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 5px;
+    letter-spacing: 0.02em;
+}
+.fl-kv-strong {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.fl-kv-strong span:last-child {
+    color: #34d399;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Light-theme overrides for the new analysis UI */
+html[data-theme="light"] .fl-section-row {
+    background: rgba(15, 23, 42, 0.02);
+}
+html[data-theme="light"] .fl-section-row:hover {
+    background: rgba(15, 23, 42, 0.05);
+    border-color: rgba(15, 23, 42, 0.15);
+}
+html[data-theme="light"] .fl-section-row.is-selected {
+    background: rgba(56, 189, 248, 0.12);
+}
+html[data-theme="light"] .fl-icon-btn:hover {
+    background: rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .fl-icon-btn-danger:hover {
+    color: #b91c1c;
+    border-color: rgba(185, 28, 28, 0.4);
+    background: rgba(185, 28, 28, 0.08);
+}
+html[data-theme="light"] .fl-section-stats {
+    background: rgba(14, 165, 233, 0.08);
+    border-color: rgba(14, 165, 233, 0.35);
+}
+html[data-theme="light"] .fl-kv-strong span:last-child { color: #059669; }
+
+/* ── Flow rate vs time — summary table + action buttons ── */
+.fl-tht-summary {
+    margin-top: 8px;
+    padding: 6px 8px 8px;
+    border-radius: 6px;
+    background: rgba(16, 185, 129, 0.06);
+    border: 1px solid rgba(16, 185, 129, 0.22);
+}
+.fl-tht-summary-hd {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    letter-spacing: 0.02em;
+}
+.fl-tht-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-tht-table th,
+.fl-tht-table td {
+    padding: 3px 6px;
+    text-align: right;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+.fl-tht-table th {
+    text-align: right;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.fl-tht-table th:first-child,
+.fl-tht-table td:first-child {
+    text-align: left;
+    white-space: nowrap;
+}
+.fl-tht-table td:first-child {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+}
+.fl-tht-table tr.is-selected td {
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--text-primary);
+}
+.fl-tht-table tbody tr {
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.fl-tht-table tbody tr:hover td {
+    background: rgba(148, 163, 184, 0.08);
+}
+.fl-tht-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+.fl-tht-actions .fl-toolbtn { flex: 1; justify-content: center; min-width: 90px; }
+
+html[data-theme="light"] .fl-tht-summary {
+    background: rgba(5, 150, 105, 0.08);
+    border-color: rgba(5, 150, 105, 0.28);
+}
+html[data-theme="light"] .fl-tht-table tr.is-selected td {
+    background: rgba(56, 189, 248, 0.15);
+}
+
+/* ── Point-probe chip list (inside the Sensor response panel) ── */
+.fl-probe-chiprow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.fl-probe-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px 2px 4px;
+    border-radius: 999px;
+    border: 1px solid;
+    background: rgba(15, 23, 42, 0.5);
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--text-primary);
+}
+.fl-probe-chip-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.fl-probe-chip-lbl { font-weight: 600; }
+.fl-probe-chip-pos { color: var(--text-muted); }
+.fl-probe-chip-rm {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1;
+    border-radius: 3px;
+}
+.fl-probe-chip-rm:hover {
+    background: rgba(220, 38, 38, 0.25);
+    color: #fca5a5;
+}
+html[data-theme="light"] .fl-probe-chip {
+    background: rgba(248, 250, 252, 0.85);
+    color: #0f172a;
+}
+html[data-theme="light"] .fl-probe-chip-rm:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: #dc2626;
+}
+
+/* ── Point probes (user-dropped field samplers) ── */
+.fl-point-probe {
+    pointer-events: auto;
+}
+.fl-probe-ring {
+    fill: none;
+    stroke-width: 1.5;
+    opacity: 0.95;
+}
+.fl-probe-core {
+    stroke: var(--bg-primary);
+    stroke-width: 1;
+}
+.fl-probe-label {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    paint-order: stroke;
+    stroke: rgba(0, 0, 0, 0.55);
+    stroke-width: 2.5;
+    stroke-linejoin: round;
+}
+.fl-probe-x-bg {
+    fill: rgba(15, 23, 42, 0.85);
+    stroke: rgba(255, 255, 255, 0.35);
+    stroke-width: 0.75;
+}
+.fl-probe-x {
+    stroke: #fca5a5;
+    stroke-width: 1.25;
+    stroke-linecap: round;
+    fill: none;
+}
+.fl-point-probe:hover .fl-probe-x-bg { fill: rgba(220, 38, 38, 0.9); }
+.fl-point-probe:hover .fl-probe-x { stroke: #fff; }
+html[data-theme="light"] .fl-probe-label {
+    stroke: rgba(255, 255, 255, 0.65);
+}
+html[data-theme="light"] .fl-probe-x-bg {
+    fill: rgba(248, 250, 252, 0.9);
+    stroke: rgba(15, 23, 42, 0.2);
+}
+html[data-theme="light"] .fl-probe-x {
+    stroke: #dc2626;
+}
+
+/* ── Inline charts (profile + residual) ── */
+.fl-profile-chart {
+    width: 100%;
+    height: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    margin-bottom: 6px;
+    padding: 2px;
+}
+.fl-chart-plot {
+    fill: rgba(15, 23, 42, 0.4);
+    stroke: none;
+}
+.fl-chart-grid {
+    stroke: rgba(255, 255, 255, 0.06);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+.fl-chart-goal {
+    stroke: rgba(5, 192, 125, 0.6);
+    stroke-dasharray: 3 3;
+    stroke-width: 1;
+}
+.fl-profile-line {
+    stroke: #fb923c;
+    stroke-width: 1.75;
+    fill: none;
+}
+.fl-residual-line {
+    stroke: var(--accent-primary);
+    stroke-width: 1.5;
+    fill: none;
+}
+.fl-chart-tick,
+.fl-chart-axis,
+.fl-chart-label {
+    fill: var(--text-muted);
+    font-size: 9px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-chart-label {
+    fill: var(--text-primary);
+    font-size: 10px;
+}
+
+/* ── Steady-state indicator ── */
+.fl-steady-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(5, 192, 125, 0.14);
+    color: var(--accent-primary);
+    border: 1px solid rgba(5, 192, 125, 0.35);
+    font-size: 0.64rem;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 700;
+}
+.fl-steady-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    color: var(--accent-primary);
+    font-weight: 700;
+    font-family: inherit;
+    font-size: 0.72rem;
+}
+
+/* ───────── Inspector fields ───────── */
+.fl-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.fl-field > span {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+.fl-field select,
+.fl-field input[type="number"] {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+    font-family: inherit;
+}
+.fl-field select:focus,
+.fl-field input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(5, 192, 125, 0.15);
+}
+
+/* Inline, single-row variant of .fl-field — label sits on the LEFT
+   of the control rather than above it. Used in chart toolbars where
+   vertical space is scarce (e.g. the Sensor Response "View" selector). */
+.fl-field-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 0;
+}
+.fl-field-inline > span {
+    margin-bottom: 0;
+}
+
+/* Compact selector used next to chart headers. Slimmer padding,
+   native arrow hidden, custom caret drawn with a background SVG so
+   it matches the rest of the app visually regardless of OS / theme. */
+.fl-view-select select {
+    padding: 4px 26px 4px 8px;
+    font-size: 0.75rem;
+    min-width: 110px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: var(--bg-primary);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5l3 3 3-3'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 10px 10px;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.fl-view-select select:hover {
+    border-color: var(--text-muted, #94a3b8);
+}
+html[data-theme="light"] .fl-view-select select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5l3 3 3-3'/></svg>");
+}
+.fl-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.fl-inline input { flex: 1; }
+.fl-inline > span { color: var(--text-muted); font-size: 0.75rem; }
+
+.fl-kv {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+.fl-kv > span:first-child {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.fl-kv-strong > span:last-child {
+    color: var(--accent-primary);
+    font-weight: 700;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.fl-muted { color: var(--text-muted); font-size: 0.78rem; font-style: italic; }
+
+/* ───────── Status bar ───────── */
+.fl-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    flex-shrink: 0;
+    overflow-x: auto;
+}
+.fl-sep-v {
+    width: 1px;
+    height: 14px;
+    background: var(--border-color);
+}
+.fl-warn {
+    color: #fbbf24;
+    font-weight: 600;
+    margin-left: auto;
+    font-family: inherit;
+    font-size: 0.74rem;
+}
+
+/* ───────── Light-mode polish ───────── */
+html[data-theme="light"] .fl-toolbar,
+html[data-theme="light"] .fl-status,
+html[data-theme="light"] .fl-left,
+html[data-theme="light"] .fl-right {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-canvas-wrap {
+    background: #f8fafc;
+}
+html[data-theme="light"] .fl-grid-minor { stroke: rgba(15, 23, 42, 0.06); }
+html[data-theme="light"] .fl-grid-major { stroke: rgba(15, 23, 42, 0.12); }
+html[data-theme="light"] .fl-panel {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-edge-wall { stroke: #334155; }
+html[data-theme="light"] .fl-vertex    { fill: #475569; stroke: rgba(0,0,0,0.25); }
+html[data-theme="light"] .fl-vertex.is-visible { stroke: rgba(5, 192, 125, 0.9); }
+html[data-theme="light"] .fl-vertex.is-selected { fill: #eab308; stroke: #000; }
+html[data-theme="light"] .fl-edge-open { stroke: #b45309; }
+html[data-theme="light"] .fl-open-select option {
+    background: #ffffff;
+    color: var(--text-primary);
+}
+html[data-theme="light"] .fl-open-project:hover {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .fl-toolbtn:hover {
+    background: rgba(15, 23, 42, 0.05);
+    border-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-field select,
+html[data-theme="light"] .fl-field input[type="number"] {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.15);
+    color: #0f172a;
+}
+html[data-theme="light"] .fl-help kbd {
+    background: #e2e8f0;
+    border-color: rgba(15, 23, 42, 0.12);
+    color: #0f172a;
+}
+html[data-theme="light"] .fl-chart-plot { fill: rgba(15, 23, 42, 0.04); }
+html[data-theme="light"] .fl-chart-grid { stroke: rgba(15, 23, 42, 0.08); }
+html[data-theme="light"] .fl-section-end {
+    fill: #ea580c;
+    stroke: #ffffff;
+}
+
+/* ───────── Property panel (SolidWorks-style inspector) ───────── */
+.fl-props {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-color);
+    margin-bottom: 8px;
+}
+.fl-props-hd {
+    font-size: 0.72rem;
+    color: var(--accent-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+.fl-props-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.35;
+}
+.fl-props-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+}
+.fl-field-inset {
+    margin-bottom: 0;
+    min-width: 0;
+}
+.fl-field-inset > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fl-field-inset input[type="number"] {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+html[data-theme="light"] .fl-props {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .fl-props-hd {
+    color: #0d9488;
+}
+
+/* ───────── Fillet radius input (in toolbar) ───────── */
+.fl-fillet-radius {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    margin: 0 4px;
+}
+.fl-fillet-radius input[type="number"] {
+    width: 60px;
+    background: transparent;
+    color: var(--text-primary);
+    border: none;
+    padding: 2px 4px;
+    font-size: 0.78rem;
+    font-family: inherit;
+}
+.fl-fillet-radius input[type="number"]:focus {
+    outline: 1px solid var(--accent-primary);
+    outline-offset: 1px;
+    border-radius: 3px;
+}
+.fl-fillet-unit {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+}
+html[data-theme="light"] .fl-fillet-radius {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.15);
+}
+html[data-theme="light"] .fl-fillet-radius input[type="number"] {
+    color: #0f172a;
+}
+
+/* ───────── Floating property dialog (glass-morphism) ───────── */
+.fl-prop-dialog {
+    position: fixed;
+    z-index: 1001;
+    min-width: 260px;
+    max-width: 380px;
+    width: max-content;
+    box-sizing: border-box;
+    background: rgba(18, 22, 31, 0.68);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    box-shadow:
+        0 20px 50px rgba(0, 0, 0, 0.5),
+        0 2px 8px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    overflow: hidden;
+    animation: fl-dialog-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes fl-dialog-in {
+    from { opacity: 0; transform: scale(0.94) translateY(-6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.fl-prop-dialog-hd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px 7px 10px;
+    background: linear-gradient(
+        180deg,
+        rgba(5, 192, 125, 0.14) 0%,
+        rgba(255, 255, 255, 0.03) 100%
+    );
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: grab;
+    user-select: none;
+}
+.fl-prop-dialog-hd:active { cursor: grabbing; }
+.fl-prop-dialog-grip {
+    color: var(--text-muted);
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+.fl-prop-dialog-title {
+    flex: 1;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--accent-primary);
+}
+.fl-prop-dialog-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+.fl-prop-dialog-close:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+}
+.fl-prop-dialog-body {
+    padding: 10px 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.fl-prop-dialog-body .fl-field-inset input[type="number"] {
+    padding: 5px 6px;
+    font-size: 0.78rem;
+}
+/* Labels inside the compact dialog — slightly smaller so the two-
+   column grid never clips captions like "Start X (mm)". */
+.fl-prop-dialog-body .fl-field > span {
+    font-size: 0.64rem;
+    letter-spacing: 0.4px;
+}
+/* Single-column fields (Length, Angle) expand across the dialog. */
+.fl-prop-dialog-body > .fl-props > .fl-field {
+    width: 100%;
+}
+.fl-prop-dialog-body > .fl-props > .fl-field input[type="number"] {
+    width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+}
+.fl-prop-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 12px 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.02) 0%,
+        rgba(5, 192, 125, 0.06) 100%
+    );
+}
+.fl-prop-dialog-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 80ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.fl-prop-dialog-btn:active { transform: translateY(1px); }
+.fl-prop-dialog-btn-ok {
+    background: linear-gradient(135deg, #05c07d 0%, #10b981 100%);
+    color: #04210f;
+    border-color: rgba(5, 192, 125, 0.55);
+    box-shadow:
+        0 4px 10px rgba(5, 192, 125, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.fl-prop-dialog-btn-ok:hover {
+    background: linear-gradient(135deg, #06d589 0%, #14cc91 100%);
+    box-shadow:
+        0 6px 14px rgba(5, 192, 125, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.fl-prop-dialog-btn-ok:focus-visible {
+    outline: 2px solid #7ff3c6;
+    outline-offset: 2px;
+}
+
+/* Light theme tweaks for the footer */
+html[data-theme="light"] .fl-prop-dialog-footer {
+    background: linear-gradient(
+        180deg,
+        rgba(13, 148, 136, 0.04) 0%,
+        rgba(13, 148, 136, 0.12) 100%
+    );
+    border-top-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-prop-dialog-btn-ok {
+    background: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%);
+    color: #ffffff;
+    border-color: rgba(13, 148, 136, 0.55);
+    box-shadow:
+        0 4px 10px rgba(13, 148, 136, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+html[data-theme="light"] .fl-prop-dialog-btn-ok:hover {
+    background: linear-gradient(135deg, #0e9b8e 0%, #17c0ac 100%);
+}
+/* Inside the floating dialog, the sub-panel decoration would look
+   boxy-in-a-boxy. Strip it. */
+.fl-prop-dialog-body .fl-props {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+.fl-prop-dialog-body .fl-props-hd {
+    display: none;   /* header duplicated by dialog header */
+}
+
+/* Leader-line SVG sitting behind the dialog. */
+.fl-prop-leader-line {
+    stroke: var(--accent-primary);
+    stroke-width: 1.2;
+    stroke-dasharray: 4 4;
+    opacity: 0.55;
+}
+.fl-prop-leader-dot {
+    fill: var(--accent-primary);
+    opacity: 0.85;
+    stroke: rgba(255, 255, 255, 0.7);
+    stroke-width: 1;
+}
+
+/* Light theme: frosted white glass. */
+html[data-theme="light"] .fl-prop-dialog {
+    background: rgba(255, 255, 255, 0.78);
+    border-color: rgba(15, 23, 42, 0.1);
+    box-shadow:
+        0 20px 40px rgba(15, 23, 42, 0.15),
+        0 2px 8px rgba(15, 23, 42, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    color: #0f172a;
+}
+html[data-theme="light"] .fl-prop-dialog-hd {
+    background: linear-gradient(
+        180deg,
+        rgba(13, 148, 136, 0.12) 0%,
+        rgba(255, 255, 255, 0.4) 100%
+    );
+    border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-prop-dialog-title { color: #0d9488; }
+html[data-theme="light"] .fl-prop-dialog-close:hover {
+    background: rgba(15, 23, 42, 0.06);
+}
+html[data-theme="light"] .fl-prop-leader-line { stroke: #0d9488; }
+html[data-theme="light"] .fl-prop-leader-dot { fill: #0d9488; }
+
+/* ─────────────────────────────────────────────────────────────────
+   Flow Lab File Explorer modal
+   ───────────────────────────────────────────────────────────────── */
+.fl-fx-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.65);
+    backdrop-filter: blur(4px);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fl-fx-fade 0.12s ease-out;
+}
+@keyframes fl-fx-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.fl-fx-modal {
+    width: min(920px, 94vw);
+    height: min(640px, 88vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+    animation: fl-fx-pop 0.14s ease-out;
+}
+@keyframes fl-fx-pop {
+    from { transform: scale(0.97); opacity: 0; }
+    to   { transform: scale(1);    opacity: 1; }
+}
+.fl-fx-hd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+.fl-fx-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.02em;
+}
+.fl-fx-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+}
+.fl-fx-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-primary); }
+
+.fl-fx-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+.fl-fx-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+}
+.fl-fx-crumb {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.fl-fx-crumb:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+.fl-fx-crumb.is-active {
+    color: var(--accent-primary);
+    background: rgba(56, 189, 248, 0.08);
+}
+.fl-fx-crumb-sep { color: var(--text-muted); padding: 0 2px; }
+
+.fl-fx-toolbar-right {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.fl-fx-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.1s ease, border-color 0.1s ease;
+}
+.fl-fx-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.fl-fx-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.fl-fx-btn-primary {
+    background: linear-gradient(180deg, #0284c7, #0369a1);
+    border-color: #0369a1;
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(2, 132, 199, 0.35);
+}
+.fl-fx-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #0ea5e9, #0284c7);
+    border-color: #0284c7;
+}
+.fl-fx-btn-accent {
+    background: linear-gradient(180deg, #10b981, #059669);
+    border-color: #059669;
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(16, 185, 129, 0.35);
+}
+.fl-fx-btn-accent:hover:not(:disabled) {
+    background: linear-gradient(180deg, #34d399, #10b981);
+    border-color: #10b981;
+}
+
+.fl-fx-body {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    flex: 1;
+    min-height: 0;
+}
+.fl-fx-tree {
+    border-right: 1px solid var(--border-color);
+    overflow: auto;
+    padding: 6px 0;
+    background: rgba(0, 0, 0, 0.15);
+}
+.fl-fx-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 3px;
+    user-select: none;
+}
+.fl-fx-tree-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+.fl-fx-tree-row.is-selected {
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--text-primary);
+    border-left: 2px solid var(--accent-primary);
+    padding-left: 4px !important;
+}
+.fl-fx-chev {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 0;
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.fl-fx-chev:hover { color: var(--text-primary); }
+.fl-fx-chev-placeholder { display: inline-block; width: 14px; height: 14px; }
+.fl-fx-ficon.is-folder { color: #fbbf24; }
+.fl-fx-ficon.is-project { color: #60a5fa; }
+.fl-fx-ficon.is-result { color: #34d399; }
+.fl-fx-tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+.fl-fx-tree-badge {
+    font-size: 9.5px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1px 5px;
+    border-radius: 8px;
+}
+
+.fl-fx-list {
+    overflow: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.fl-fx-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 36px 20px;
+    color: var(--text-muted);
+    text-align: center;
+    font-size: 12px;
+}
+.fl-fx-empty-hint {
+    max-width: 360px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+.fl-fx-row {
+    display: grid;
+    grid-template-columns: 18px 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-primary);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: default;
+    transition: background 0.1s ease, border-color 0.1s ease;
+}
+.fl-fx-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border-color);
+}
+.fl-fx-row-folder { cursor: pointer; }
+.fl-fx-row.is-open {
+    background: rgba(56, 189, 248, 0.06);
+    border-color: rgba(56, 189, 248, 0.3);
+}
+.fl-fx-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    font-weight: 500;
+}
+.fl-fx-name:hover { text-decoration: underline; text-decoration-color: var(--accent-primary); }
+.fl-fx-open-badge {
+    margin-left: 6px;
+    font-size: 9.5px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(56, 189, 248, 0.2);
+    color: #38bdf8;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.fl-fx-meta {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    white-space: nowrap;
+}
+.fl-fx-row-actions {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+}
+.fl-fx-move {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    max-width: 96px;
+    cursor: pointer;
+}
+.fl-fx-move:hover { background: rgba(255, 255, 255, 0.08); }
+
+.fl-fx-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 10.5px;
+    color: var(--text-muted);
+}
+.fl-fx-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* ── Light-theme overrides ── */
+html[data-theme="light"] .fl-fx-backdrop { background: rgba(15, 23, 42, 0.55); }
+html[data-theme="light"] .fl-fx-tree { background: rgba(15, 23, 42, 0.03); }
+html[data-theme="light"] .fl-fx-tree-row:hover {
+    background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .fl-fx-row:hover {
+    background: rgba(15, 23, 42, 0.03);
+}
+html[data-theme="light"] .fl-fx-btn {
+    background: rgba(15, 23, 42, 0.04);
+}
+html[data-theme="light"] .fl-fx-btn:hover:not(:disabled) {
+    background: rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .fl-fx-tree-badge {
+    background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .fl-fx-open-badge {
+    background: rgba(14, 165, 233, 0.15);
+    color: #0369a1;
+}
+html[data-theme="light"] .fl-fx-crumb:hover {
+    background: rgba(15, 23, 42, 0.05);
+}
+html[data-theme="light"] .fl-fx-modal {
+    box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+/* ───────── Solver mesh panel ───────── */
+.fl-mesh-presets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.fl-mesh-preset {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.35);
+    color: var(--text-primary);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.fl-mesh-preset:hover:not(:disabled) {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.55);
+}
+.fl-mesh-preset:active:not(:disabled) {
+    transform: translateY(1px);
+}
+.fl-mesh-preset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.fl-mesh-preset.is-active {
+    background: rgba(59, 130, 246, 0.22);
+    border-color: rgba(96, 165, 250, 0.8);
+    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+.fl-mesh-preset-label {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.fl-mesh-preset-n {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 10px;
+    opacity: 0.75;
+}
+.fl-mesh-note {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: rgba(251, 191, 36, 0.95);
+    font-size: 11px;
+    line-height: 1.4;
+}
+html[data-theme="light"] .fl-mesh-preset {
+    background: rgba(255, 255, 255, 0.8);
+    border-color: rgba(15, 23, 42, 0.16);
+    color: var(--text-primary);
+}
+html[data-theme="light"] .fl-mesh-preset:hover:not(:disabled) {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(59, 130, 246, 0.45);
+}
+html[data-theme="light"] .fl-mesh-preset.is-active {
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(37, 99, 235, 0.7);
+    box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.3);
+}
+html[data-theme="light"] .fl-mesh-note {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(217, 119, 6, 0.45);
+    color: rgba(146, 64, 14, 0.95);
+}
+
+/* ───────── Grid settings popover ───────── */
+.fl-gridsettings-wrap {
+    position: relative;
+    display: inline-flex;
+}
+.fl-gridsettings-btn {
+    padding: 4px 6px !important;
+}
+.fl-gridsettings-btn.is-active {
+    background: rgba(59, 130, 246, 0.22) !important;
+    border-color: rgba(96, 165, 250, 0.6) !important;
+}
+.fl-gridpop {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 60;
+    min-width: 240px;
+    padding: 10px 12px 12px;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: fl-gridpop-in 0.12s ease-out;
+}
+.fl-gridpop-portal {
+    position: fixed;
+    z-index: 4000;
+    top: 0;
+    left: 0;
+    min-width: 260px;
+    max-width: 320px;
+}
+@keyframes fl-gridpop-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.fl-gridpop-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(148, 163, 184, 0.85);
+}
+.fl-gridpop-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.fl-gridpop-label {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+.fl-gridpop-segmented {
+    display: inline-flex;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.45);
+}
+.fl-gridpop-segmented button {
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+    min-width: 28px;
+}
+.fl-gridpop-segmented button:hover {
+    background: rgba(59, 130, 246, 0.12);
+}
+.fl-gridpop-segmented button.is-active {
+    background: rgba(59, 130, 246, 0.28);
+    color: #fff;
+    font-weight: 600;
+}
+.fl-gridpop-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: rgba(148, 163, 184, 0.9);
+}
+.fl-gridpop-field > span:first-child {
+    min-width: 36px;
+}
+.fl-gridpop-field input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    background: rgba(15, 23, 42, 0.5);
+    color: var(--text-primary);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-gridpop-field input:focus {
+    outline: none;
+    border-color: rgba(96, 165, 250, 0.7);
+    background: rgba(15, 23, 42, 0.7);
+}
+.fl-gridpop-hint {
+    font-size: 11px;
+    color: rgba(148, 163, 184, 0.75);
+    line-height: 1.4;
+}
+.fl-gridpop-hint b {
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-gridpop-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+.fl-gridpop-reset,
+.fl-gridpop-done {
+    padding: 5px 10px;
+    font-size: 11px;
+    border-radius: 5px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.4);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.fl-gridpop-reset:hover,
+.fl-gridpop-done:hover {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: rgba(96, 165, 250, 0.5);
+}
+.fl-gridpop-done {
+    background: rgba(59, 130, 246, 0.32);
+    border-color: rgba(96, 165, 250, 0.6);
+    color: #fff;
+    font-weight: 600;
+}
+.fl-gridpop-done:hover {
+    background: rgba(59, 130, 246, 0.45);
+}
+
+html[data-theme="light"] .fl-gridpop {
+    background: rgba(255, 255, 255, 0.98);
+    border-color: rgba(15, 23, 42, 0.18);
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+}
+html[data-theme="light"] .fl-gridpop-title {
+    color: rgba(51, 65, 85, 0.85);
+}
+html[data-theme="light"] .fl-gridpop-segmented {
+    background: rgba(241, 245, 249, 0.8);
+    border-color: rgba(15, 23, 42, 0.12);
+}
+html[data-theme="light"] .fl-gridpop-segmented button {
+    color: var(--text-primary);
+}
+html[data-theme="light"] .fl-gridpop-segmented button:hover {
+    background: rgba(59, 130, 246, 0.1);
+}
+html[data-theme="light"] .fl-gridpop-segmented button.is-active {
+    background: rgba(59, 130, 246, 0.15);
+    color: #1d4ed8;
+}
+html[data-theme="light"] .fl-gridpop-field input {
+    background: #fff;
+    border-color: rgba(15, 23, 42, 0.18);
+    color: var(--text-primary);
+}
+html[data-theme="light"] .fl-gridpop-hint {
+    color: rgba(51, 65, 85, 0.75);
+}
+html[data-theme="light"] .fl-gridpop-reset,
+html[data-theme="light"] .fl-gridpop-done {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(15, 23, 42, 0.18);
+}
+html[data-theme="light"] .fl-gridpop-done {
+    background: rgba(59, 130, 246, 0.18);
+    color: #1d4ed8;
+}
+html[data-theme="light"] .fl-gridpop-done:hover {
+    background: rgba(59, 130, 246, 0.28);
+}
+html[data-theme="light"] .fl-gridsettings-btn.is-active {
+    background: rgba(59, 130, 246, 0.16) !important;
+    border-color: rgba(37, 99, 235, 0.55) !important;
+}
+
+/* ═════════════════════════════════════════════════════════════════
+ * PROFESSIONAL CAD OPERATIONS (multi-select, modify, boolean, etc.)
+ * ═════════════════════════════════════════════════════════════════ */
+
+/* Multi-selection: entities in the extended selection set (but not
+   the primary pick) get a softer dashed halo so they're
+   distinguishable from the single-selected entity. */
+.fl-entity.is-multi-sel .fl-edge {
+    stroke: #f59e0b;
+    stroke-width: 2.2;
+    stroke-dasharray: 4 3;
+    filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.55));
+}
+.fl-entity.is-multi-sel .fl-entity-fill {
+    fill: rgba(245, 158, 11, 0.10);
+    stroke: rgba(245, 158, 11, 0.55);
+    stroke-dasharray: 4 3;
+}
+.fl-entity.is-multi-sel .fl-vertex {
+    stroke: #f59e0b;
+    fill: rgba(245, 158, 11, 0.25);
+}
+
+/* Offset-distance input inline with the toolbar button. */
+.fl-offset-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.fl-offset-input {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.75));
+}
+.fl-offset-input span {
+    opacity: 0.75;
+}
+.fl-offset-input input {
+    width: 54px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    padding: 0;
+    outline: none;
+    text-align: right;
+}
+.fl-offset-input input:focus {
+    color: var(--text-primary, #fff);
+}
+.fl-offset-unit {
+    opacity: 0.6;
+    font-size: 10px;
+}
+html[data-theme="light"] .fl-offset-input {
+    background: rgba(37, 99, 235, 0.06);
+    border-color: rgba(37, 99, 235, 0.22);
+    color: #374151;
+}
+
+/* Mirror-axis preview while dragging. */
+.fl-mirror-preview { pointer-events: none; }
+.fl-mirror-axis {
+    stroke: #a855f7;
+    stroke-width: 1.6;
+    stroke-dasharray: 6 4;
+    filter: drop-shadow(0 0 3px rgba(168, 85, 247, 0.55));
+}
+.fl-mirror-anchor {
+    fill: #a855f7;
+    stroke: #fff;
+    stroke-width: 1;
+}
+
+/* Move-tool rubber-band vector. */
+.fl-move-preview { pointer-events: none; }
+.fl-move-vec {
+    stroke: #38bdf8;
+    stroke-width: 1.4;
+    stroke-dasharray: 5 3;
+}
+.fl-move-anchor {
+    fill: #38bdf8;
+    stroke: #fff;
+    stroke-width: 1;
+}
+
+/* Extend-tool endpoint hint (pulsing ring around the picked tip). */
+.fl-extend-hint {
+    fill: none;
+    stroke: #22c55e;
+    stroke-width: 2;
+    filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.7));
+    animation: fl-extend-pulse 1.2s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes fl-extend-pulse {
+    0%, 100% { opacity: 0.6; r: 6; }
+    50%      { opacity: 1.0; r: 9; }
+}
+
+/* ── Measure tool overlay ────────────────────────────────── */
+.fl-measure { pointer-events: none; }
+.fl-measure-line {
+    stroke: #f59e0b;
+    stroke-width: 1.6;
+    stroke-dasharray: 6 3;
+    filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.55));
+}
+.fl-measure.is-final .fl-measure-line {
+    stroke-dasharray: none;
+    stroke-width: 1.8;
+}
+.fl-measure-anchor {
+    fill: #fbbf24;
+    stroke: rgba(0, 0, 0, 0.55);
+    stroke-width: 1;
+}
+.fl-measure-tagbg {
+    fill: rgba(15, 23, 42, 0.88);
+    stroke: rgba(245, 158, 11, 0.8);
+    stroke-width: 1;
+}
+.fl-measure-tagtxt {
+    fill: #fde68a;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fl-measure-tipbg {
+    fill: rgba(15, 23, 42, 0.94);
+    stroke: rgba(245, 158, 11, 0.65);
+    stroke-width: 1;
+    filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.45));
+}
+.fl-measure-tiptitle {
+    fill: #fbbf24;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.fl-measure-tiprow {
+    fill: #e2e8f0;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+html[data-theme="light"] .fl-measure-line { stroke: #d97706; }
+html[data-theme="light"] .fl-measure-anchor {
+    fill: #f59e0b;
+    stroke: rgba(0, 0, 0, 0.4);
+}
+html[data-theme="light"] .fl-measure-tagbg {
+    fill: rgba(255, 255, 255, 0.96);
+    stroke: rgba(217, 119, 6, 0.65);
+}
+html[data-theme="light"] .fl-measure-tagtxt { fill: #92400e; }
+html[data-theme="light"] .fl-measure-tipbg {
+    fill: rgba(255, 255, 255, 0.98);
+    stroke: rgba(217, 119, 6, 0.55);
+}
+html[data-theme="light"] .fl-measure-tiptitle { fill: #b45309; }
+html[data-theme="light"] .fl-measure-tiprow { fill: #1e293b; }
+
+/* Light-theme tweaks for the modify overlays. */
+html[data-theme="light"] .fl-entity.is-multi-sel .fl-edge {
+    stroke: #d97706;
+    filter: drop-shadow(0 0 3px rgba(217, 119, 6, 0.45));
+}
+html[data-theme="light"] .fl-entity.is-multi-sel .fl-entity-fill {
+    fill: rgba(217, 119, 6, 0.10);
+    stroke: rgba(217, 119, 6, 0.55);
+}
+html[data-theme="light"] .fl-mirror-axis {
+    stroke: #7c3aed;
+}
+html[data-theme="light"] .fl-move-vec {
+    stroke: #0ea5e9;
+}
+html[data-theme="light"] .fl-extend-hint {
+    stroke: #16a34a;
+}
+
+/* ─── Aroma / species transport UI ────────────────────────────────── */
+
+/* Inlet BC mode toggle (Velocity / sccm) — sits inside the Gas & inlet
+ * panel; two pill buttons with the active one inverted. */
+.fl-bc-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin: 4px 0 6px;
+    padding: 3px;
+    background: rgba(148, 163, 184, 0.12);
+    border-radius: 8px;
+}
+.fl-bc-toggle button {
+    padding: 5px 0;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.fl-bc-toggle button:hover { color: var(--text-primary); }
+.fl-bc-toggle button.is-active {
+    background: var(--bg-primary);
+    color: var(--accent-primary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    font-weight: 600;
+}
+html[data-theme="light"] .fl-bc-toggle { background: rgba(15, 23, 42, 0.06); }
+html[data-theme="light"] .fl-bc-toggle button.is-active { background: #ffffff; }
+
+/* Toggle row (label + right-aligned checkbox) used by the species-
+ * transport panel. Keeps input small and the label readable. */
+.fl-toggle-field {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.fl-toggle-field > span { font-weight: 500; }
+.fl-toggle-field input[type="checkbox"] {
+    width: 18px; height: 18px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+}
+
+/* Sub-header inside a panel (e.g. "Inlet pulse profile" under Species). */
+.fl-subhd {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+}
+
+/* Pulse-profile description / quick-hint text (smaller than the normal
+ * muted body, italic, never breaks card width). */
+.fl-pulse-desc {
+    font-size: 0.72rem;
+    font-style: italic;
+    margin: 2px 0 4px;
+    line-height: 1.35;
+}
+.fl-hint {
+    font-size: 0.72rem;
+    line-height: 1.35;
+    margin-top: 4px;
+}
+
+/* Species concentration overlay canvas — same box as the velocity
+ * heatmap, sitting just on top of it. pointer-events: none so the
+ * geometry canvas beneath stays clickable. */
+.fl-species-overlay {
+    pointer-events: none;
+    mix-blend-mode: screen;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+/* Sensor response panel — bundles the charts, per-sensor legend rows,
+ * metrics cards and action buttons. */
+.fl-sensor-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.fl-sensor-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+.fl-sensor-row {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: rgba(148, 163, 184, 0.04);
+}
+.fl-sensor-row-hd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.fl-sensor-chip {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+.fl-sensor-lab { font-weight: 600; font-size: 0.78rem; }
+.fl-sensor-sub { font-size: 0.7rem; }
+.fl-sensor-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 10px;
+}
+.fl-sensor-metrics .fl-kv {
+    font-size: 0.72rem;
+    padding: 1px 0;
+}
+.fl-sensor-actions {
+    margin-top: 4px;
+    gap: 6px;
+}
+html[data-theme="light"] .fl-sensor-row {
+    background: #f8fafc;
+}
+
+/* ───────── Guided tour (aroma demo only) ─────────
+   Only shown when the user clicks "Load aroma demo" — everything
+   here is opt-in, the rest of the app renders with zero overhead. */
+
+.fl-tour-card {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 2000;
+    width: min(520px, calc(100vw - 32px));
+    padding: 14px 16px 12px 16px;
+    background: rgba(15, 23, 42, 0.92);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(99, 102, 241, 0.35);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: fl-tour-pop 220ms ease-out;
+}
+@keyframes fl-tour-pop {
+    from { opacity: 0; transform: translate(-50%, 12px); }
+    to   { opacity: 1; transform: translate(-50%, 0);    }
+}
+.fl-tour-step-label {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #a5b4fc;
+    font-weight: 600;
+}
+.fl-tour-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f1f5f9;
+}
+.fl-tour-body {
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: #cbd5e1;
+}
+.fl-tour-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+.fl-tour-actions .fl-toolbtn { min-height: 26px; }
+.fl-tour-spacer { flex: 1; }
+
+html[data-theme="light"] .fl-tour-card {
+    background: rgba(255, 255, 255, 0.96);
+    color: #0f172a;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(99, 102, 241, 0.22);
+}
+html[data-theme="light"] .fl-tour-title { color: #0f172a; }
+html[data-theme="light"] .fl-tour-body  { color: #334155; }
+html[data-theme="light"] .fl-tour-step-label { color: #4f46e5; }
+
+/* Pulsing highlight ring on the currently-targeted element. Uses a
+   box-shadow (not outline) so it sits outside rounded corners
+   cleanly. Indigo + warm glow so it reads on both dark and light
+   themes. */
+[data-tour-highlight="true"] {
+    position: relative;
+    z-index: 1;
+    animation: fl-tour-pulse 1.4s ease-in-out infinite;
+    border-radius: 10px;
+}
+@keyframes fl-tour-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.65),
+                    0 0 0 2px rgba(99, 102, 241, 0.9);
+    }
+    50% {
+        box-shadow: 0 0 0 10px rgba(99, 102, 241, 0),
+                    0 0 0 2px rgba(129, 140, 248, 1);
+    }
+}
+
+

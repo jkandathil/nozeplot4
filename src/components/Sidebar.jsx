@@ -5,7 +5,7 @@ import {
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
-    Sparkles, Moon, Sun, Home as HomeIcon
+    Sparkles, Moon, Sun, Home as HomeIcon, Wind
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -317,6 +317,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'dashboard', title: 'Dashboard', Icon: BarChart2 },
                         { page: 'csvPlotter', title: 'SE Analysis — plot CSV columns', Icon: FileSpreadsheet },
                         { page: 'codeStudio', title: 'Code Studio — Python & text in Codes folder', Icon: Code2 },
+                        { page: 'flowLab', title: 'Flow Lab — 2D gas-path designer & CFD', Icon: Wind },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
@@ -463,6 +464,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Code Studio — Monaco editor; files saved in Codes folder"
                 >
                     <Code2 size={13} /> Code Studio
+                </button>
+                <button
+                    onClick={() => onPageChange?.('flowLab')}
+                    {...toolBtnProps(activePage === 'flowLab', 'rgba(56,189,248,0.18)', '#38bdf8')}
+                    title="Flow Lab — draw 2D gas path, set inlet/outlet/walls, simulate flow"
+                >
+                    <Wind size={13} /> Flow Lab
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}

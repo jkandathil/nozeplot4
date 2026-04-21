@@ -58,6 +58,12 @@
         position: relative !important;
         top: auto !important;
     }
+    .glass-toc {
+        position: relative !important;
+        top: auto !important;
+        max-height: none;
+        overflow-y: visible;
+    }
 }
 
 .glass-toc {
@@ -67,6 +73,30 @@
     padding: 16px 14px;
     position: sticky;
     top: 8px;
+    /* Make the sticky TOC its own scroll container so long indexes
+       (Flow Lab, ML Studio, etc.) remain fully reachable. */
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+
+.glass-toc::-webkit-scrollbar {
+    width: 6px;
+}
+
+.glass-toc::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.35);
+    border-radius: 3px;
+}
+
+.glass-toc::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.6);
+}
+
+.glass-toc::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 .help-toc-title {

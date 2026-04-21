@@ -35,6 +35,7 @@ import FolderCompareAromaPage from './components/FolderCompareAromaPage';
 import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
 import HomePage from './components/HomePage';
+import FlowLabPage from './components/FlowLabPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import SerialMonitorPage from './components/SerialMonitorPage';
 import SpreadsheetPage from './components/SpreadsheetPage';
@@ -895,14 +896,26 @@ function App() {
     return { fileId: outId, folderId };
   }, []);
 
-  const handleSaveJsonToWorkspace = useCallback(async ({ folderName, fileName, json }) => {
+  /**
+   * Save a JSON payload to the workspace.
+   *
+   *   • If `fileId` is provided, that exact row is overwritten (rename-safe).
+   *   • Otherwise, we look for an existing file with the same `fileName` in
+   *     the same folder and overwrite it if found.
+   *   • Only when neither match is found do we create a brand-new entry.
+   *
+   * This is what lets Flow Lab's Save button commit updates back to the
+   * *same* project file instead of scattering duplicates across the
+   * workspace on every click.
+   */
+  const handleSaveJsonToWorkspace = useCallback(async ({ folderName, fileName, json, fileId: targetFileId }) => {
     if (!folderName || !fileName) throw new Error('Missing folderName or fileName');
-    let folderId;
     try {
       const existing = await fileManager.getAllFiles();
-      const match = existing.find((f) => f.isFolder && String(f.name).toLowerCase() === String(folderName).toLowerCase());
-      if (match) {
-        folderId = match.id;
+      const folderMatch = existing.find((f) => f.isFolder && String(f.name).toLowerCase() === String(folderName).toLowerCase());
+      let folderId;
+      if (folderMatch) {
+        folderId = folderMatch.id;
       } else {
         folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
         await fileManager.saveFile({
@@ -912,7 +925,25 @@ function App() {
           createdAt: Date.now(),
         });
       }
-      const fileId = Math.random().toString(36).substr(2, 9);
+
+      // Decide whether to overwrite or create a new record.
+      let fileId = targetFileId || null;
+      let existingFile = null;
+      if (fileId) {
+        existingFile = existing.find((f) => !f.isFolder && String(f.id) === String(fileId)) || null;
+      }
+      if (!existingFile) {
+        existingFile = existing.find(
+          (f) => !f.isFolder
+            && String(f.folderId) === String(folderId)
+            && String(f.name).toLowerCase() === String(fileName).toLowerCase()
+        ) || null;
+      }
+      if (existingFile) {
+        fileId = existingFile.id;
+      } else if (!fileId) {
+        fileId = Math.random().toString(36).substr(2, 9);
+      }
       const approxSize = Math.max(1, new Blob([JSON.stringify(json)]).size);
       await fileManager.saveFile({
         id: fileId,
@@ -920,11 +951,12 @@ function App() {
         folderId: String(folderId),
         data: json,
         size: approxSize,
-        createdAt: Date.now(),
+        createdAt: existingFile?.createdAt || Date.now(),
+        updatedAt: Date.now(),
       });
       const refreshed = await fileManager.getAllFiles();
       setFiles(refreshed);
-      return { fileId, folderId };
+      return { fileId, folderId, overwritten: !!existingFile };
     } catch (e) {
       console.error('Save JSON to workspace failed:', e);
       throw e;
@@ -1695,6 +1727,13 @@ function App() {
                     key="codeStudio"
                     workspaceFiles={files}
                     onSaveCode={handleSaveCodeToWorkspace}
+                    onDeleteFile={deleteFile}
+                  />
+                ) : activePage === 'flowLab' ? (
+                  <FlowLabPage
+                    key="flowLab"
+                    workspaceFiles={files}
+                    onSaveJson={handleSaveJsonToWorkspace}
                     onDeleteFile={deleteFile}
                   />
                 ) : activePage === 'spreadsheet' ? (

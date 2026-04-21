@@ -27,6 +27,7 @@ import {
     Table2,
     Eye,
     Crosshair,
+    Wind,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -973,6 +974,267 @@ function TSNEExplorerHelpDeepDive() {
 }
 
 /**
+ * Flow Lab deep-dive: theory and equations for sensor probes.
+ * Covers both wall sensors (boundary-layer averaged) and user-placed
+ * point probes (bilinearly-interpolated), including exactly how c(t)
+ * and |u|(t) are computed at every simulation step.
+ */
+function FlowLabProbeTheory() {
+    return (
+        <div className="ml-guide-wrapper">
+
+            {/* ── 1. The two probe families ───────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Two kinds of probes — where c(t) comes from</h3>
+            <p className="help-eq-para">
+                Flow Lab exposes <strong>two fundamentally different virtual sensors</strong> that you can use to sample the simulated gas-flow + species field. They look similar on the chart but measure two very different things, and understanding the distinction is critical for interpreting your c(t) curves.
+            </p>
+            <ul className="help-list">
+                <li><strong>Wall sensor (edge sensor)</strong> — declared by tagging a <em>polygon edge</em> as <code>sensor</code>. Internally the solver builds a short list of fluid cells sitting within ~2 grid spacings of that edge. Per-frame it reports the <strong>spatial mean</strong> of concentration and velocity-magnitude over those cells. This mimics a real wall-mounted MOx or surface-acoustic-wave sensor that integrates the thin diffusion boundary layer in contact with its surface.</li>
+                <li><strong>Point probe (dot probe)</strong> — declared by clicking anywhere in the fluid. The solver samples the field at that exact sub-grid location using <strong>bilinear interpolation</strong> of the four surrounding cells. Behaves like a hypothetical pin-point sensor (or a Laser-Induced Fluorescence pixel) that reads the local bulk-flow value without any spatial averaging.</li>
+            </ul>
+            <p className="help-eq-para">
+                Because a wall sensor sits inside the no-slip boundary layer (|u| → 0 at the wall) while a point probe is usually placed in the bulk flow, their c(t) traces differ by <strong>1–3 orders of magnitude</strong> in peak amplitude and <strong>several residence times</strong> in timing. That&apos;s physics, not a bug — and it&apos;s exactly the trade-off real gas sensors face.
+            </p>
+
+            {/* ── 2. Underlying field — the advection-diffusion PDE ───── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">The scalar field that both probes sample</h3>
+            <p className="help-eq-para">
+                Both probe types read from the <strong>same underlying concentration field</strong> <span className="help-math-inline">c(x, y, t)</span>, which the worker advances in lockstep with the LBM velocity field by explicit first-order upwind advection + central diffusion (see <code>src/flowlab/lbmWorker.js</code>). In continuous form:
+            </p>
+            <MathBlock label="Advection–diffusion PDE">
+                <MRow>
+                    <Frac num={<><Mo>∂</Mo>c</>} den={<><Mo>∂</Mo>t</>} />
+                    <Mo>+</Mo>
+                    <Mi>u</Mi>
+                    <Mo>·</Mo>
+                    <Mo>∇</Mo>
+                    <Mi>c</Mi>
+                    <Mo>=</Mo>
+                    <Mi>D</Mi>
+                    <Mo>∇²</Mo>
+                    <Mi>c</Mi>
+                </MRow>
+                <p className="help-math-caption">u(x, y, t) is the LBM D2Q9 velocity; D is the analyte molecular diffusivity in m²/s.</p>
+            </MathBlock>
+            <p className="help-eq-para">
+                In lattice units (dx<sub>lb</sub> = 1, dt<sub>lb</sub> = 1), the FD scheme updates each fluid cell as:
+            </p>
+            <MathBlock label="Upwind advection + central diffusion (lattice units)">
+                <MRow>
+                    <Mi>c<sub>i,j</sub><sup>n+1</sup></Mi>
+                    <Mo>=</Mo>
+                    <Mi>c<sub>i,j</sub><sup>n</sup></Mi>
+                    <Mo>−</Mo>
+                    <span className="help-math-set">A<sub>i,j</sub></span>
+                    <Mo>+</Mo>
+                    <Mi>D<sub>lb</sub></Mi>
+                    <Mo>(</Mo>
+                    <Mi>c<sub>i+1,j</sub></Mi>
+                    <Mo>+</Mo>
+                    <Mi>c<sub>i−1,j</sub></Mi>
+                    <Mo>+</Mo>
+                    <Mi>c<sub>i,j+1</sub></Mi>
+                    <Mo>+</Mo>
+                    <Mi>c<sub>i,j−1</sub></Mi>
+                    <Mo>−</Mo>
+                    <Mo>4</Mo>
+                    <Mi>c<sub>i,j</sub></Mi>
+                    <Mo>)</Mo>
+                </MRow>
+                <p className="help-math-caption">
+                    A<sub>i,j</sub> = (u<sub>x</sub> ≥ 0 ? u<sub>x</sub>(c<sub>i,j</sub> − c<sub>i−1,j</sub>) : u<sub>x</sub>(c<sub>i+1,j</sub> − c<sub>i,j</sub>)) + (same for u<sub>y</sub>)
+                </p>
+            </MathBlock>
+            <p className="help-eq-para">
+                Non-dimensional lattice diffusivity is <span className="help-math-inline">D<sub>lb</sub> = D · Δt<sub>s</sub> / Δx²</span> where Δt<sub>s</sub> is the physical time step chosen by the solver (from <em>U</em><sub>lb,target</sub> · Δx / <em>U</em><sub>phys</sub>) and Δx is the physical cell size. Stability requires D<sub>lb</sub> ≤ 0.25 (CFL + diffusion limit); Flow Lab warns when this is violated.
+            </p>
+            <p className="help-eq-para">
+                Boundary conditions: <strong>inlet</strong> cells are clamped to <em>c</em> = <em>c</em><sub>inlet</sub>(t), evaluated every LBM sub-step from the pulse profile; <strong>outlet</strong> cells use zero-gradient (copy from the upstream neighbour); <strong>walls</strong> use zero-flux (any stencil sample that lands on a wall falls back to the cell-centre value, which nulls that directional flux).
+            </p>
+
+            {/* ── 3. Wall-sensor formula ──────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">How a wall sensor computes c(t) and |u|(t)</h3>
+            <p className="help-eq-para">
+                For each edge tagged <code>sensor</code> the rasterizer collects the set <span className="help-math-inline">S<sub>e</sub></span> of fluid cells whose centre is within 2.2 · Δx of the edge <em>and</em> for which that edge is the closest polygon edge (prevents adjacent sensor edges from double-counting the same cell). Per snapshot:
+            </p>
+            <MathBlock label="Wall sensor — spatial mean over edge-adjacent fluid cells">
+                <MRow>
+                    <Mi>c̄<sub>e</sub>(t)</Mi>
+                    <Mo>=</Mo>
+                    <Frac
+                        num={<>1</>}
+                        den={<>|<span className="help-math-set">S<sub>e</sub></span>|</>}
+                    />
+                    <span className="help-math-sum-wrap">
+                        <span className="help-math-sum">∑</span>
+                        <sub className="help-math-sum-sub">k ∈ S<sub>e</sub></sub>
+                    </span>
+                    <Mi>c<sub>k</sub>(t)</Mi>
+                </MRow>
+                <MRow>
+                    <Mi>|ū|<sub>e</sub>(t)</Mi>
+                    <Mo>=</Mo>
+                    <Frac
+                        num={<>1</>}
+                        den={<>|<span className="help-math-set">S<sub>e</sub></span>|</>}
+                    />
+                    <span className="help-math-sum-wrap">
+                        <span className="help-math-sum">∑</span>
+                        <sub className="help-math-sum-sub">k ∈ S<sub>e</sub></sub>
+                    </span>
+                    <Mo>√</Mo>
+                    <Mo>(</Mo>
+                    <Mi>u<sub>x,k</sub>²</Mi>
+                    <Mo>+</Mo>
+                    <Mi>u<sub>y,k</sub>²</Mi>
+                    <Mo>)</Mo>
+                </MRow>
+                <p className="help-math-caption">
+                    S<sub>e</sub> is the pre-computed list of fluid cells near sensor edge e. |S<sub>e</sub>| typically spans a 2-cell-deep strip along the edge.
+                </p>
+            </MathBlock>
+            <p className="help-eq-para">
+                Because the wall cells themselves are forced to <em>c</em> = 0 by the no-slip + wall-evaporation BC, the sensor samples only the first fluid layer — exactly the thin diffusion boundary layer a real surface sensor integrates. Expect |ū|<sub>e</sub> ≪ <em>U</em><sub>bulk</sub> (typically 1/100 to 1/1000) because of the parabolic laminar profile.
+            </p>
+
+            {/* ── 4. Point-probe formula ──────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">How a point probe computes c(t) and |u|(t)</h3>
+            <p className="help-eq-para">
+                Point probes sample at the exact (<em>x</em><sub>p</sub>, <em>y</em><sub>p</sub>) you clicked — generally not on a grid node — so the solver uses <strong>bilinear interpolation</strong> of the four surrounding cell centres. Given cell spacing Δx, Δy and the grid-local fractional coordinates
+            </p>
+            <MathBlock label="Bilinear sub-grid coordinates">
+                <MRow>
+                    <Mi>i</Mi>
+                    <Mo>=</Mo>
+                    <Frac
+                        num={<>x<sub>p</sub> − x<sub>min</sub></>}
+                        den={<>Δx</>}
+                    />
+                    <Mo>−</Mo>
+                    <Mo>½</Mo>
+                    <Mo>,</Mo>
+                    <Mi>j</Mi>
+                    <Mo>=</Mo>
+                    <Frac
+                        num={<>y<sub>p</sub> − y<sub>min</sub></>}
+                        den={<>Δy</>}
+                    />
+                    <Mo>−</Mo>
+                    <Mo>½</Mo>
+                </MRow>
+                <MRow>
+                    <Mi>i<sub>0</sub></Mi>
+                    <Mo>=</Mo>
+                    <span className="help-math-fn">floor</span>
+                    <Mo>(</Mo>
+                    <Mi>i</Mi>
+                    <Mo>)</Mo>
+                    <Mo>,</Mo>
+                    <Mi>j<sub>0</sub></Mi>
+                    <Mo>=</Mo>
+                    <span className="help-math-fn">floor</span>
+                    <Mo>(</Mo>
+                    <Mi>j</Mi>
+                    <Mo>)</Mo>
+                    <Mo>,</Mo>
+                    <Mi>f<sub>x</sub></Mi>
+                    <Mo>=</Mo>
+                    <Mi>i</Mi>
+                    <Mo>−</Mo>
+                    <Mi>i<sub>0</sub></Mi>
+                    <Mo>,</Mo>
+                    <Mi>f<sub>y</sub></Mi>
+                    <Mo>=</Mo>
+                    <Mi>j</Mi>
+                    <Mo>−</Mo>
+                    <Mi>j<sub>0</sub></Mi>
+                </MRow>
+            </MathBlock>
+            <p className="help-eq-para">
+                the interpolated scalar at the probe location is:
+            </p>
+            <MathBlock label="Point probe — bilinear interpolation">
+                <MRow>
+                    <Mi>c<sub>p</sub>(t)</Mi>
+                    <Mo>=</Mo>
+                    <Mo>(1 − f<sub>x</sub>)(1 − f<sub>y</sub>)</Mo>
+                    <Mi>c<sub>i<sub>0</sub>,j<sub>0</sub></sub></Mi>
+                    <Mo>+</Mo>
+                    <Mi>f<sub>x</sub></Mi>
+                    <Mo>(1 − f<sub>y</sub>)</Mo>
+                    <Mi>c<sub>i<sub>0</sub>+1,j<sub>0</sub></sub></Mi>
+                </MRow>
+                <MRow>
+                    <Mo> </Mo>
+                    <Mo>+</Mo>
+                    <Mo>(1 − f<sub>x</sub>)</Mo>
+                    <Mi>f<sub>y</sub></Mi>
+                    <Mi>c<sub>i<sub>0</sub>,j<sub>0</sub>+1</sub></Mi>
+                    <Mo>+</Mo>
+                    <Mi>f<sub>x</sub></Mi>
+                    <Mi>f<sub>y</sub></Mi>
+                    <Mi>c<sub>i<sub>0</sub>+1,j<sub>0</sub>+1</sub></Mi>
+                </MRow>
+                <p className="help-math-caption">Same bilinear kernel is applied independently to u<sub>x</sub>, u<sub>y</sub>; |u|<sub>p</sub> = √(u<sub>x,p</sub>² + u<sub>y,p</sub>²).</p>
+            </MathBlock>
+            <p className="help-eq-para">
+                <strong>Validity check:</strong> all four corner cells must have <code>mask ≠ WALL</code>. If any corner is a wall (probe too close to the boundary), the sampler returns <code>NaN</code> and the chart draws a gap rather than a false-zero. If the probe sits entirely outside the polygon, no row is appended at all.
+            </p>
+
+            {/* ── 5. Response-metric formulas ─────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Per-probe response metrics</h3>
+            <p className="help-eq-para">
+                Once a probe has accumulated enough samples, Flow Lab computes standard response-kinetics descriptors you&apos;ll recognise from breath-sensor literature. Letting c<sub>peak</sub> = max<sub>t</sub> c(t) and t<sub>peak</sub> the time of that maximum:
+            </p>
+            <ul className="help-list">
+                <li><strong>t<sub>10</sub>, t<sub>50</sub>, t<sub>90</sub></strong> — first crossing times where c(t) reaches 10 %, 50 %, 90 % of c<sub>peak</sub> on the rising edge. Computed by linear interpolation between adjacent samples.</li>
+                <li><strong>Rise time</strong> = t<sub>90</sub> − t<sub>10</sub> — characteristic speed of the leading edge, insensitive to the tiny initial delay in t<sub>0</sub>.</li>
+                <li><strong>FWHM</strong> — full width at half maximum: t<sub>fall,50%</sub> − t<sub>rise,50%</sub>, a single-number summary of peak sharpness.</li>
+                <li><strong>AUC</strong> — trapezoidal integration of (c(t) − c<sub>0</sub>) dt where c<sub>0</sub> is the pre-pulse baseline. Units: c · s. Proportional to the total dose delivered to the probe.</li>
+            </ul>
+
+            {/* ── 6. Physical interpretation ──────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Interpreting the two curves side-by-side</h3>
+            <div className="ml-callout ml-callout-tip">
+                <strong>Rule of thumb.</strong> For a laminar channel with inlet velocity <em>U</em>, residence time <span className="help-math-inline">τ<sub>flow</sub> = L / U</span>, and analyte diffusivity <em>D</em>:
+                <ul className="help-list" style={{ marginTop: 8 }}>
+                    <li>A <strong>point probe on the flow path</strong> shows a pulse shape shifted by ≈τ<sub>flow</sub> relative to the inlet, with peak ≈ inlet amplitude and decay time ≈1–2 τ<sub>flow</sub>. Taylor dispersion broadens the pulse by <span className="help-math-inline">σ ≈ √(2 D t)</span>.</li>
+                    <li>A <strong>wall sensor on the same chamber</strong> shows peak c <strong>1–3 orders of magnitude smaller</strong> and a decay <strong>5–10× slower</strong>, because mass transport to the wall is diffusion-limited inside the boundary layer. Characteristic wall-diffusion time is <span className="help-math-inline">τ<sub>diff</sub> ≈ δ² / D</span>, where δ is the boundary-layer thickness.</li>
+                    <li>A probe placed in a <strong>recirculation bubble</strong> or behind a fillet will show almost no pulse — those pockets ventilate by diffusion only. Good diagnostic for dead zones.</li>
+                </ul>
+            </div>
+            <p className="help-eq-para">
+                <strong>How long should you run?</strong> You typically need sim time <em>t</em> ≥ <em>t</em><sub>pulse_off</sub> + 3 τ<sub>flow</sub> for a point probe to return to zero, and <em>t</em> ≥ <em>t</em><sub>pulse_off</sub> + 5–10 τ<sub>flow</sub> for a wall sensor. The Sensor Response summary strip shows both τ<sub>flow</sub> and the recommended total time — if your sensor looks flat, it&apos;s almost always because the puff hasn&apos;t arrived yet rather than a solver issue.
+            </p>
+
+            {/* ── 7. Diagnostic readouts ──────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">Live diagnostics in the summary strip</h3>
+            <ul className="help-list">
+                <li><strong>c inlet now</strong> — current value of c<sub>inlet</sub>(t) evaluated from the pulse profile. Turns green when non-zero. If this stays zero during the pulse window, the profile / parameters aren&apos;t reaching the solver.</li>
+                <li><strong>c max (fluid)</strong> — maximum concentration anywhere in the interior (excluding the inlet cells themselves). Green ≥ 10⁻⁴, red otherwise. If this is red while <em>c inlet now</em> is green, advection + diffusion are not transporting the puff off the boundary — a genuine solver bug. If it&apos;s green but a sensor row reads zero, the puff simply hasn&apos;t reached that sensor yet.</li>
+                <li><strong>sim time / τ flow</strong> — elapsed simulated time vs. the convective residence time L / U, plus a live hint about whether the pulse has started, is in progress, or when the decay is expected to finish.</li>
+                <li><strong>pulse</strong> — echoes the pulse ID and parameters the solver is actually using (captured at Run time, not the live UI). Confirms exactly what profile is driving the inlet.</li>
+            </ul>
+
+            {/* ── 8. Export / CSV schema ──────────────────────────────── */}
+            <hr className="ml-section-sep" />
+            <h3 className="help-subheading">CSV export schema</h3>
+            <p className="help-eq-para">
+                Pressing <strong>Sensors CSV</strong> writes one wide row per sample. Column groups: <code>t_s</code>, then for each sensor/probe key: <code>c_&lt;label&gt;</code>, <code>u_&lt;label&gt;</code>. Wall sensors use their edge label (<code>S1</code>, <code>S2</code>, …); point probes use the <code>P:&lt;id&gt;</code> key with their user-assigned label. The commanded inlet reference (<code>INLET</code>) is included as a column if species transport was on. Samples are downsampled only once per rolling-buffer wrap (20&nbsp;000 points per trace), so CSV exports contain the full high-resolution history within that limit.
+            </p>
+
+        </div>
+    );
+}
+
+/**
  * User guide sections: id = anchor for table of contents
  */
 const GUIDE_SECTIONS = [
@@ -1399,6 +1661,65 @@ const GUIDE_SECTIONS = [
             'For extra packages, type names in **Install packages** and install, then **import** in your script.',
             'Click **Run** on a `.py` file to execute; read text output and **Plots (matplotlib)** below it.',
         ],
+    },
+    {
+        id: 'flow-lab',
+        icon: Wind,
+        title: 'Flow Lab',
+        subtitle: '2D gas-path designer with live viscous flow simulation',
+        intro:
+            '**Flow Lab** is a lightweight CAD-style 2D drawing surface coupled to an in-browser **Lattice-Boltzmann (LBM D2Q9)** solver. Draw the outline of a chamber or channel, click any edge to mark it as **inlet / outlet / wall**, choose a gas, and press **Run** to watch the velocity field develop live. No server — the solver runs in a **Web Worker** on your machine.',
+        fundamentals: [
+            '**Regime covered:** steady / quasi-steady, **incompressible**, **laminar** flow. Ideal for typical aroma sampling (Re ≲ few hundred). Not appropriate for supersonic, highly turbulent, or heat-transfer-dominated problems.',
+            '**Units are consistent:** geometry is stored internally in **millimetres**; the toolbar toggle just changes whether you see **mm** or **µm** on dimensions and the cursor readout.',
+            '**LBM at a glance:** instead of solving Navier–Stokes directly, LBM evolves particle distributions on a D2Q9 lattice; **half-way bounce-back** naturally enforces no-slip on arbitrary polygon walls, which is why we can support **any** user-drawn shape.',
+            '**Stability:** the solver auto-computes the relaxation time τ from your geometry, inlet velocity, and gas viscosity. A warning appears if τ drifts outside the stable band [0.52, 1.8] — usually fixed by lowering the inlet velocity or refining the lattice.',
+            '**Reynolds number:** `Re = U · L / ν`, with `L` = shortest bounding-box dimension of the fluid region. Displayed live in the toolbar and the right-hand panel.',
+        ],
+        implemented: [
+            '**Ribbon-style toolbar** — tools are grouped by purpose with captioned bands, so what-does-what is obvious at a glance. Groups (left → right): **File** (New / Save / Save as… / Result / Files), **Sketch** (Select, Line, Rect, Polyline, Circle — create geometry), **Modify** (Move, Mirror, Offset + d, Extend, Fillet + R, Trim, Delete tool, Delete sel — edit existing geometry), **Combine** (Union, Subtract, Intersect, XOR, Make region — multi-entity ops; the caption shows a live **"N selected"** badge so you know exactly what the booleans will act on), **Analysis** (Section probe), **History** (Undo / Redo), **View** (Grid + settings ⚙, Snap, mm/µm), **Viewport** (Zoom in / Zoom out / Fit), and **Simulate** (Run / Pause / Reset).',
+            'Drawing tools: **Line** (AutoCAD-style click-chain, click the first vertex to close), **rectangle**, **closed polyline** (click–click–double-click), **circle**, **fillet** (round a sharp corner with a circular arc of user-specified radius), **trim** (click the portion of a section probe or line to cut away, bounded by the nearest intersection on each side), **section probe**, **select**, **delete**',
+            '**Parametric property editor** (SolidWorks-style): with **Select**, click a **vertex** to edit its exact X / Y coordinates, or click an **edge** to edit **Start / End / Length / Angle** — dimensions commit on Enter or blur and the geometry updates instantly',
+            '**Open polylines** from the Line tool are rendered dashed as construction/sketch geometry — the solver ignores them and only meshes the first closed polygon',
+            '**Surgical edits**: with Select, click any **vertex** or **edge** then press <kbd>Del</kbd> (or the **Cut** button) to remove just that section. A vertex delete drops the corner and lets the neighbours re-connect; an **edge delete BREAKS the segment** — a closed polygon opens into an open polyline at that edge, and an open polyline splits into two pieces so you can re-draw that stretch. Hold <kbd>Shift</kbd>+<kbd>Del</kbd> on an edge to fall back to the legacy **collapse** behaviour instead (merges neighbouring edges with a straight chord). The **Delete** tool (toolbar) exposes the same surgical operations via a single click — **vertex click → drop vertex**, **edge click → break segment**, **interior click → delete whole entity**.',
+            '**Undo / Redo** (<kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd>) — 80-step history covering every geometry and section edit',
+            '**Save / Save as… / Save result / File manager** — **Save** (<kbd>⌘S</kbd>) overwrites the current project file in-place; **Save as…** (<kbd>⌘⇧S</kbd>) prompts for a new name. After running a simulation, **Save result** archives a `.flowres.json` snapshot (geometry + final flow field) so you can close Flow Lab and **resume analysis weeks later** — add more Section probes, plot different quantities, export CSV — with zero re-computation. The **Files** button opens a full **Flow Lab file manager**: create sub-folders, rename, move, delete, download (JSON export), or open any saved project/result. Project and result files carry distinct icons in the explorer.',
+            '**Post-simulation analysis** — drop **multiple Section probe-lines** anywhere in the field (each drag = new section, auto-coloured). Plot **|u|, u_x, u_y, u·n (normal)** or **u·t (tangential)** across any/all sections on overlaid axes. Per-section readouts include **peak / mean / σ / uniformity / flux / Q (flow rate) / local Re**. Set **channel depth** to convert 2D flux to a real volumetric flow rate in **µL/min, mL/min, L/min**. Rename (double-click), hide (●), export to **CSV** (↓) or delete (×) each section. Click a section on the canvas to focus its stats.',
+            '**Transient flow-rate tracking** — a dedicated **Flow rate vs time** panel records **Q(t), mean(t), peak(t), flux(t)** for every section at every solver post (≈30 Hz), up to 2 000 samples, then auto-subsamples the early transient for longer runs. The multi-line chart plots one coloured trace per section with a dot at the current value and a dashed **"steady"** marker when the convergence window (8 residuals < 1e-4) is satisfied. A summary table below shows each section\'s **ū, Q, Re** at the current (or steady) field — click any row to focus that section in the detailed stats above. The **Q(t) CSV** button exports a wide-format CSV with `iter, t_s` and five columns per section (`mean_mps, peak_mps, flux_m2ps, Q_m3ps, Q_mlpm`); **Summary CSV** exports one row per section with the final (or steady) values plus `length_mm, std_mps, uniformity_pct` and `Re_local`. **Clear** discards the recording without touching the current flow field.',
+            'Grid with **auto-scaled major/minor ticks** and endpoint / grid **snap** (also snaps to the first vertex of a Line chain so closing is precise). Click the ⚙ button next to **Grid** to open the **Grid settings** popover: switch between **Auto** (step scales with zoom) and **Fixed** (pin a step in the current unit), and choose how many **minor divisions** sit between each major tick (1 / 2 / 4 / 5 / 10)',
+            '**Adjustable solver mesh** — the right-hand **Solver mesh** panel exposes the LBM lattice resolution. Pick a preset (**Coarse 150 / Medium 300 / Fine 450 / Very fine 600** long-axis cells) or type a custom value (40–1000). A live preview shows the estimated **nx × ny**, **total cells**, and **cell size Δx** for the current closed domain, so you can see exactly how fine the mesh will be before pressing **Run**. Pause or reset the solver to change it — the new value takes effect on the next **Run**. Mesh resolution is saved per-project (and per-result snapshot) alongside the geometry',
+            '**Coordinate gizmo** — a fixed bottom-left **X (→ red) / Y (↑ green)** axis widget plus a live **(0, 0)** origin crosshair that tracks pan/zoom, so you always know which way is +X / +Y',
+            '**Entity list & marquee select** — the left **Entities** panel lists every body; tick **checkboxes** to choose several for **Union** / boolean / Move / Mirror without Shift-clicking on the canvas. On the drawing area, **right-drag** a dashed rectangle to select every shape whose bounding box touches the box; hold **Shift** when you release the right button to **add** those hits to the current multi-selection instead of replacing it. The browser context menu on the canvas is suppressed so right-drag stays clean.',
+            '**Professional CAD modify tools** — **Shift + click** builds a multi-selection (highlighted amber) for group operations. **Boolean ops** on closed polygons: **Union** (⌘U), **Subtract** (first selected − rest), **Intersect**, **XOR** — powered by the Martinez polygon-clipping algorithm, so self-intersecting, concave or disjoint results are handled correctly. **Offset** (**O**) — set the offset distance `d` in the toolbar (mm or µm, signed: + outward / − inward) and click a closed polygon to generate a parallel outline. **Extend** (**X**) — click the free tip of an open polyline, then click toward the boundary; the line grows along its direction to the first intersection. **Move** (**V**) — click a reference point then the target; translates everything in the selection. **Mirror** (**M**) — drag to define a reflection axis and the selection is mirrored across it (edge BCs re-indexed to keep inlet / outlet tags correct). **Make region** — select multiple open polylines that form a loop and click **Make region** to stitch them into a single closed polygon, ready for BC tagging.',
+            '**Pan** (Alt + drag or middle-mouse) and **cursor-anchored zoom** (scroll wheel)',
+            'Per-edge boundary conditions — **inlet (velocity)**, **outlet (zero-gradient)**, **no-slip wall**',
+            'Gas presets: **Air**, **Nitrogen**, **Oxygen**, **CO₂**, **Argon**, **Helium**, **humid breath**',
+            'Live **velocity-magnitude heatmap** with selectable colormap (**viridis / plasma / turbo / RdBu / gray**)',
+            'Live readouts: **iteration**, **residual**, **|u|ₘₐₓ**, **dead-zone %** (fluid cells below 1% of peak velocity)',
+            '**Convergence chart** with log-y residual trace and a 1e-4 target; status bar shows **Steady state reached** once the last 8 posts all fall below threshold',
+            '**mm ↔ µm** display toggle without re-scaling the geometry',
+            'Pre-loaded **example channel** — 20 × 5 mm body with a 1 mm inlet and 1 mm outlet, walls pre-tagged, ready to press **Run**',
+        ],
+        steps: [
+            'Open **Flow Lab** from the sidebar — the example channel (20 × 5 mm body, 1 mm inlet / outlet, air, all walls no-slip) is already loaded.',
+            'Press **Run** — the solver starts immediately. Watch the heatmap develop and the **Profile across section** panel fill in live.',
+            'Check the **Convergence** panel: the residual curve should drop a few decades and the **Steady state reached** badge lights up when it settles below 1e-4.',
+            'Want a different inlet speed? Type a new value in **Inlet U** (m/s) on the right and press **Run** again.',
+            'Drawing your own geometry — pick the **Line** tool, click each vertex in order, then click the **first** vertex again to close into a polygon (Enter leaves it as an open sketch). For quick shapes use **Rect**, **Circle**, or **Polyline** instead.',
+            'Edit a shape — switch to **Select**, click a vertex or edge of the polygon. Press <kbd>Del</kbd> (or the **Cut** button): a vertex click drops that corner and the neighbours reconnect; an **edge click breaks that segment** so you can redesign it — a closed polygon becomes an open polyline with the removed edge gone, and an open polyline splits in two. Use the **Delete** tool from the toolbar for the same surgical actions via click-only.',
+            'Parametric editing — in **Select**, click a **vertex** and type a new **X / Y** in the right-hand Properties panel; or click an **edge** and type an exact **Length** (the end-vertex slides along the edge direction) or **Angle** (end-vertex rotates around start). Inputs commit on <kbd>Enter</kbd> or blur.',
+            'Round a sharp corner — click **Fillet**, set the **R** radius in the toolbar (mm or µm), then click any corner vertex of a closed polygon. The vertex is replaced by a 16-segment circular-arc fillet; the two transition edges inherit the original BCs, the arc interior defaults to wall.',
+            '**Trim** (<kbd>T</kbd>) applies only to **section probes** and **open (dashed) Line-tool polylines** — click the portion you want to remove; Flow Lab cuts at the nearest intersection on each side. It does **not** remove an edge between two separate **closed** rectangles or merge them into one solid. To fuse two touching closed regions (e.g. main channel + add-on box sharing a wall), **Shift-click** each polygon to multi-select, then **Union** (<kbd>⌘U</kbd>) — the shared boundary becomes the interior of a single outline. You will need to set **Inlet / Outlet** again on the merged polygon (Union resets edge tags to wall). If a trim splits a section through the middle, you get two probes with separate colours, stats, and CSV export.',
+            'Tag boundaries — in **Select** mode, click each outer edge of the closed polygon and pick **Inlet / Outlet / Wall** in the right panel.',
+            'Post-simulation analysis — pick the **Section** tool and drag probe lines across any region (each drag adds a new coloured section). In the **Post-sim analysis** panel pick which quantity to plot (**|u| / u_x / u_y / u·n / u·t**). Set the **Channel depth (mm)** so the 2D flux is converted to a real **Q (flow rate)** in µL/mL/L per minute. Use the section list to rename (double-click), hide (●), export CSV (↓), or delete (×). Click a section on the canvas to focus its detailed stats card (peak, mean, σ, uniformity, flux, Q, local Re).',
+            'Transient + steady-state flow rate — the **Flow rate vs time** panel below records Q (and mean / peak / flux) for every section at every solver post. Watch the traces approach steady state while the sim runs; a dashed **steady** marker appears once residuals settle. The summary table shows each section\'s final values; **Q(t) CSV** exports the full time series for every section; **Summary CSV** exports one row per section at the current field. **Save result** (toolbar) now archives the time history alongside the geometry + field, so you can re-open a `.flowres.json` weeks later and continue plotting / exporting without re-solving.',
+            'Hit **Save** (<kbd>⌘S</kbd>) — the first time it prompts for a name and the file lands under **Flow Lab/** in the workspace. Every subsequent Save overwrites that same file in-place (no duplicates). Use **Save as…** (<kbd>⌘⇧S</kbd>) to fork a copy, or **New** to start a fresh project (next Save will prompt again).',
+            'Archive simulation results — after the field settles, press **Save result** in the toolbar (or use the green **Save result here** action from the Files dialog). This writes a `.flowres.json` snapshot with the geometry **and** the final velocity field, so you can close the page and later open it again to **continue post-sim analysis** (drag more sections, replot, export CSV) without re-solving.',
+            'Use **Files** to open the Flow Lab file manager — a proper two-pane explorer. Create sub-folders with **New folder**, drop projects or results directly into the current folder via the green / blue buttons, rename items with the pencil icon, move files between folders from the **Move…** dropdown, download a file as JSON with the ↓ icon, or delete with the trash icon (folder deletion is recursive and asks for confirmation).',
+            'Made a mistake? <kbd>⌘Z</kbd> / <kbd>⌘⇧Z</kbd> walks up to 80 steps back and forward.',
+            'Toggle **Pause** to freeze, **Reset** to terminate the solver, or click **Reload example** in the Visualization panel to restore the default setup.',
+        ],
+        CustomContent: FlowLabProbeTheory,
     },
     {
         id: 'spreadsheet',
