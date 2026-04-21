@@ -950,7 +950,7 @@ const MLStudioPage = ({
                         <Brain size={26} color="#38bdf8" />
                     </div>
                     <div>
-                        <h1 className="page-title">FeNOse — ML Studio</h1>
+                        <h1 className="page-title">FeNOze - ML Studio</h1>
                         <p className="ml-fenose-header-sub">
                             Run a NO (ppb) model from your workspace on the chart’s active file, or train a new FeNOse model from labelled workspace captures. Models stay in the browser workspace (not bundled with the site).
                         </p>
