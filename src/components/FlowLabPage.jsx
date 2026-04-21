@@ -479,13 +479,15 @@ const DEFAULT_SECTION = () => ({
     points: [{ x: 10, y: 0 }, { x: 10, y: 5 }],
 });
 
-/** One-time example scene for first paint + undo stack entry. Calling
- *  `DEFAULT_DOMAIN()` twice (once for `entities`, once for `history`)
- *  used to mint two different entity ids — Cmd-Z then restored the
- *  "wrong" polygon and made it look like the first body vanished. */
+/** One-time example scene for first paint + undo stack entry. Starts
+ *  on the aroma-chamber demo so opening Flow Lab lands on a ready-to-
+ *  Run species-transport configuration instead of the bare 20×5 mm
+ *  channel. We build the ents/secs once and deep-clone into both the
+ *  live state and the undo-history seed so Cmd-Z doesn't mint a new
+ *  polygon id and make the first body appear to vanish. */
 const FLOWLAB_INITIAL_SNAPSHOT = (() => {
-    const ents = [DEFAULT_DOMAIN()];
-    const secs = [DEFAULT_SECTION()];
+    const ents = [AROMA_CHAMBER_DOMAIN()];
+    const secs = [AROMA_CHAMBER_SECTION()];
     return {
         entities: JSON.parse(JSON.stringify(ents)),
         sections: JSON.parse(JSON.stringify(secs)),
@@ -588,12 +590,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
        engineers actually think). When set to sccm, the effective inlet
        velocity is back-computed from Q, the inlet edge length and the
        channel depth. */
-    const [inletMode, setInletMode] = useState('velocity'); // 'velocity' | 'sccm'
-    const [inletQ_sccm, setInletQ_sccm] = useState(10); // default 10 sccm
+    const [inletMode, setInletMode] = useState('sccm'); // 'velocity' | 'sccm'
+    const [inletQ_sccm, setInletQ_sccm] = useState(20); // default 20 sccm (aroma-demo)
     /* Species transport — enable the passive-scalar solver overlay so
        the user can watch an aroma pulse wash through the device and
-       time its arrival at sensor surfaces. */
-    const [speciesEnabled, setSpeciesEnabled] = useState(false);
+       time its arrival at sensor surfaces. Defaults ON so Flow Lab
+       opens on the ready-to-Run aroma-chamber demo. */
+    const [speciesEnabled, setSpeciesEnabled] = useState(true);
     /* Default analyte: Nitrogen dioxide (NO₂) — the most common
        "reactive inorganic" target for our sensor work. Users can switch
        to the passive tracer, NO, or any VOC from the dropdown. */
@@ -619,7 +622,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const sensorHistoryRef = useRef({});
     const [sensorHistory, setSensorHistory] = useState({});
     /* Which section's detailed stats card to show. */
-    const [selectedSectionId, setSelectedSectionId] = useState('s_default');
+    const [selectedSectionId, setSelectedSectionId] = useState('s_aroma_mid');
     /* Point probe — last clicked world coord (mm) to show local quantities. */
     const [probePoint, setProbePoint] = useState(null);
 
@@ -809,6 +812,20 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const STEADY_THRESHOLD = 1e-4;
     const STEADY_WINDOW = 8; // consecutive posts below threshold → "steady"
 
+    /* Optional user-specified maximum simulation time (in seconds of
+       physical time). When set, the solver keeps marching past steady
+       state and auto-pauses once `field.t_s >= simDurationS`. When
+       left blank / null, the original behaviour is preserved: auto-
+       pause on steady-state convergence. Useful for pulse studies
+       where you want to watch the c(t) decay tail well after steady
+       state for the velocity field has been reached. */
+    const [simDurationS, setSimDurationS] = useState('');
+    const simDurationNum = (() => {
+        if (simDurationS === '' || simDurationS == null) return null;
+        const v = Number(simDurationS);
+        return Number.isFinite(v) && v > 0 ? v : null;
+    })();
+
     /* Transient flow-rate history. Populated as the solver marches —
        one row per field post with the physical time and, per visible
        section, Q (vol. flow rate), mean / peak |u|, σ, and flux. Used
@@ -841,7 +858,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      * local concentration, so the velocity colours still bleed through
      * at low c and the pulse front lights up visibly at high c. */
     const speciesCanvasRef = useRef(null);
-    const [showSpeciesOverlay, setShowSpeciesOverlay] = useState(true);
+    const [showSpeciesOverlay, setShowSpeciesOverlay] = useState(false);
     /* The fluid/wall mask is needed on the main thread for (a) rendering
        wall cells as transparent on the heatmap, and (b) skipping walls
        when integrating streamlines. We keep it in a ref (it never needs
@@ -1188,6 +1205,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         colormap,
         showStreamlines,
         meshLongAxis,
+        simDurationS,
         gridStepOverrideMm,
         gridStepMinMm,
         minorDivisions,
@@ -1197,7 +1215,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     }), [projectName, unit, gasId, inletU_m_s, inletMode, inletQ_sccm, channelDepthMm,
          speciesEnabled, analyteId, customD_m2s, analyteT_C, analyteRH_pct, pulseId, pulseParams,
          colormap, showStreamlines,
-         meshLongAxis, gridStepOverrideMm, gridStepMinMm, minorDivisions, entities, sections,
+         meshLongAxis, simDurationS, gridStepOverrideMm, gridStepMinMm, minorDivisions, entities, sections,
          pointProbes]);
 
     /**
@@ -1349,6 +1367,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         if (typeof json.showStreamlines === 'boolean') setShowStreamlines(json.showStreamlines);
         if (typeof json.meshLongAxis === 'number' && Number.isFinite(json.meshLongAxis)) {
             setMeshLongAxis(Math.max(MIN_MESH_LONG_AXIS, Math.min(MAX_MESH_LONG_AXIS, Math.round(json.meshLongAxis))));
+        }
+        if (json.simDurationS === '' || json.simDurationS == null) {
+            setSimDurationS('');
+        } else if (typeof json.simDurationS === 'number' && Number.isFinite(json.simDurationS) && json.simDurationS > 0) {
+            setSimDurationS(String(json.simDurationS));
+        } else if (typeof json.simDurationS === 'string') {
+            setSimDurationS(json.simDurationS);
         }
         if (json.gridStepOverrideMm === null || typeof json.gridStepOverrideMm === 'number') {
             setGridStepOverrideMm(json.gridStepOverrideMm);
@@ -3031,19 +3056,26 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     }
 
                     /* Edge-detect aroma pulse start / end: zero → non-zero
-                       fires a "started" banner, non-zero → zero fires an
-                       "ended" banner. Auto-clears after 3 s. `EPS` avoids
-                       spurious fires from tiny numerical noise. */
+                       pins a "started" banner, non-zero → zero pins an
+                       "ended" banner. The banner stays visible for the
+                       rest of the run (or until a fresh run / reset
+                       clears it) so the user always has a visible
+                       indicator of pulse state. `EPS` avoids spurious
+                       fires from tiny numerical noise. */
                     const EPS = 1e-4;
                     const prev = prevCInletRef.current || 0;
                     if (prev < EPS && cNow >= EPS) {
-                        if (pulseBannerTimerRef.current) clearTimeout(pulseBannerTimerRef.current);
+                        if (pulseBannerTimerRef.current) {
+                            clearTimeout(pulseBannerTimerRef.current);
+                            pulseBannerTimerRef.current = null;
+                        }
                         setPulseBanner({ kind: 'start', t_s, value: cNow });
-                        pulseBannerTimerRef.current = setTimeout(() => setPulseBanner(null), 3000);
                     } else if (prev >= EPS && cNow < EPS) {
-                        if (pulseBannerTimerRef.current) clearTimeout(pulseBannerTimerRef.current);
+                        if (pulseBannerTimerRef.current) {
+                            clearTimeout(pulseBannerTimerRef.current);
+                            pulseBannerTimerRef.current = null;
+                        }
                         setPulseBanner({ kind: 'end', t_s });
-                        pulseBannerTimerRef.current = setTimeout(() => setPulseBanner(null), 3000);
                     }
                     prevCInletRef.current = cNow;
                 }
@@ -3195,6 +3227,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             workerRef.current.postMessage({ type: 'start' });
             setRunning(true);
             setSolverWarning(null);
+            /* Steady-state auto-pause is allowed to re-fire on every
+               Resume — steadyReached oscillation handles the gating.
+               Duration-based pause is NOT re-armed here: a resume
+               without changing the Sim time means "keep marching past
+               the previous target"; re-arm happens when the user
+               bumps the target, handled by a separate effect below. */
+            autoPausedOnceRef.current = false;
         } else {
             startSolver();
         }
@@ -3217,6 +3256,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setField(null);
         setSolverInfo(null);
         setSolverWarning(null);
+        if (pulseBannerTimerRef.current) {
+            clearTimeout(pulseBannerTimerRef.current);
+            pulseBannerTimerRef.current = null;
+        }
+        setPulseBanner(null);
+        prevCInletRef.current = 0;
+        durationPausedOnceRef.current = false;
     }, []);
 
     /* Auto-pause + geometry-invalidation effects live AFTER the
@@ -3975,13 +4021,48 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
        above the useMemo would trip the temporal-dead-zone check the
        very first time React evaluates this function body. */
     useEffect(() => {
+        /* When the user has specified a simulation duration, we keep
+           marching past steady state and let the duration-watch effect
+           below handle the pause. Otherwise preserve the original
+           auto-pause-on-steady behaviour. */
+        if (simDurationNum != null) {
+            autoPausedOnceRef.current = false;
+            return;
+        }
         if (steadyReached && running && !autoPausedOnceRef.current) {
             autoPausedOnceRef.current = true;
             pauseSolver();
             setSolverWarning('Steady state reached — simulation auto-paused. Press Run to keep marching, adjust inputs and Run again, or Reset.');
         }
         if (!steadyReached) autoPausedOnceRef.current = false;
-    }, [steadyReached, running, pauseSolver]);
+    }, [steadyReached, running, pauseSolver, simDurationNum]);
+
+    /* Duration-based auto-pause. When the user sets a target simulation
+       time (seconds of physical time), pause as soon as the current
+       field's t_s crosses that threshold. Uses a separate "once" ref so
+       it doesn't fight with the steady-state pause above. */
+    const durationPausedOnceRef = useRef(false);
+    const lastArmedDurationRef = useRef(null);
+    useEffect(() => {
+        if (simDurationNum == null) {
+            durationPausedOnceRef.current = false;
+            lastArmedDurationRef.current = null;
+            return;
+        }
+        /* Re-arm whenever the user bumps / lowers the target so the
+           next field post crossing the new threshold will pause. */
+        if (lastArmedDurationRef.current !== simDurationNum) {
+            lastArmedDurationRef.current = simDurationNum;
+            durationPausedOnceRef.current = false;
+        }
+        const t_s = field?.t_s;
+        if (!running || !Number.isFinite(t_s)) return;
+        if (t_s >= simDurationNum && !durationPausedOnceRef.current) {
+            durationPausedOnceRef.current = true;
+            pauseSolver();
+            setSolverWarning(`Reached target simulation time (${simDurationNum.toFixed(3)} s) — auto-paused. Press Run to keep marching past this target, or adjust Sim time and Run again.`);
+        }
+    }, [field, running, simDurationNum, pauseSolver]);
 
     /* Geometry / BC edits invalidate any running solver — the mask
        would be stale. Killing the worker here means the next Run click
@@ -4688,9 +4769,9 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             {pulseBanner.kind === 'start' ? (
                                 <>
                                     <span className="fl-pulse-banner-dot" />
-                                    <span className="fl-pulse-banner-ttl">Aroma pulse started</span>
+                                    <span className="fl-pulse-banner-ttl">Aroma pulse in progress</span>
                                     <span className="fl-pulse-banner-sub">
-                                        t = {pulseBanner.t_s.toFixed(3)} s · c<sub>in</sub> = {pulseBanner.value?.toFixed(2)}
+                                        started t = {pulseBanner.t_s.toFixed(3)} s · c<sub>in</sub> = {pulseBanner.value?.toFixed(2)}
                                     </span>
                                 </>
                             ) : (
@@ -5306,6 +5387,29 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                 Pause / Reset the solver to change mesh resolution — it rebuilds the lattice on the next <b>Run</b>.
                             </div>
                         )}
+                        <div className="fl-subhd" style={{ marginTop: 10 }}>Run duration</div>
+                        <label
+                            className="fl-field fl-field-inset"
+                            title="Optional target simulation time in seconds of physical time. When set, the solver keeps marching past steady state and auto-pauses once this is reached. Leave blank to keep the default behaviour (auto-pause on steady-state convergence)."
+                        >
+                            <span>Sim time</span>
+                            <div className="fl-inline">
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step={0.1}
+                                    placeholder="auto (steady)"
+                                    value={simDurationS}
+                                    onChange={(e) => setSimDurationS(e.target.value)}
+                                />
+                                <span>s</span>
+                            </div>
+                        </label>
+                        <div className="fl-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                            {simDurationNum != null
+                                ? <>Auto-pause at <b>t = {simDurationNum.toFixed(3)} s</b>. Steady-state auto-pause disabled while a duration is set.</>
+                                : <>Blank → auto-pause when steady state is detected. Enter a value (e.g. <b>5</b>) to keep marching for a fixed physical time.</>}
+                        </div>
                     </div>
 
                     <div className="fl-panel">
@@ -5669,7 +5773,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                 setInletQ_sccm(20);
                                 setChannelDepthMm(1);
                                 setSpeciesEnabled(true);
-                                setShowSpeciesOverlay(true);
+                                setShowSpeciesOverlay(false);
                                 setAnalyteId('no2');
                                 setAnalyteT_C(25);
                                 setAnalyteRH_pct(40);
