@@ -36,6 +36,7 @@ import HelpPage from './components/HelpPage';
 import HomePage from './components/HomePage';
 import FlowLabPage from './components/FlowLabPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
+import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
 import SpreadsheetPage from './components/SpreadsheetPage';
 import FileViewerPage from './components/FileViewerPage';
@@ -1860,6 +1861,9 @@ function App() {
                         onAddSyntheticFenoseToWorkspace={handleAddSyntheticFenoseToWorkspace}
                       />
                     );
+                    break;
+                  case 'aiChat':
+                    content = <AIChatPage />;
                     break;
                   case 'dashboard':
                   default:

@@ -5,7 +5,7 @@ import {
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
-    Sparkles, Moon, Sun, Home as HomeIcon, Wind
+    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -334,8 +334,9 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
-                        { page: 'mlStudio', title: 'FeNOse ML Studio', Icon: Brain },
+                        { page: 'mlStudio', title: 'FeNOze ML Studio', Icon: Brain },
                         { page: 'tsnePage', title: 't-SNE explorer', Icon: Atom },
+                        { page: 'aiChat', title: 'AI Agents — on-device chat with Gemma / Llama / Qwen', Icon: Bot },
                         { page: 'help', title: 'Help', Icon: BookOpen },
                     ].map(({ page, title, Icon }) => {
                         const showFlowLabDot = page === 'flowLab' && flowLabRunning;
@@ -734,6 +735,28 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="t-SNE Concentration Explorer"
                 >
                     <Atom size={16} />
+                </button>
+                <button
+                    onClick={() => onPageChange?.('aiChat')}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '6px 0',
+                        borderRadius: 8,
+                        border: activePage === 'aiChat' ? '1px solid rgba(99,102,241,0.45)' : '1px solid rgba(255,255,255,0.05)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: activePage === 'aiChat' ? 'rgba(99,102,241,0.18)' : 'rgba(255,255,255,0.02)',
+                        color: activePage === 'aiChat' ? '#a5b4fc' : 'var(--text-muted)',
+                        boxShadow: activePage === 'aiChat' ? '0 0 10px rgba(99,102,241,0.2)' : 'none',
+                        transition: 'all 0.15s',
+                    }}
+                    title="AI Agents — on-device chat (Gemma, Llama, Qwen, Phi, SmolLM)"
+                >
+                    <Bot size={16} />
                 </button>
             </div>
 
