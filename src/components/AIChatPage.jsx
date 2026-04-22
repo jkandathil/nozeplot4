@@ -193,6 +193,11 @@ export default function AIChatPage() {
     const workerRef = useRef(null);
     const scrollRef = useRef(null);
     const inputRef = useRef(null);
+    /* Always-fresh pointer to the currently active chat id so the
+       worker message handler (registered once with [] deps) can route
+       streamed tokens + final text into the CURRENT conversation,
+       never a stale one. */
+    const activeChatIdRef = useRef(null);
 
     /* -------- Model / device state -------- */
     const [selectedModel, setSelectedModel] = useState(
@@ -272,10 +277,57 @@ export default function AIChatPage() {
     const [paramsOpen, setParamsOpen] = useState(false);
     const [systemOpen, setSystemOpen] = useState(false);
 
+    /* Mirror activeChatId into a ref so async callbacks (worker
+       messages, streaming writes) always target the live chat even if
+       they were registered on an earlier render. */
+    useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
+
     /* ============ Worker wiring ============ */
     useEffect(() => {
         const w = new Worker(new URL('../ai/aiChatWorker.js', import.meta.url), { type: 'module' });
         workerRef.current = w;
+
+        /* Closure-free finalize: reads the CURRENT active chat id from
+           the ref at call time (not the one captured when the worker
+           was wired). This is what actually writes the assistant reply
+           into the visible conversation, so it MUST see fresh state. */
+        const finalizeAssistantMessageByRef = (finalText, stats, wasStopped) => {
+            setStreamingText('');
+            setLastStats(stats || null);
+            const targetId = activeChatIdRef.current;
+            setConversations((prev) =>
+                prev.map((c) => {
+                    if (c.id !== targetId) return c;
+                    const msgs = [...c.messages];
+                    const lastIdx = msgs.length - 1;
+                    if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant' && msgs[lastIdx].streaming) {
+                        msgs[lastIdx] = {
+                            ...msgs[lastIdx],
+                            content:
+                                finalText ||
+                                msgs[lastIdx].content ||
+                                (wasStopped ? '⏹ stopped' : ''),
+                            streaming: false,
+                            stats: stats || null,
+                            stopped: !!wasStopped,
+                        };
+                    } else if (finalText) {
+                        // Defensive: placeholder was lost (chat switch /
+                        // clear race) — still surface the reply instead
+                        // of dropping it silently.
+                        msgs.push({
+                            role: 'assistant',
+                            content: finalText,
+                            streaming: false,
+                            stats: stats || null,
+                            ts: Date.now(),
+                        });
+                    }
+                    return { ...c, messages: msgs, updatedAt: Date.now() };
+                })
+            );
+        };
+
         w.onmessage = (ev) => {
             const msg = ev.data;
             if (!msg) return;
@@ -317,11 +369,11 @@ export default function AIChatPage() {
                     setStreamingText((prev) => prev + (msg.text || ''));
                     break;
                 case 'complete':
-                    finalizeAssistantMessage(msg.text, msg.stats);
+                    finalizeAssistantMessageByRef(msg.text, msg.stats, false);
                     setGenStartedAt(0);
                     break;
                 case 'stopped':
-                    finalizeAssistantMessage('', null, true);
+                    finalizeAssistantMessageByRef('', null, true);
                     setGenStartedAt(0);
                     break;
                 case 'error':
@@ -434,30 +486,14 @@ export default function AIChatPage() {
         });
     }, [currentModelId, device, dtype]);
 
-    const finalizeAssistantMessage = useCallback((finalText, stats, wasStopped = false) => {
-        setStreamingText('');
-        setLastStats(stats || null);
-        setConversations((prev) =>
-            prev.map((c) => {
-                if (c.id !== activeChatId) return c;
-                const msgs = [...c.messages];
-                // We already appended a placeholder assistant at send time.
-                // Replace its content with the final text (using streamingText
-                // is less reliable when the run ended without a 'complete').
-                const lastIdx = msgs.length - 1;
-                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant' && msgs[lastIdx].streaming) {
-                    msgs[lastIdx] = {
-                        ...msgs[lastIdx],
-                        content: finalText || msgs[lastIdx].content || (wasStopped ? '⏹ stopped' : ''),
-                        streaming: false,
-                        stats: stats || null,
-                        stopped: wasStopped,
-                    };
-                }
-                return { ...c, messages: msgs, updatedAt: Date.now() };
-            })
-        );
-    }, [activeChatId]);
+    /* Finalize is now defined inside the worker-wiring effect as
+       `finalizeAssistantMessageByRef` so it ALWAYS reads the current
+       chat id via a ref at call time. The old useCallback version had
+       a stale-closure footgun: the worker's onmessage was registered
+       once and kept pointing at the initial render's callback, which
+       captured the original activeChatId — so a generation completing
+       on a newly-created chat would silently no-op and leave the user
+       staring at an empty bubble / empty chat with tok/s stats. */
 
     // Keep streamingText mirrored into the in-progress assistant message so
     // closing / re-opening the tab shows partial output too.
@@ -1070,24 +1106,10 @@ export default function AIChatPage() {
                 <div className="ai-scroll" ref={scrollRef}>
                     {activeMessages.length === 0 && (
                         <div className="ai-empty">
-                            <div className="ai-empty-badge"><Brain size={28} /></div>
-                            <h2>Run powerful open models locally</h2>
-                            <p>
-                                Download any Hugging Face ONNX chat-instruct model (Gemma, Llama, Qwen, Phi, SmolLM…) and
-                                run it <strong>entirely in your browser</strong>. Models are cached after the first download,
-                                so everything stays available — and private — on your machine.
+                            <div className="ai-empty-badge"><Brain size={24} /></div>
+                            <p className="ai-empty-line">
+                                {isLoaded ? 'Ask anything.' : 'Load a model to start chatting.'}
                             </p>
-                            <div className="ai-empty-tips">
-                                <Tip icon={<Zap size={13} />} title="WebGPU acceleration">
-                                    Use the Device selector to flip between WebGPU (fastest) and WASM (CPU fallback).
-                                </Tip>
-                                <Tip icon={<Download size={13} />} title="Persisted downloads">
-                                    First run downloads the weights to your browser cache. Subsequent loads are near-instant.
-                                </Tip>
-                                <Tip icon={<Bot size={13} />} title="Multi-tasking">
-                                    The chat keeps running while you work elsewhere in NozePlot — flow sims, analysis, ML Studio.
-                                </Tip>
-                            </div>
                         </div>
                     )}
                     {activeMessages.map((m, i) => {
@@ -1308,15 +1330,6 @@ function MessageBubble({
                     </div>
                 )}
             </div>
-        </div>
-    );
-}
-
-function Tip({ icon, title, children }) {
-    return (
-        <div className="ai-tip">
-            <div className="ai-tip-head">{icon} <strong>{title}</strong></div>
-            <div className="ai-tip-body">{children}</div>
         </div>
     );
 }

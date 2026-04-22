@@ -490,58 +490,30 @@
     gap: 14px;
 }
 .ai-empty {
-    max-width: 620px;
-    margin: 48px auto;
-    text-align: center;
-    color: #94a3b8;
+    margin: auto;
+    padding: 32px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: #64748b;
 }
 .ai-empty-badge {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 56px;
-    height: 56px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
-    background: radial-gradient(circle at 30% 30%, rgba(99, 102, 241, 0.35), rgba(99, 102, 241, 0.05));
-    border: 1px solid rgba(99, 102, 241, 0.35);
-    color: #c7d2fe;
-    margin-bottom: 14px;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
 }
-.ai-empty h2 {
-    margin: 0 0 8px;
-    font-size: 1.25rem;
-    color: #e2e8f0;
-    font-weight: 700;
-}
-.ai-empty p {
-    margin: 0 0 20px;
-    font-size: 0.88rem;
-    line-height: 1.55;
-}
-.ai-empty-tips {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    gap: 10px;
-    text-align: left;
-}
-.ai-tip {
-    padding: 10px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-}
-.ai-tip-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.78rem;
-    color: #c7d2fe;
-    margin-bottom: 4px;
-}
-.ai-tip-body {
-    font-size: 0.72rem;
+.ai-empty-line {
+    margin: 0;
+    font-size: 0.85rem;
     color: #94a3b8;
-    line-height: 1.45;
 }
 
 /* ================= Message bubbles ================= */
