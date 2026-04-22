@@ -271,15 +271,33 @@ export function buildAugmentedSystemPrompt({
     budgetChars = 2200,
     k = 4,
     minScore = 0.4,
+    /* `modelTier` lets the caller tell us how capable the currently
+       loaded LLM is. Sub-500M-param 'experimental' models can't follow
+       a multi-rule RAG prompt — they hallucinate jargon and drop
+       garbage tokens. For those we fall back to a drastically reduced
+       prompt with no primer and only a couple of passages, so the
+       model has a fighting chance to at least paraphrase the docs
+       correctly. Tier order: experimental < basic < good < great. */
+    modelTier = 'good',
 } = {}) {
+    const isTinyModel = modelTier === 'experimental';
+    const effectiveK = isTinyModel ? 2 : k;
+    const effectiveBudget = isTinyModel ? 900 : budgetChars;
+
     const retrievalQuery = [query, ...history.slice(-2)].filter(Boolean).join(' \n ');
-    const rawHits = retrieveContext(retrievalQuery, { k });
+    const rawHits = retrieveContext(retrievalQuery, { k: effectiveK });
     const hits = rawHits.filter((h) => h.score >= minScore);
 
     const basePrompt = (userSystem || '').trim() || DEFAULT_PERSONA;
 
     // Primer-only path: the model still knows the app end-to-end.
     if (hits.length === 0) {
+        if (isTinyModel) {
+            // Skip the primer entirely — a 270M-param model chokes on
+            // the long primer and output devolves into hallucinated
+            // APIs. Just answer from its own capacity.
+            return { prompt: basePrompt, sources: [], augmented: false };
+        }
         const prompt = [
             basePrompt,
             '',
@@ -291,24 +309,52 @@ export function buildAugmentedSystemPrompt({
         return { prompt, sources: [], augmented: true };
     }
 
-    // Budget chars across the retrieved chunks proportional to score,
-    // with a higher floor so each passage keeps enough detail for the
-    // model to synthesise across them.
+    // Budget chars across the retrieved chunks proportional to score.
     const totalScore = hits.reduce((s, h) => s + h.score, 0) || 1;
     const injected = hits.map((h, idx) => {
-        const share = Math.max(400, Math.floor((h.score / totalScore) * budgetChars));
+        const share = Math.max(
+            isTinyModel ? 300 : 400,
+            Math.floor((h.score / totalScore) * effectiveBudget)
+        );
         return {
             ...h,
             index: idx + 1,
-            clipped: clipText(h.text, Math.min(share, 1000)),
+            clipped: clipText(h.text, Math.min(share, isTinyModel ? 600 : 1000)),
         };
     });
 
-    // Numbered, clearly-delimited passages so the model can reference
-    // them internally while reasoning ("passage 2 says X, passage 4
-    // says Y, therefore ..."). Numbering is the single most reliable
-    // way to get small LLMs to actually synthesise across chunks
-    // rather than paraphrasing the first one.
+    // Tiny-model path: minimal prompt, no primer, no rule list, no
+    // passage numbering. Just: notes → question. This is the only way
+    // tiny models stay coherent.
+    if (isTinyModel) {
+        const simpleBlock = injected
+            .map((h) => `From ${h.title}:\n${h.clipped}`)
+            .join('\n\n');
+        const prompt = [
+            basePrompt,
+            '',
+            'Here are notes from the app\'s Help guide that may help:',
+            '',
+            simpleBlock,
+            '',
+            'Answer the user\'s question in your own words, briefly.',
+        ].join('\n');
+        return {
+            prompt,
+            sources: hits.map((h) => ({
+                id: h.id,
+                title: h.title,
+                source: h.source,
+                anchor: h.anchor,
+                score: h.score,
+            })),
+            augmented: true,
+        };
+    }
+
+    // Regular path: numbered passages + full RAG policy. The numbering
+    // and explicit rules are what let 1B+ models actually synthesise
+    // across chunks rather than paraphrasing the first one.
     const contextBlock = injected
         .map(
             (h) =>

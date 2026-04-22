@@ -42,36 +42,36 @@ import {
 /* `sizeMB` is a rough upper bound on on-device footprint, used to    */
 /* warn users before committing to a slow download on CPU-only.       */
 /* ------------------------------------------------------------------ */
+/* Quality tiers set the user's expectation *up-front*. Sub-500M-param
+   models produce plausible-sounding but incoherent output on anything
+   complex (RAG, multi-step reasoning) — they hallucinate APIs and
+   drop garbage tokens. Tiers:
+     'experimental' — novelty-only, <= 400M params. Chat only, no RAG.
+     'basic'        — usable for simple Q&A, 400–700M params.
+     'good'         — reliable general assistant, 700M–1.5B params.
+     'great'        — best quality we can run in the browser, 1.5B+.  */
 const CURATED_MODELS = [
+    {
+        id: 'onnx-community/Llama-3.2-1B-Instruct-q4f16',
+        label: 'Llama 3.2 1B · Instruct',
+        family: 'Llama',
+        size: '~750 MB',
+        sizeMB: 750,
+        quality: 'good',
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4f16',
+        description: 'Meta Llama 3.2 1B — recommended default. Strong general chat and follows RAG instructions well.',
+    },
     {
         id: 'onnx-community/Qwen2.5-0.5B-Instruct',
         label: 'Qwen 2.5 0.5B · Instruct',
         family: 'Qwen',
         size: '~380 MB',
         sizeMB: 380,
+        quality: 'basic',
         dtypeWebGPU: 'q4f16',
         dtypeWasm: 'q4',
-        description: 'Alibaba Qwen 2.5 — tiny, fast, great default. Chat template verified.',
-    },
-    {
-        id: 'onnx-community/Llama-3.2-1B-Instruct-q4f16',
-        label: 'Llama 3.2 1B · Instruct (q4f16)',
-        family: 'Llama',
-        size: '~750 MB',
-        sizeMB: 750,
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4f16',
-        description: 'Meta Llama 3.2 1B, pre-quantised for WebGPU. Strong general chat.',
-    },
-    {
-        id: 'onnx-community/gemma-3-270m-it-ONNX',
-        label: 'Gemma 3 270M · Instruct',
-        family: 'Gemma',
-        size: '~230 MB',
-        sizeMB: 230,
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'Google Gemma 3 ultra-small. Fast even on CPU.',
+        description: 'Alibaba Qwen 2.5 — fast, passable for simple Q&A, may struggle with RAG synthesis.',
     },
     {
         id: 'onnx-community/gemma-3-1b-it-ONNX',
@@ -79,19 +79,10 @@ const CURATED_MODELS = [
         family: 'Gemma',
         size: '~800 MB',
         sizeMB: 800,
+        quality: 'good',
         dtypeWebGPU: 'q4f16',
         dtypeWasm: 'q4',
-        description: 'Google Gemma 3 1B. Very good quality, WebGPU recommended.',
-    },
-    {
-        id: 'onnx-community/SmolLM2-360M-Instruct',
-        label: 'SmolLM2 360M · Instruct',
-        family: 'SmolLM',
-        size: '~290 MB',
-        sizeMB: 290,
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'HuggingFaceTB SmolLM2 — tiny, snappy, surprisingly capable.',
+        description: 'Google Gemma 3 1B. Good quality, WebGPU recommended.',
     },
     {
         id: 'onnx-community/SmolLM2-1.7B-Instruct',
@@ -99,6 +90,7 @@ const CURATED_MODELS = [
         family: 'SmolLM',
         size: '~1.4 GB',
         sizeMB: 1400,
+        quality: 'great',
         dtypeWebGPU: 'q4f16',
         dtypeWasm: 'q4',
         description: 'SmolLM2 1.7B — best SmolLM quality tier. WebGPU recommended.',
@@ -109,11 +101,41 @@ const CURATED_MODELS = [
         family: 'Phi',
         size: '~2.2 GB',
         sizeMB: 2200,
+        quality: 'great',
         dtypeWebGPU: 'q4f16',
         dtypeWasm: null,
         description: 'Microsoft Phi-3.5 mini. WebGPU + fp16 only — not practical on CPU.',
     },
+    {
+        id: 'onnx-community/SmolLM2-360M-Instruct',
+        label: 'SmolLM2 360M · Instruct',
+        family: 'SmolLM',
+        size: '~290 MB',
+        sizeMB: 290,
+        quality: 'experimental',
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'Tiny, snappy — but hallucinates and cannot use RAG well.',
+    },
+    {
+        id: 'onnx-community/gemma-3-270m-it-ONNX',
+        label: 'Gemma 3 270M · Instruct',
+        family: 'Gemma',
+        size: '~230 MB',
+        sizeMB: 230,
+        quality: 'experimental',
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'Ultra-small — produces incoherent output with RAG. Demo/speed test only.',
+    },
 ];
+
+const QUALITY_LABELS = {
+    experimental: { label: 'Experimental', tone: 'warn' },
+    basic: { label: 'Basic', tone: 'neutral' },
+    good: { label: 'Good', tone: 'ok' },
+    great: { label: 'Great', tone: 'great' },
+};
 
 const DTYPE_OPTIONS = [
     { value: 'q4', label: 'q4 (4-bit · smallest)' },
@@ -581,6 +603,10 @@ export default function AIChatPage() {
                 history: recentUserTurns,
                 budgetChars: DEFAULT_KB_BUDGET,
                 k: DEFAULT_KB_K,
+                /* Thread the loaded model's capability tier through so
+                   tiny experimental models get a minimal prompt (no
+                   primer, no rule list) — otherwise they hallucinate. */
+                modelTier: currentModelMeta?.quality || 'good',
             });
             effectiveSystem = prompt;
             usedSources = sources;
@@ -651,10 +677,24 @@ export default function AIChatPage() {
             });
         } catch { /* ignore */ }
 
+        /* Tiny 'experimental' models (270–360M params) sample way off
+           distribution at the default temperature, producing garbled
+           tokens ("眷", "iyev") and hallucinated jargon. Clamp temp
+           and repetition_penalty for them so output stays coherent. */
+        const effectiveParams = currentModelMeta?.quality === 'experimental'
+            ? {
+                ...params,
+                temperature: Math.min(params.temperature ?? 0.7, 0.4),
+                top_p: Math.min(params.top_p ?? 0.9, 0.85),
+                repetition_penalty: Math.min(params.repetition_penalty ?? 1.1, 1.05),
+                max_new_tokens: Math.min(params.max_new_tokens ?? 512, 300),
+            }
+            : params;
+
         workerRef.current?.postMessage({
             type: 'generate',
             messages: payload,
-            params,
+            params: effectiveParams,
         });
     }, [
         input,
@@ -790,14 +830,33 @@ export default function AIChatPage() {
                                 onChange={(e) => handleSelectModel(e.target.value)}
                                 disabled={isLoading}
                             >
-                                {CURATED_MODELS.map((m) => (
-                                    <option key={m.id} value={m.id}>
-                                        {m.label} · {m.size}
-                                    </option>
-                                ))}
+                                {CURATED_MODELS.map((m) => {
+                                    const q = QUALITY_LABELS[m.quality] || {};
+                                    return (
+                                        <option key={m.id} value={m.id}>
+                                            {m.label} · {m.size}
+                                            {q.label ? ` · ${q.label}` : ''}
+                                        </option>
+                                    );
+                                })}
                             </select>
                             {currentModelMeta && !customModel.trim() && (
-                                <p className="ai-field-hint">{currentModelMeta.description}</p>
+                                <p className="ai-field-hint">
+                                    {currentModelMeta.quality && (
+                                        <span className={`ai-quality-badge ai-quality-${QUALITY_LABELS[currentModelMeta.quality]?.tone || 'neutral'}`}>
+                                            {QUALITY_LABELS[currentModelMeta.quality]?.label || currentModelMeta.quality}
+                                        </span>
+                                    )}
+                                    {currentModelMeta.description}
+                                </p>
+                            )}
+                            {isLoaded && currentModelMeta?.quality === 'experimental' && (
+                                <div className="ai-tier-warning">
+                                    <strong>Heads up:</strong> this model only has ~200M parameters.
+                                    Expect incoherent answers, hallucinated APIs, and occasional
+                                    garbled characters — especially with NozePlot awareness on.
+                                    For actual Q&A, load <em>Llama 3.2 1B</em> or <em>Gemma 3 1B</em> instead.
+                                </div>
                             )}
 
                             <label className="ai-field-label" style={{ marginTop: 10 }}>
