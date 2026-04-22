@@ -26,63 +26,82 @@ import './AIChatPage.css';
 /* with @huggingface/transformers v4 `text-generation` pipeline.      */
 /*                                                                     */
 /* Users can still type any HF model id in the "Custom model" field.  */
+/*                                                                     */
+/* `dtypeWebGPU` / `dtypeWasm` are the recommended precisions: WebGPU */
+/* likes fp16-based variants, WASM is happiest on plain `q4`/`q8`.    */
+/* `sizeMB` is a rough upper bound on on-device footprint, used to    */
+/* warn users before committing to a slow download on CPU-only.       */
 /* ------------------------------------------------------------------ */
 const CURATED_MODELS = [
+    {
+        id: 'onnx-community/Qwen2.5-0.5B-Instruct',
+        label: 'Qwen 2.5 0.5B · Instruct',
+        family: 'Qwen',
+        size: '~380 MB',
+        sizeMB: 380,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'Alibaba Qwen 2.5 — tiny, fast, great default. Chat template verified.',
+    },
+    {
+        id: 'onnx-community/Llama-3.2-1B-Instruct-q4f16',
+        label: 'Llama 3.2 1B · Instruct (q4f16)',
+        family: 'Llama',
+        size: '~750 MB',
+        sizeMB: 750,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4f16',
+        description: 'Meta Llama 3.2 1B, pre-quantised for WebGPU. Strong general chat.',
+    },
     {
         id: 'onnx-community/gemma-3-270m-it-ONNX',
         label: 'Gemma 3 270M · Instruct',
         family: 'Gemma',
         size: '~230 MB',
-        dtype: 'q4',
-        description: 'Google Gemma 3 ultra-small. Fast on CPU, instant on WebGPU.',
+        sizeMB: 230,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'Google Gemma 3 ultra-small. Fast even on CPU.',
     },
     {
         id: 'onnx-community/gemma-3-1b-it-ONNX',
         label: 'Gemma 3 1B · Instruct',
         family: 'Gemma',
         size: '~800 MB',
-        dtype: 'q4',
-        description: 'Google Gemma 3 1B. Great general quality. WebGPU recommended.',
+        sizeMB: 800,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'Google Gemma 3 1B. Very good quality, WebGPU recommended.',
     },
     {
-        id: 'onnx-community/Qwen2.5-0.5B-Instruct',
-        label: 'Qwen 2.5 0.5B · Instruct',
-        family: 'Qwen',
-        size: '~380 MB',
-        dtype: 'q4',
-        description: 'Alibaba Qwen 2.5 — strong reasoning for its size.',
-    },
-    {
-        id: 'onnx-community/Llama-3.2-1B-Instruct',
-        label: 'Llama 3.2 1B · Instruct',
-        family: 'Llama',
-        size: '~800 MB',
-        dtype: 'q4',
-        description: 'Meta Llama 3.2 1B. Versatile general-purpose chat.',
-    },
-    {
-        id: 'HuggingFaceTB/SmolLM2-360M-Instruct',
+        id: 'onnx-community/SmolLM2-360M-Instruct',
         label: 'SmolLM2 360M · Instruct',
         family: 'SmolLM',
         size: '~290 MB',
-        dtype: 'q4',
+        sizeMB: 290,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
         description: 'HuggingFaceTB SmolLM2 — tiny, snappy, surprisingly capable.',
     },
     {
-        id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',
+        id: 'onnx-community/SmolLM2-1.7B-Instruct',
         label: 'SmolLM2 1.7B · Instruct',
         family: 'SmolLM',
         size: '~1.4 GB',
-        dtype: 'q4',
-        description: 'HuggingFaceTB SmolLM2 1.7B — best SmolLM quality tier.',
+        sizeMB: 1400,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: 'q4',
+        description: 'SmolLM2 1.7B — best SmolLM quality tier. WebGPU recommended.',
     },
     {
         id: 'onnx-community/Phi-3.5-mini-instruct-onnx-web',
-        label: 'Phi-3.5 mini · Instruct',
+        label: 'Phi-3.5 mini · Instruct (WebGPU)',
         family: 'Phi',
         size: '~2.2 GB',
-        dtype: 'q4f16',
-        description: 'Microsoft Phi-3.5 mini — strong reasoning. WebGPU + fp16 strongly recommended.',
+        sizeMB: 2200,
+        dtypeWebGPU: 'q4f16',
+        dtypeWasm: null,
+        description: 'Microsoft Phi-3.5 mini. WebGPU + fp16 only — not practical on CPU.',
     },
 ];
 
@@ -164,6 +183,15 @@ export default function AIChatPage() {
     const [downloadProgress, setDownloadProgress] = useState({}); // { file: {progress, loaded, total} }
     const [lastStats, setLastStats] = useState(null);
     const [errorMsg, setErrorMsg] = useState('');
+    const [errorStack, setErrorStack] = useState('');
+
+    /* Generation-time instrumentation so the UI never looks "stuck":
+       we show elapsed time from Send, plus how long it took the
+       streamer to flush the first visible chunk. Big models on WASM
+       can take 15–40 s for that first chunk — we want that visible. */
+    const [genStartedAt, setGenStartedAt] = useState(0);
+    const [elapsedMs, setElapsedMs] = useState(0);
+    const [firstTokenMs, setFirstTokenMs] = useState(null);
 
     /* -------- Generation params -------- */
     const [params, setParams] = useState(() => ({
@@ -208,6 +236,9 @@ export default function AIChatPage() {
                 case 'status':
                     setStatus(msg.status);
                     if (msg.status === 'ready') setErrorMsg('');
+                    if (msg.status !== 'generating') {
+                        setGenStartedAt(0);
+                    }
                     break;
                 case 'progress':
                     if (msg.file) {
@@ -226,18 +257,34 @@ export default function AIChatPage() {
                     setLoadedModelId(msg.modelId);
                     setDownloadProgress({});
                     setErrorMsg('');
+                    setErrorStack('');
+                    break;
+                case 'generation-started':
+                    setGenStartedAt(Date.now());
+                    setFirstTokenMs(null);
+                    break;
+                case 'first-token':
+                    setFirstTokenMs(msg.delayMs);
                     break;
                 case 'token':
                     setStreamingText((prev) => prev + (msg.text || ''));
                     break;
                 case 'complete':
                     finalizeAssistantMessage(msg.text, msg.stats);
+                    setGenStartedAt(0);
                     break;
                 case 'stopped':
                     finalizeAssistantMessage('', null, true);
+                    setGenStartedAt(0);
                     break;
                 case 'error':
                     setErrorMsg(String(msg.message || 'Unknown error'));
+                    setErrorStack(String(msg.stack || ''));
+                    setGenStartedAt(0);
+                    break;
+                case 'log':
+                    // Already logged inside the worker — the tap here is
+                    // intentionally a no-op so future UIs can surface it.
                     break;
                 default:
                     break;
@@ -272,6 +319,20 @@ export default function AIChatPage() {
             setDevice('wasm');
         }
     }, [webgpuAvailable, device]);
+
+    /* Keep elapsed time fresh while the model is generating so "stuck?"
+       moments (slow first-chunk on WASM) are visibly progressing. */
+    useEffect(() => {
+        if (!genStartedAt) {
+            setElapsedMs(0);
+            return undefined;
+        }
+        setElapsedMs(Date.now() - genStartedAt);
+        const id = setInterval(() => {
+            setElapsedMs(Date.now() - genStartedAt);
+        }, 200);
+        return () => clearInterval(id);
+    }, [genStartedAt]);
 
     /* ============ Persistence ============ */
     useEffect(() => { saveLS(LS_MODEL, selectedModel); }, [selectedModel]);
@@ -452,13 +513,28 @@ export default function AIChatPage() {
         setStreamingText('');
     }, [activeChatId]);
 
-    // When the user switches model via dropdown, auto-fill the recommended dtype.
+    // When the user switches model via dropdown, auto-fill the recommended
+    // dtype for the currently-selected device. WebGPU likes q4f16, WASM
+    // prefers plain q4/q8 — picking the wrong one is a very common reason
+    // for "load succeeds but generation hangs".
     const handleSelectModel = useCallback((id) => {
         setSelectedModel(id);
         setCustomModel('');
         const meta = CURATED_MODELS.find((m) => m.id === id);
-        if (meta?.dtype) setDtype(meta.dtype);
-    }, []);
+        if (!meta) return;
+        const next = device === 'webgpu' ? meta.dtypeWebGPU : meta.dtypeWasm;
+        if (next) setDtype(next);
+    }, [device]);
+
+    // Re-align dtype when the user flips device, if a curated model is picked.
+    const handleSelectDevice = useCallback((nextDevice) => {
+        setDevice(nextDevice);
+        if (customModel.trim()) return;
+        const meta = CURATED_MODELS.find((m) => m.id === selectedModel);
+        if (!meta) return;
+        const next = nextDevice === 'webgpu' ? meta.dtypeWebGPU : meta.dtypeWasm;
+        if (next) setDtype(next);
+    }, [selectedModel, customModel]);
 
     /* ============ Derived UI values ============ */
     const activeMessages = activeChat?.messages || [];
@@ -536,7 +612,7 @@ export default function AIChatPage() {
                                     <select
                                         className="ai-select"
                                         value={device}
-                                        onChange={(e) => setDevice(e.target.value)}
+                                        onChange={(e) => handleSelectDevice(e.target.value)}
                                         disabled={isLoading}
                                     >
                                         <option value="webgpu" disabled={webgpuAvailable === false}>
@@ -604,15 +680,47 @@ export default function AIChatPage() {
                                 </div>
                             )}
 
+                            {/* WASM + large-model perf advisory */}
+                            {device === 'wasm' &&
+                                currentModelMeta?.sizeMB &&
+                                currentModelMeta.sizeMB >= 700 && (
+                                    <div className="ai-status-warn">
+                                        <AlertTriangle size={12} /> {currentModelMeta.label} on CPU
+                                        (WASM) can take 20–60 s for the first reply. Switch to WebGPU
+                                        or pick a smaller model for smoother chats.
+                                    </div>
+                                )}
+                            {device === 'wasm' && currentModelMeta?.dtypeWasm === null && (
+                                <div className="ai-status-warn">
+                                    <AlertTriangle size={12} /> This model is not practical on CPU
+                                    (WASM). Pick a smaller model or enable WebGPU.
+                                </div>
+                            )}
+
                             {/* Status line */}
                             <div className="ai-status-line" data-status={status}>
                                 {status === 'idle' && <><Cpu size={12} /> Idle</>}
                                 {status === 'loading' && <><Loader2 size={12} className="ai-spin" /> Loading model…</>}
                                 {status === 'ready' && <><CheckCircle2 size={12} /> Ready · {loadedModelId.split('/').pop()}</>}
-                                {status === 'generating' && <><Zap size={12} /> Generating…</>}
+                                {status === 'generating' && (
+                                    <>
+                                        <Zap size={12} /> Generating… {Math.max(0, elapsedMs / 1000).toFixed(1)} s
+                                        {firstTokenMs != null && (
+                                            <span className="ai-status-sub">
+                                                · first chunk @ {(firstTokenMs / 1000).toFixed(1)} s
+                                            </span>
+                                        )}
+                                    </>
+                                )}
                                 {errorMsg && (
                                     <div className="ai-status-err">
                                         <AlertTriangle size={12} /> {errorMsg}
+                                        {errorStack && (
+                                            <details className="ai-status-err-details">
+                                                <summary>stack</summary>
+                                                <pre>{errorStack}</pre>
+                                            </details>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -777,15 +885,26 @@ export default function AIChatPage() {
                             </div>
                         </div>
                     )}
-                    {activeMessages.map((m, i) => (
-                        <MessageBubble
-                            key={i}
-                            role={m.role}
-                            content={m.content}
-                            streaming={m.streaming}
-                            stopped={m.stopped}
-                        />
-                    ))}
+                    {activeMessages.map((m, i) => {
+                        const isLiveStream =
+                            m.streaming &&
+                            isGenerating &&
+                            i === activeMessages.length - 1;
+                        return (
+                            <MessageBubble
+                                key={i}
+                                role={m.role}
+                                content={m.content}
+                                streaming={m.streaming}
+                                stopped={m.stopped}
+                                waitingNote={
+                                    isLiveStream && !m.content
+                                        ? `Warming up… ${(elapsedMs / 1000).toFixed(1)} s elapsed`
+                                        : null
+                                }
+                            />
+                        );
+                    })}
                 </div>
 
                 <footer className="ai-composer">
@@ -836,7 +955,7 @@ export default function AIChatPage() {
 
 /* -------------------- Sub-components -------------------- */
 
-function MessageBubble({ role, content, streaming, stopped }) {
+function MessageBubble({ role, content, streaming, stopped, waitingNote }) {
     const isUser = role === 'user';
     return (
         <div className={`ai-msg ai-msg--${role}`}>
@@ -846,7 +965,13 @@ function MessageBubble({ role, content, streaming, stopped }) {
             <div className="ai-msg-body">
                 <div className="ai-msg-role">{isUser ? 'You' : 'Assistant'}</div>
                 <div className={`ai-msg-content ${streaming ? 'ai-msg-content--streaming' : ''}`}>
-                    {content || (streaming ? <em className="ai-msg-wait">thinking…</em> : '')}
+                    {content || (
+                        streaming ? (
+                            <em className="ai-msg-wait">
+                                {waitingNote || 'thinking…'}
+                            </em>
+                        ) : ''
+                    )}
                     {streaming && <span className="ai-msg-caret" />}
                 </div>
                 {stopped && <div className="ai-msg-stopped">⏹ stopped</div>}

@@ -266,14 +266,57 @@
 .ai-status-err {
     flex-basis: 100%;
     margin-top: 4px;
-    padding: 5px 8px;
+    padding: 6px 8px;
     border-radius: 5px;
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.3);
     color: #fca5a5;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
+    flex-wrap: wrap;
+    line-height: 1.4;
+}
+.ai-status-err-details {
+    flex-basis: 100%;
+    margin-top: 4px;
+}
+.ai-status-err-details summary {
+    cursor: pointer;
+    font-size: 0.68rem;
+    color: #fca5a5;
+    opacity: 0.8;
+}
+.ai-status-err-details pre {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 4px;
+    color: #fca5a5;
+    font-size: 0.66rem;
+    line-height: 1.4;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.ai-status-warn {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: 5px;
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.25);
+    color: #fbbf24;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 0.7rem;
+    line-height: 1.4;
+}
+.ai-status-sub {
+    margin-left: 4px;
+    color: #94a3b8;
+    font-size: 0.7rem;
 }
 
 /* ================= Numeric sliders ================= */
