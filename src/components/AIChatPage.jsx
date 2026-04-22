@@ -123,7 +123,16 @@ const DTYPE_OPTIONS = [
     { value: 'fp32', label: 'fp32 (full precision)' },
 ];
 
-const DEFAULT_SYSTEM_PROMPT = 'You are NozeAssistant, a concise, helpful assistant embedded inside NozePlot. Prefer clear, accurate, data-aware answers. If a user asks about sensor or aroma data that you cannot see, say so and explain what they would need to share.';
+const DEFAULT_SYSTEM_PROMPT = [
+    'You are NozeAssistant, a concise, helpful assistant embedded inside NozePlot.',
+    '',
+    'You ARE in a multi-turn conversation. The messages that follow are the real chat history between you and the user. Treat them as authoritative.',
+    '• Use earlier turns to resolve references ("that plot", "what I said", "the previous answer"). Do NOT ask the user to repeat information they already gave you.',
+    '• Stay consistent with any names, definitions, or conclusions you used in earlier replies.',
+    '• If a user asks a short follow-up, continue from the previous answer rather than starting over.',
+    '',
+    'Prefer clear, accurate, data-aware answers. If asked about sensor or aroma data you cannot see, say so and explain what the user would need to share.',
+].join('\n');
 
 // Default character budget for retrieved help snippets grafted into the
 // system prompt. Tuned so a 4-chunk retrieval + user system prompt + chat
@@ -214,6 +223,14 @@ export default function AIChatPage() {
        so users can see that the assistant genuinely has memory of the
        conversation (turns kept, turns dropped, estimated token cost). */
     const [contextInfo, setContextInfo] = useState(null);
+
+    /* Raw payload (system prompt + packed history + new user turn) sent
+       to the worker on the last generate. Surfaced to the UI via the
+       "Show last prompt" button so users can inspect exactly what the
+       model received — indispensable when diagnosing "it's not using my
+       earlier turn". */
+    const [lastPayload, setLastPayload] = useState(null);
+    const [showPayloadModal, setShowPayloadModal] = useState(false);
 
     /* -------- Generation params -------- */
     const [params, setParams] = useState(() => ({
@@ -551,6 +568,21 @@ export default function AIChatPage() {
             sourcesUsed: usedSources.length,
         });
 
+        // Snapshot the exact payload for the inspector + console,
+        // so you can verify conversation memory end-to-end.
+        setLastPayload({
+            messages: payload,
+            ts: Date.now(),
+            question: text,
+        });
+        try {
+            console.log('[AIChat] sending to model:', {
+                turns: payload.length,
+                roles: payload.map((m) => m.role),
+                payload,
+            });
+        } catch { /* ignore */ }
+
         workerRef.current?.postMessage({
             type: 'generate',
             messages: payload,
@@ -793,20 +825,32 @@ export default function AIChatPage() {
                                 actually has conversation memory, and how
                                 much of it fits in the current model window. */}
                             {contextInfo && (
-                                <div
-                                    className="ai-context-chip"
-                                    title={
-                                        `${contextInfo.turnsSent} prior turn${contextInfo.turnsSent === 1 ? '' : 's'} sent to the model\n` +
-                                        `${contextInfo.turnsDropped} older pair${contextInfo.turnsDropped === 1 ? '' : 's'} dropped to fit context window\n` +
-                                        `~${contextInfo.historyTokens} history + ~${contextInfo.systemTokens} system tokens` +
-                                        (contextInfo.kb ? `\n${contextInfo.sourcesUsed} doc section${contextInfo.sourcesUsed === 1 ? '' : 's'} grafted into system prompt` : '')
-                                    }
-                                >
-                                    <Brain size={11} /> Memory: {contextInfo.turnsSent} turn{contextInfo.turnsSent === 1 ? '' : 's'}
-                                    <span className="ai-context-chip-sub">
-                                        ~{(contextInfo.historyTokens + contextInfo.systemTokens)} tok
-                                        {contextInfo.turnsDropped > 0 && ` · ${contextInfo.turnsDropped} dropped`}
-                                    </span>
+                                <div className="ai-context-chip-row">
+                                    <div
+                                        className="ai-context-chip"
+                                        title={
+                                            `${contextInfo.turnsSent} prior turn${contextInfo.turnsSent === 1 ? '' : 's'} sent to the model\n` +
+                                            `${contextInfo.turnsDropped} older pair${contextInfo.turnsDropped === 1 ? '' : 's'} dropped to fit context window\n` +
+                                            `~${contextInfo.historyTokens} history + ~${contextInfo.systemTokens} system tokens` +
+                                            (contextInfo.kb ? `\n${contextInfo.sourcesUsed} doc section${contextInfo.sourcesUsed === 1 ? '' : 's'} grafted into system prompt` : '')
+                                        }
+                                    >
+                                        <Brain size={11} /> Memory: {contextInfo.turnsSent} turn{contextInfo.turnsSent === 1 ? '' : 's'}
+                                        <span className="ai-context-chip-sub">
+                                            ~{(contextInfo.historyTokens + contextInfo.systemTokens)} tok
+                                            {contextInfo.turnsDropped > 0 && ` · ${contextInfo.turnsDropped} dropped`}
+                                        </span>
+                                    </div>
+                                    {lastPayload && (
+                                        <button
+                                            type="button"
+                                            className="ai-inspect-btn"
+                                            onClick={() => setShowPayloadModal(true)}
+                                            title="See the exact messages sent to the model"
+                                        >
+                                            Show last prompt
+                                        </button>
+                                    )}
                                 </div>
                             )}
 
@@ -1100,11 +1144,91 @@ export default function AIChatPage() {
                     </div>
                 </footer>
             </section>
+
+            {showPayloadModal && lastPayload && (
+                <PayloadInspector
+                    payload={lastPayload}
+                    onClose={() => setShowPayloadModal(false)}
+                />
+            )}
         </div>
     );
 }
 
 /* -------------------- Sub-components -------------------- */
+
+function PayloadInspector({ payload, onClose }) {
+    const { messages, question, ts } = payload;
+    const roleCounts = messages.reduce((acc, m) => {
+        acc[m.role] = (acc[m.role] || 0) + 1;
+        return acc;
+    }, {});
+    const totalChars = messages.reduce((s, m) => s + (m.content?.length || 0), 0);
+    const totalTokens = Math.ceil(totalChars / 3.8);
+    return (
+        <div className="ai-inspector-backdrop" onClick={onClose}>
+            <div
+                className="ai-inspector-modal"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-label="Last prompt sent to the model"
+            >
+                <header className="ai-inspector-head">
+                    <div>
+                        <div className="ai-inspector-title">
+                            Last prompt sent to the model
+                        </div>
+                        <div className="ai-inspector-sub">
+                            Question: <em>&ldquo;{question}&rdquo;</em> ·{' '}
+                            {new Date(ts).toLocaleTimeString()}
+                        </div>
+                        <div className="ai-inspector-stats">
+                            {messages.length} messages · ~{totalChars.toLocaleString()} chars
+                            · ~{totalTokens.toLocaleString()} tokens ·{' '}
+                            {Object.entries(roleCounts)
+                                .map(([r, n]) => `${n} ${r}`)
+                                .join(' · ')}
+                        </div>
+                    </div>
+                    <button type="button" className="ai-inspector-close" onClick={onClose}>
+                        ✕
+                    </button>
+                </header>
+                <div className="ai-inspector-body">
+                    {messages.map((m, i) => (
+                        <div key={i} className={`ai-inspector-msg ai-inspector-msg--${m.role}`}>
+                            <div className="ai-inspector-msg-head">
+                                <span className="ai-inspector-msg-role">{m.role}</span>
+                                <span className="ai-inspector-msg-meta">
+                                    {m.content.length.toLocaleString()} chars · ~
+                                    {Math.ceil(m.content.length / 3.8).toLocaleString()} tokens
+                                </span>
+                            </div>
+                            <pre className="ai-inspector-msg-body">{m.content}</pre>
+                        </div>
+                    ))}
+                </div>
+                <footer className="ai-inspector-foot">
+                    <span className="ai-inspector-hint">
+                        If the history above does NOT show your earlier turns, something upstream
+                        is wrong — please share a screenshot of this view.
+                    </span>
+                    <button
+                        type="button"
+                        className="ai-btn"
+                        onClick={() => {
+                            try {
+                                navigator.clipboard?.writeText(JSON.stringify(messages, null, 2));
+                            } catch { /* ignore */ }
+                        }}
+                    >
+                        Copy JSON
+                    </button>
+                </footer>
+            </div>
+        </div>
+    );
+}
 
 function MessageBubble({
     role,

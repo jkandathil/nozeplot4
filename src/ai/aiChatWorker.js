@@ -135,6 +135,19 @@ async function generate(messages, params) {
         device: currentDevice,
         dtype: currentDtype,
     });
+    try {
+        // Compact preview of the full message list for end-to-end debug.
+        // Lets users confirm in DevTools > Console that prior user +
+        // assistant turns are ACTUALLY reaching the model.
+        const preview = messages.map((m, i) => {
+            const head = String(m.content ?? '').replace(/\s+/g, ' ').slice(0, 160);
+            const tail = (m.content?.length || 0) > 160 ? '…' : '';
+            return `[${i}] ${m.role.padEnd(9)} ${head}${tail}`;
+        });
+        console.log(
+            '[aiChatWorker] chat turns seen by the model:\n' + preview.join('\n')
+        );
+    } catch { /* ignore */ }
 
     try {
         const streamer = new TextStreamer(generator.tokenizer, {
