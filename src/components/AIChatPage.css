@@ -1029,3 +1029,30 @@
 .app-light .ai-inspector-hint { color: #475569; }
 .app-light .ai-inspector-head,
 .app-light .ai-inspector-foot { border-color: rgba(0, 0, 0, 0.08); background: rgba(0, 0, 0, 0.02); }
+
+/* ================= Card title row w/ reset link ================= */
+.ai-card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.ai-inline-link {
+    background: transparent;
+    border: 0;
+    color: #94a3b8;
+    font-size: 0.68rem;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    padding: 2px 4px;
+}
+.ai-inline-link:hover {
+    color: #e2e8f0;
+}
+.app-light .ai-inline-link {
+    color: #64748b;
+}
+.app-light .ai-inline-link:hover {
+    color: #0f172a;
+}

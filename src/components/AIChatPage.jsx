@@ -124,14 +124,13 @@ const DTYPE_OPTIONS = [
 ];
 
 const DEFAULT_SYSTEM_PROMPT = [
-    'You are NozeAssistant, a concise, helpful assistant embedded inside NozePlot.',
+    'You are NozeAssistant, a friendly, knowledgeable AI assistant.',
     '',
-    'You ARE in a multi-turn conversation. The messages that follow are the real chat history between you and the user. Treat them as authoritative.',
-    '• Use earlier turns to resolve references ("that plot", "what I said", "the previous answer"). Do NOT ask the user to repeat information they already gave you.',
-    '• Stay consistent with any names, definitions, or conclusions you used in earlier replies.',
-    '• If a user asks a short follow-up, continue from the previous answer rather than starting over.',
+    'Answer any question the user asks — general knowledge, technical, creative, conversational, coding, math, writing, everyday life. Think it through and give a clear, specific, helpful answer. Use simple language by default, and be concise unless the user asks for depth.',
     '',
-    'Prefer clear, accurate, data-aware answers. If asked about sensor or aroma data you cannot see, say so and explain what the user would need to share.',
+    'You are embedded inside NozePlot, an analytics app for sensor / aroma data. If the user asks about NozePlot or its features, you have background knowledge about it that will be added to your context when relevant — use it naturally and synthesize it in your own words, don\'t read it back to them. For anything not about NozePlot, just answer from your own knowledge.',
+    '',
+    'You remember the conversation. Prior messages in this chat are real — use them to resolve references ("that plot", "what I said", "the previous answer"), stay consistent with earlier explanations, and build on previous answers when the user follows up. Do not ask the user to repeat things they already told you.',
 ].join('\n');
 
 // Default character budget for retrieved help snippets grafted into the
@@ -920,7 +919,7 @@ export default function AIChatPage() {
                         {/* ===== App knowledge base ===== */}
                         <div className="ai-card">
                             <div className="ai-card-title">
-                                <BookOpen size={14} /> App knowledge
+                                <BookOpen size={14} /> NozePlot awareness
                             </div>
                             <label className="ai-kb-toggle">
                                 <input
@@ -929,9 +928,11 @@ export default function AIChatPage() {
                                     onChange={(e) => setUseKnowledgeBase(e.target.checked)}
                                 />
                                 <span>
-                                    Use Help & docs to answer
+                                    Let the assistant know about this app
                                     <span className="ai-kb-hint">
-                                        {KNOWLEDGE_SIZE} sections indexed · retrieved per question
+                                        Adds background knowledge from the Help guide only when your
+                                        question is actually about NozePlot. General questions are
+                                        unaffected.
                                     </span>
                                 </span>
                             </label>
@@ -939,18 +940,30 @@ export default function AIChatPage() {
 
                         {/* ===== System prompt ===== */}
                         <div className="ai-card">
-                            <button
-                                type="button"
-                                className="ai-card-title ai-card-toggle"
-                                onClick={() => setSystemOpen((v) => !v)}
-                            >
-                                {systemOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                <Bot size={14} /> System prompt
-                            </button>
+                            <div className="ai-card-title-row">
+                                <button
+                                    type="button"
+                                    className="ai-card-title ai-card-toggle"
+                                    onClick={() => setSystemOpen((v) => !v)}
+                                >
+                                    {systemOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                    <Bot size={14} /> System prompt
+                                </button>
+                                {systemOpen && systemPrompt !== DEFAULT_SYSTEM_PROMPT && (
+                                    <button
+                                        type="button"
+                                        className="ai-inline-link"
+                                        onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+                                        title="Restore the default general-assistant prompt"
+                                    >
+                                        Reset
+                                    </button>
+                                )}
+                            </div>
                             {systemOpen && (
                                 <textarea
                                     className="ai-textarea ai-textarea--system"
-                                    rows={5}
+                                    rows={7}
                                     value={systemPrompt}
                                     onChange={(e) => setSystemPrompt(e.target.value)}
                                 />
@@ -1262,7 +1275,7 @@ function MessageBubble({
                 {hasSources && (
                     <div className="ai-msg-sources">
                         <span className="ai-msg-sources-label">
-                            <BookOpen size={11} /> Referenced
+                            <BookOpen size={11} /> Drew on
                         </span>
                         {sources.map((s) => (
                             <button

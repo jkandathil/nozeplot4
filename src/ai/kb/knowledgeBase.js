@@ -153,17 +153,30 @@ export function retrieveContext(query, { k = 4 } = {}) {
 }
 
 /**
- * Build the full system prompt the AI model should receive, combining
- * the user's custom system prompt with retrieved documentation snippets.
+ * Build the full system prompt the AI model should receive.
+ *
+ * Design philosophy: the assistant should feel like a *general-purpose*
+ * intelligent chatbot that happens to know the user's app. So:
+ *
+ *   • We always lead with a general-assistant persona — no "you are a
+ *     documentation reader" framing.
+ *   • Retrieved knowledge is only appended when BM25 actually finds
+ *     something confident (top score above `minScore`). For generic
+ *     questions ("what is 2+2", "write a haiku") nothing is injected
+ *     and the model answers from its own world knowledge.
+ *   • When relevant knowledge IS injected, it's framed as "background
+ *     knowledge" the model owns — not as "documentation to cite". The
+ *     model synthesizes it in its own words instead of parroting.
  *
  *   - `userSystem`   : the user's own system prompt (never dropped).
  *   - `query`        : the current user message driving retrieval.
  *   - `history`      : last N user messages for richer retrieval context.
  *   - `budgetChars`  : soft ceiling for injected context (default 2400).
- *   - `k`            : number of retrieved chunks (default 4).
+ *   - `k`            : max chunks to consider (default 4).
+ *   - `minScore`     : BM25 score below which we treat retrieval as
+ *                      noise and inject nothing (default 1.5).
  *
- * Returns `{ prompt, sources }` where `sources` is the list of chunks
- * actually cited, suitable for rendering as reference chips.
+ * Returns `{ prompt, sources, augmented }`.
  */
 export function buildAugmentedSystemPrompt({
     userSystem,
@@ -171,12 +184,23 @@ export function buildAugmentedSystemPrompt({
     history = [],
     budgetChars = 2400,
     k = 4,
+    minScore = 1.5,
 } = {}) {
     const retrievalQuery = [query, ...history.slice(-2)].filter(Boolean).join(' \n ');
-    const hits = retrieveContext(retrievalQuery, { k });
+    const rawHits = retrieveContext(retrievalQuery, { k });
+
+    /* Relevance gate: BM25 scores are unbounded, but for this corpus
+       (~40 sections) a score above ~1.5 reliably means the query
+       actually mentions something in the docs. Below that we're just
+       matching stop-word-ish tokens and we'd be polluting the prompt
+       with unrelated sections — exactly the behaviour that made the
+       assistant feel like a "documentation reader" on generic chat. */
+    const hits = rawHits.filter((h) => h.score >= minScore);
+
+    const basePrompt = (userSystem || '').trim() || DEFAULT_PERSONA;
 
     if (hits.length === 0) {
-        return { prompt: userSystem || '', sources: [] };
+        return { prompt: basePrompt, sources: [], augmented: false };
     }
 
     // Budget chars across the retrieved chunks proportional to score.
@@ -190,30 +214,17 @@ export function buildAugmentedSystemPrompt({
     });
 
     const contextBlock = injected
-        .map((h, i) => `### [${i + 1}] ${h.title} — ${h.source}\n${h.clipped}`)
+        .map((h) => `• ${h.title} (${h.source}):\n${h.clipped}`)
         .join('\n\n');
 
-    const basePrompt = (userSystem || '').trim();
     const prompt = [
         basePrompt,
-        basePrompt ? '' : null,
-        'You are the NozePlot in-app assistant.',
         '',
-        'CONVERSATION MEMORY — you can and SHOULD use it:',
-        '• The messages that follow this system prompt are the real chat history between the user and you. Treat them as authoritative context.',
-        '• When the user references something earlier ("that plot", "what I said", "the previous answer"), resolve it from the prior turns — do not ask them to repeat themselves.',
-        '• Stay consistent with explanations and naming you used in earlier turns.',
-        '• If the user asks a follow-up that is a clear continuation, build on the previous answer rather than restarting from scratch.',
+        '— Background knowledge about NozePlot (the app the user is using) —',
+        'The notes below are things you, the assistant, already know about the app. Use them naturally when the user asks about the app, but write answers in your own words — do NOT quote, cite, or paste these notes verbatim. If the user asks a general question unrelated to the app, ignore this background entirely and answer from your general knowledge.',
         '',
-        'USING THE APP DOCUMENTATION BELOW:',
-        '• It is reference material retrieved just for this question. It is NOT the conversation.',
-        '• If the docs and the conversation disagree, prefer the conversation for what the user meant, and the docs for factual app details.',
-        '• If the answer is not supported by the documentation, say so honestly.',
-        '• Prefer step-by-step instructions when the user asks how to do something.',
-        '',
-        '## App documentation (retrieved for this question)',
         contextBlock,
-    ].filter((x) => x !== null).join('\n');
+    ].join('\n');
 
     return {
         prompt,
@@ -224,5 +235,16 @@ export function buildAugmentedSystemPrompt({
             anchor: h.anchor,
             score: h.score,
         })),
+        augmented: true,
     };
 }
+
+/**
+ * Default persona used when the user hasn't customised the system
+ * prompt. Intentionally plain — a normal, intelligent assistant.
+ * Conversation-memory instructions are added by the caller via the
+ * user-supplied system prompt, since they apply regardless of whether
+ * KB is injected.
+ */
+const DEFAULT_PERSONA =
+    'You are NozeAssistant, a friendly, knowledgeable AI assistant. Answer the user accurately and helpfully — general knowledge, reasoning, coding, writing, chit-chat, anything they ask. Be concise, specific, and think step by step when a question is non-trivial.';
