@@ -144,12 +144,58 @@ const INDEX = buildBM25(KNOWLEDGE_CHUNKS);
 
 export const KNOWLEDGE_SIZE = KNOWLEDGE_CHUNKS.length;
 
+/* ------------- Query expansion -------------------------------------
+   Users ask natural questions but our corpus uses specific terms
+   ("sensitivity map", "drift map", "aroma analysis"). Expanding the
+   query with common synonyms / related terms dramatically improves
+   recall on short queries, without needing a real embedder. Each entry
+   maps a trigger phrase → extra terms we append to the query before
+   retrieval. Case-insensitive substring match on the question.
+--------------------------------------------------------------------*/
+const QUERY_EXPANSIONS = [
+    [['plot', 'graph', 'chart'], ['se analysis', 'dashboard', 'visualization']],
+    [['classify', 'classifier', 'train', 'training', 'model'], ['ml studio', 'machine learning']],
+    [['cluster', 'tsne', 't-sne', 'embed'], ['tsne explorer', 'embedding']],
+    [['capture', 'record', 'measure', 'measurement'], ['au capture', 'aroma unit capture', 'device']],
+    [['serial', 'usb', 'uart'], ['serial monitor', 'code studio', 'webserial']],
+    [['normalise', 'normalize', 'baseline', 'drift'], ['normalize', 'drift map']],
+    [['simulate', 'simulation', 'cfd', 'flow', 'fluid'], ['flow lab', 'lbm', 'lattice boltzmann']],
+    [['python', 'script', 'code', 'pyodide'], ['code studio']],
+    [['save', 'session', 'project'], ['workspace', '.noze']],
+    [['help', 'guide', 'tutorial', 'learn'], ['help page']],
+    [['csv', 'excel', 'xlsx', 'import'], ['workspace', 'file viewer']],
+    [['spreadsheet', 'formula', 'cell', 'hyperformula'], ['spreadsheet']],
+    [['polymer', 'carbon black', 'composite'], ['polymer cb']],
+    [['dilution', 'headspace', 'gas'], ['dilution', 'gas design']],
+    [['recovery'], ['recovery analysis']],
+    [['manufacturing', 'variation', 'qc'], ['manufacturing variation']],
+    [['feno', 'nitric oxide', 'breath'], ['fenose', 'aroma analysis']],
+    [['aroma', 'pulse', 'peak', 'feature'], ['aroma analysis']],
+    [['sensitivity'], ['sensitivity map']],
+    [['separability'], ['separability']],
+];
+
+function expandQuery(query) {
+    const q = String(query || '').toLowerCase();
+    const extras = new Set();
+    for (const [triggers, additions] of QUERY_EXPANSIONS) {
+        if (triggers.some((t) => q.includes(t))) {
+            for (const a of additions) extras.add(a);
+        }
+    }
+    if (extras.size === 0) return query;
+    return `${query} ${[...extras].join(' ')}`;
+}
+
 /**
- * Retrieve the top-k most relevant chunks for a query.
- * Returns an array of `{ id, title, source, anchor, text, score }`.
+ * Retrieve the top-k most relevant chunks for a query, with MMR
+ * diversity reranking so the model sees *complementary* passages
+ * instead of near-duplicates. Returns an array of
+ * `{ id, title, source, anchor, text, score }`.
  */
 export function retrieveContext(query, { k = 4 } = {}) {
-    return INDEX.search(query, k);
+    const expanded = expandQuery(query);
+    return INDEX.searchWithDiversity(expanded, k);
 }
 
 /* ================================================================
@@ -222,9 +268,9 @@ export function buildAugmentedSystemPrompt({
     userSystem,
     query,
     history = [],
-    budgetChars = 1800,
-    k = 3,
-    minScore = 0.6,
+    budgetChars = 2200,
+    k = 4,
+    minScore = 0.4,
 } = {}) {
     const retrievalQuery = [query, ...history.slice(-2)].filter(Boolean).join(' \n ');
     const rawHits = retrieveContext(retrievalQuery, { k });
@@ -239,22 +285,35 @@ export function buildAugmentedSystemPrompt({
             '',
             '— What you know about NozePlot (the app the user is in) —',
             APP_PRIMER,
+            '',
+            RAG_POLICY_NO_HITS,
         ].join('\n');
         return { prompt, sources: [], augmented: true };
     }
 
-    // Budget chars across the retrieved chunks proportional to score.
+    // Budget chars across the retrieved chunks proportional to score,
+    // with a higher floor so each passage keeps enough detail for the
+    // model to synthesise across them.
     const totalScore = hits.reduce((s, h) => s + h.score, 0) || 1;
-    const injected = hits.map((h) => {
-        const share = Math.max(250, Math.floor((h.score / totalScore) * budgetChars));
+    const injected = hits.map((h, idx) => {
+        const share = Math.max(400, Math.floor((h.score / totalScore) * budgetChars));
         return {
             ...h,
-            clipped: clipText(h.text, Math.min(share, 900)),
+            index: idx + 1,
+            clipped: clipText(h.text, Math.min(share, 1000)),
         };
     });
 
+    // Numbered, clearly-delimited passages so the model can reference
+    // them internally while reasoning ("passage 2 says X, passage 4
+    // says Y, therefore ..."). Numbering is the single most reliable
+    // way to get small LLMs to actually synthesise across chunks
+    // rather than paraphrasing the first one.
     const contextBlock = injected
-        .map((h) => `• ${h.title} (${h.source}):\n${h.clipped}`)
+        .map(
+            (h) =>
+                `[Passage ${h.index} — ${h.title} (${h.source})]\n${h.clipped}`
+        )
         .join('\n\n');
 
     const prompt = [
@@ -263,8 +322,8 @@ export function buildAugmentedSystemPrompt({
         '— What you know about NozePlot (the app the user is in) —',
         APP_PRIMER,
         '',
-        '— Extra detail relevant to this specific question —',
-        'These notes come straight from the in-app Help guide. Use them to give a more specific, accurate answer, but write in your own words — do NOT quote or paste them verbatim.',
+        '— Relevant passages from the in-app Help guide —',
+        RAG_POLICY_WITH_HITS,
         '',
         contextBlock,
     ].join('\n');
@@ -281,6 +340,27 @@ export function buildAugmentedSystemPrompt({
         augmented: true,
     };
 }
+
+/* Behaviour policy injected ABOVE the retrieved passages. Written as
+   direct instructions to the model because small local LLMs (Gemma-
+   270M, Llama-3.2-1B) follow explicit imperative rules much better
+   than implicit "you should" framing. Kept deliberately short so it
+   doesn't eat the tiny context window. */
+const RAG_POLICY_WITH_HITS = [
+    'The passages below are excerpts from NozePlot\'s own Help guide.',
+    'Rules for using them:',
+    '• Read ALL passages before answering — the best answer often combines two or three.',
+    '• Connect the dots: if one passage explains a feature and another shows how to access it, merge them into a single practical answer.',
+    '• Answer in your own natural voice. Do NOT say "the passage says", "according to the docs", or paste text verbatim.',
+    '• Do NOT mention passage numbers or titles in your reply. The user sees linked source chips below the answer.',
+    '• If the passages don\'t cover the question, say what you do know from the primer and offer a reasonable next step (e.g. open the Help page).',
+    '• Stay specific, practical, and action-oriented — prefer "click X, then Y" over abstract description.',
+].join('\n');
+
+const RAG_POLICY_NO_HITS = [
+    'No specific Help-guide passage strongly matched this question.',
+    'If it\'s about NozePlot, answer from the primer above. If it\'s a general question, answer normally from your own knowledge.',
+].join('\n');
 
 /**
  * Default persona used when the user hasn't customised the system
