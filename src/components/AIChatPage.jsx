@@ -277,10 +277,14 @@ export default function AIChatPage() {
     const [paramsOpen, setParamsOpen] = useState(false);
     const [systemOpen, setSystemOpen] = useState(false);
 
-    /* Mirror activeChatId into a ref so async callbacks (worker
-       messages, streaming writes) always target the live chat even if
-       they were registered on an earlier render. */
-    useEffect(() => { activeChatIdRef.current = activeChatId; }, [activeChatId]);
+    /* Mirror the resolved active chat id into a ref so async callbacks
+       (worker messages, streaming writes) always target the live chat.
+       We prefer activeChat?.id over activeChatId because the memo
+       falls back to conversations[0] when the stored id is stale, so
+       activeChat?.id is the id users are ACTUALLY looking at. */
+    useEffect(() => {
+        activeChatIdRef.current = activeChat?.id || activeChatId || null;
+    }, [activeChat, activeChatId]);
 
     /* ============ Worker wiring ============ */
     useEffect(() => {
@@ -444,12 +448,20 @@ export default function AIChatPage() {
     useEffect(() => { saveLS(LS_CHATS, conversations); }, [conversations]);
     useEffect(() => { saveLS(LS_ACTIVE_CHAT, activeChatId); }, [activeChatId]);
 
-    /* ============ Ensure an active chat ============ */
+    /* ============ Ensure activeChatId actually points at a real chat ============
+       The activeChat memo falls back to conversations[0] when activeChatId
+       doesn't match any conversation, so the UI looks fine. But the stored
+       id stays null/stale, and handleSend / finalize filter by it — meaning
+       setConversations((prev) => prev.map(c => c.id !== activeChatId ...))
+       finds no match and SILENTLY drops the user's message and the assistant
+       reply, leaving a stats chip on an empty chat. Self-correct here. */
     useEffect(() => {
-        if (!activeChat && conversations.length) {
+        if (!conversations.length) return;
+        const matches = activeChatId && conversations.some((c) => c.id === activeChatId);
+        if (!matches) {
             setActiveChatId(conversations[0].id);
         }
-    }, [activeChat, conversations]);
+    }, [activeChatId, conversations]);
 
     /* ============ Auto-scroll to latest message ============ */
     useEffect(() => {
@@ -527,6 +539,20 @@ export default function AIChatPage() {
         setErrorMsg('');
         setStreamingText('');
 
+        /* Resolve the CURRENT conversation id, preferring activeChat?.id
+           because activeChatId may be null/stale at first render. This
+           is the single source of truth for writes this turn, and we
+           also sync state + ref so downstream async callbacks agree. */
+        const targetChatId = activeChat?.id || activeChatId;
+        if (!targetChatId) {
+            setErrorMsg('No active chat — try clicking + New chat.');
+            return;
+        }
+        if (targetChatId !== activeChatId) {
+            setActiveChatId(targetChatId);
+        }
+        activeChatIdRef.current = targetChatId;
+
         const history = activeChat?.messages || [];
 
         /* ---------- 1. Retrieval-augmented system prompt ----------
@@ -578,7 +604,7 @@ export default function AIChatPage() {
 
         setConversations((prev) =>
             prev.map((c) => {
-                if (c.id !== activeChatId) return c;
+                if (c.id !== targetChatId) return c;
                 const msgs = [...c.messages, newUserMsg, newAssistantMsg];
                 const title =
                     c.title === 'New chat' || !c.title
