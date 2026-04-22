@@ -25,6 +25,11 @@ import {
     buildAugmentedSystemPrompt,
     KNOWLEDGE_SIZE,
 } from '../ai/kb/knowledgeBase.js';
+import {
+    packHistory,
+    buildRetrievalQuery,
+    computeHistoryBudget,
+} from '../ai/chatContext.js';
 
 /* ------------------------------------------------------------------ */
 /* Curated models — all hosted on the HF hub as ONNX, known to work   */
@@ -204,6 +209,11 @@ export default function AIChatPage() {
     const [genStartedAt, setGenStartedAt] = useState(0);
     const [elapsedMs, setElapsedMs] = useState(0);
     const [firstTokenMs, setFirstTokenMs] = useState(null);
+
+    /* Snapshot of what we sent to the model on the last handleSend,
+       so users can see that the assistant genuinely has memory of the
+       conversation (turns kept, turns dropped, estimated token cost). */
+    const [contextInfo, setContextInfo] = useState(null);
 
     /* -------- Generation params -------- */
     const [params, setParams] = useState(() => ({
@@ -465,25 +475,24 @@ export default function AIChatPage() {
         setErrorMsg('');
         setStreamingText('');
 
-        // Build full message list: system + chat history + new user turn.
         const history = activeChat?.messages || [];
 
-        /* Retrieval: pull the Help / FlowLab / Telemetry sections that
-           best match this question (plus the last couple of user turns
-           for continuity), and graft them into the system prompt. The
-           retrieval is synchronous BM25, so it adds sub-millisecond
-           latency and lets tiny local models answer NozePlot-specific
-           questions accurately. */
+        /* ---------- 1. Retrieval-augmented system prompt ----------
+           A short follow-up like "why?" won't retrieve anything on its
+           own; buildRetrievalQuery fuses the new turn with recent
+           history so BM25 keeps pulling the right help sections even
+           deep in a conversation. */
         let effectiveSystem = systemPrompt || '';
         let usedSources = [];
         if (useKnowledgeBase) {
+            const retrievalQuery = buildRetrievalQuery(text, history);
             const recentUserTurns = history
                 .filter((m) => m.role === 'user')
                 .slice(-2)
                 .map((m) => m.content);
             const { prompt, sources } = buildAugmentedSystemPrompt({
                 userSystem: systemPrompt,
-                query: text,
+                query: retrievalQuery,
                 history: recentUserTurns,
                 budgetChars: DEFAULT_KB_BUDGET,
                 k: DEFAULT_KB_K,
@@ -491,6 +500,20 @@ export default function AIChatPage() {
             effectiveSystem = prompt;
             usedSources = sources;
         }
+
+        /* ---------- 2. Context-aware history packing ----------
+           Small local models almost always have a 2–4k token window.
+           If we don't trim ourselves, the tokenizer will truncate from
+           the END of the prompt — i.e. from the user's latest question
+           — and the assistant will silently answer a stale turn.
+           packHistory keeps the most recent user/assistant pairs within
+           a budget computed from the system prompt + reply size. */
+        const budget = computeHistoryBudget({
+            systemPromptChars: effectiveSystem.length,
+            maxNewTokens: params.max_new_tokens || 512,
+            targetPromptTokens: 3200,
+        });
+        const packed = packHistory(history, { budgetChars: budget, minKeepTurns: 2 });
 
         const newUserMsg = { role: 'user', content: text, ts: Date.now() };
         const newAssistantMsg = {
@@ -515,9 +538,18 @@ export default function AIChatPage() {
 
         const payload = [
             ...(effectiveSystem ? [{ role: 'system', content: effectiveSystem }] : []),
-            ...history.map((m) => ({ role: m.role, content: m.content })),
+            ...packed.messages.map((m) => ({ role: m.role, content: m.content })),
             { role: 'user', content: text },
         ];
+
+        setContextInfo({
+            turnsSent: packed.messages.length,
+            turnsDropped: packed.droppedTurns,
+            historyTokens: packed.tokens,
+            systemTokens: Math.ceil(effectiveSystem.length / 3.8),
+            kb: useKnowledgeBase,
+            sourcesUsed: usedSources.length,
+        });
 
         workerRef.current?.postMessage({
             type: 'generate',
@@ -545,6 +577,7 @@ export default function AIChatPage() {
         setConversations((prev) => [chat, ...prev]);
         setActiveChatId(chat.id);
         setStreamingText('');
+        setContextInfo(null);
     }, [currentModelId]);
 
     const handleDeleteChat = useCallback((id) => {
@@ -569,6 +602,7 @@ export default function AIChatPage() {
             )
         );
         setStreamingText('');
+        setContextInfo(null);
     }, [activeChatId]);
 
     // When the user switches model via dropdown, auto-fill the recommended
@@ -755,6 +789,27 @@ export default function AIChatPage() {
                                 </div>
                             )}
 
+                            {/* Context-memory chip: shows that the assistant
+                                actually has conversation memory, and how
+                                much of it fits in the current model window. */}
+                            {contextInfo && (
+                                <div
+                                    className="ai-context-chip"
+                                    title={
+                                        `${contextInfo.turnsSent} prior turn${contextInfo.turnsSent === 1 ? '' : 's'} sent to the model\n` +
+                                        `${contextInfo.turnsDropped} older pair${contextInfo.turnsDropped === 1 ? '' : 's'} dropped to fit context window\n` +
+                                        `~${contextInfo.historyTokens} history + ~${contextInfo.systemTokens} system tokens` +
+                                        (contextInfo.kb ? `\n${contextInfo.sourcesUsed} doc section${contextInfo.sourcesUsed === 1 ? '' : 's'} grafted into system prompt` : '')
+                                    }
+                                >
+                                    <Brain size={11} /> Memory: {contextInfo.turnsSent} turn{contextInfo.turnsSent === 1 ? '' : 's'}
+                                    <span className="ai-context-chip-sub">
+                                        ~{(contextInfo.historyTokens + contextInfo.systemTokens)} tok
+                                        {contextInfo.turnsDropped > 0 && ` · ${contextInfo.turnsDropped} dropped`}
+                                    </span>
+                                </div>
+                            )}
+
                             {/* Status line */}
                             <div className="ai-status-line" data-status={status}>
                                 {status === 'idle' && <><Cpu size={12} /> Idle</>}
@@ -876,7 +931,7 @@ export default function AIChatPage() {
                                     <div
                                         key={c.id}
                                         className={`ai-chat-item ${c.id === activeChatId ? 'ai-chat-item--active' : ''}`}
-                                        onClick={() => setActiveChatId(c.id)}
+                                        onClick={() => { setActiveChatId(c.id); setContextInfo(null); }}
                                     >
                                         <div className="ai-chat-item-title" title={c.title}>
                                             {c.title || 'New chat'}

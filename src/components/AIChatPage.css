@@ -820,3 +820,33 @@
 .app-light .ai-kb-hint {
     color: #64748b;
 }
+
+/* ================= Context / memory chip ================= */
+.ai-context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.28);
+    color: #6ee7b7;
+    font-size: 0.68rem;
+    line-height: 1.2;
+    max-width: fit-content;
+    cursor: help;
+}
+.ai-context-chip-sub {
+    color: #94a3b8;
+    font-size: 0.62rem;
+    font-weight: 400;
+}
+.app-light .ai-context-chip {
+    background: rgba(5, 150, 105, 0.09);
+    border-color: rgba(5, 150, 105, 0.25);
+    color: #047857;
+}
+.app-light .ai-context-chip-sub {
+    color: #64748b;
+}
