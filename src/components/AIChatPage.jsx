@@ -625,6 +625,12 @@ export default function AIChatPage() {
     }, [conversations, currentModelId]);
 
     const handleClearCurrent = useCallback(() => {
+        /* Always usable escape hatch. If a generation is in flight (or
+           got stuck in 'generating' because the worker silently stalled
+           on WASM), we forcibly tell the worker to stop AND locally
+           reset UI state so the user is never trapped. */
+        try { workerRef.current?.postMessage({ type: 'stop' }); } catch { /* ignore */ }
+
         setConversations((prev) =>
             prev.map((c) =>
                 c.id === activeChatId
@@ -634,7 +640,15 @@ export default function AIChatPage() {
         );
         setStreamingText('');
         setContextInfo(null);
-    }, [activeChatId]);
+        setLastPayload(null);
+        setErrorMsg('');
+        setErrorStack('');
+        setGenStartedAt(0);
+        // If the worker was genuinely hung the 'stop' may never resolve;
+        // locally snap the status back to something interactive so the
+        // rest of the UI (Send button, Clear button, New chat) unblocks.
+        setStatus((prev) => (prev === 'generating' ? (isLoaded ? 'ready' : 'idle') : prev));
+    }, [activeChatId, isLoaded]);
 
     // When the user switches model via dropdown, auto-fill the recommended
     // dtype for the currently-selected device. WebGPU likes q4f16, WASM
@@ -1044,8 +1058,9 @@ export default function AIChatPage() {
                             type="button"
                             className="ai-btn ai-btn-ghost"
                             onClick={handleClearCurrent}
-                            disabled={!activeMessages.length || isGenerating}
-                            title="Clear this chat"
+                            title={isGenerating
+                                ? 'Stop generation and clear this chat'
+                                : 'Clear this chat'}
                         >
                             <RefreshCw size={13} /> Clear
                         </button>
