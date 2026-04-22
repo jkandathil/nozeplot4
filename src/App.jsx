@@ -122,6 +122,34 @@ function App() {
      actively navigates to that page. */
   const [everOpenedPages, setEverOpenedPages] = useState(() => new Set(['home']));
 
+  /* Listen for jump-to-help events dispatched by the AI chat page when
+     the user clicks a "Referenced" source chip. We switch to the Help
+     tab, make sure it's mounted, then scroll to the anchor after the
+     page has had a chance to render. */
+  useEffect(() => {
+    const onNavigateHelp = (ev) => {
+      const anchor = ev?.detail?.anchor;
+      setEverOpenedPages((prev) => {
+        if (prev.has('help')) return prev;
+        const next = new Set(prev);
+        next.add('help');
+        return next;
+      });
+      setActivePage('help');
+      if (anchor) {
+        // Wait two frames so the Help page is mounted + laid out.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const el = document.getElementById(`help-${anchor}`);
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        });
+      }
+    };
+    window.addEventListener('nozeplot-navigate-help', onNavigateHelp);
+    return () => window.removeEventListener('nozeplot-navigate-help', onNavigateHelp);
+  }, []);
+
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
   const [isNameModalOpen, setIsNameModalOpen] = useState(!localStorage.getItem('userName'));

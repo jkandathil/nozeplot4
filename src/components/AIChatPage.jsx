@@ -18,8 +18,13 @@ import {
     CheckCircle2,
     Loader2,
     Sparkles,
+    BookOpen,
 } from 'lucide-react';
 import './AIChatPage.css';
+import {
+    buildAugmentedSystemPrompt,
+    KNOWLEDGE_SIZE,
+} from '../ai/kb/knowledgeBase.js';
 
 /* ------------------------------------------------------------------ */
 /* Curated models — all hosted on the HF hub as ONNX, known to work   */
@@ -115,6 +120,12 @@ const DTYPE_OPTIONS = [
 
 const DEFAULT_SYSTEM_PROMPT = 'You are NozeAssistant, a concise, helpful assistant embedded inside NozePlot. Prefer clear, accurate, data-aware answers. If a user asks about sensor or aroma data that you cannot see, say so and explain what they would need to share.';
 
+// Default character budget for retrieved help snippets grafted into the
+// system prompt. Tuned so a 4-chunk retrieval + user system prompt + chat
+// history fits comfortably within typical 4k-context small models.
+const DEFAULT_KB_BUDGET = 2400;
+const DEFAULT_KB_K = 4;
+
 /* ------------------------------------------------------------------ */
 /* LocalStorage keys                                                   */
 /* ------------------------------------------------------------------ */
@@ -126,6 +137,7 @@ const LS_PARAMS = 'ai-chat:params';
 const LS_SYSTEM = 'ai-chat:system-prompt';
 const LS_CHATS = 'ai-chat:conversations:v1';
 const LS_ACTIVE_CHAT = 'ai-chat:active-conversation';
+const LS_KB_ENABLED = 'ai-chat:kb-enabled';
 
 function loadLS(key, fallback) {
     try {
@@ -202,6 +214,15 @@ export default function AIChatPage() {
     }));
     const [systemPrompt, setSystemPrompt] = useState(
         () => loadLS(LS_SYSTEM, DEFAULT_SYSTEM_PROMPT)
+    );
+
+    /* -------- App knowledge base toggle --------
+       When on, every send runs a BM25 retrieval over the Help guide,
+       FlowLab technical reference, and telemetry docs, then grafts the
+       best-matching sections into the system prompt. That turns the
+       generic local LLM into a NozePlot-aware assistant. */
+    const [useKnowledgeBase, setUseKnowledgeBase] = useState(
+        () => loadLS(LS_KB_ENABLED, 'true') !== 'false'
     );
 
     /* -------- Conversations -------- */
@@ -341,6 +362,7 @@ export default function AIChatPage() {
     useEffect(() => { saveLS(LS_DTYPE, dtype); }, [dtype]);
     useEffect(() => { saveLS(LS_PARAMS, params); }, [params]);
     useEffect(() => { saveLS(LS_SYSTEM, systemPrompt); }, [systemPrompt]);
+    useEffect(() => { saveLS(LS_KB_ENABLED, useKnowledgeBase ? 'true' : 'false'); }, [useKnowledgeBase]);
     useEffect(() => { saveLS(LS_CHATS, conversations); }, [conversations]);
     useEffect(() => { saveLS(LS_ACTIVE_CHAT, activeChatId); }, [activeChatId]);
 
@@ -445,12 +467,38 @@ export default function AIChatPage() {
 
         // Build full message list: system + chat history + new user turn.
         const history = activeChat?.messages || [];
+
+        /* Retrieval: pull the Help / FlowLab / Telemetry sections that
+           best match this question (plus the last couple of user turns
+           for continuity), and graft them into the system prompt. The
+           retrieval is synchronous BM25, so it adds sub-millisecond
+           latency and lets tiny local models answer NozePlot-specific
+           questions accurately. */
+        let effectiveSystem = systemPrompt || '';
+        let usedSources = [];
+        if (useKnowledgeBase) {
+            const recentUserTurns = history
+                .filter((m) => m.role === 'user')
+                .slice(-2)
+                .map((m) => m.content);
+            const { prompt, sources } = buildAugmentedSystemPrompt({
+                userSystem: systemPrompt,
+                query: text,
+                history: recentUserTurns,
+                budgetChars: DEFAULT_KB_BUDGET,
+                k: DEFAULT_KB_K,
+            });
+            effectiveSystem = prompt;
+            usedSources = sources;
+        }
+
         const newUserMsg = { role: 'user', content: text, ts: Date.now() };
         const newAssistantMsg = {
             role: 'assistant',
             content: '',
             streaming: true,
             ts: Date.now(),
+            sources: usedSources,
         };
 
         setConversations((prev) =>
@@ -466,7 +514,7 @@ export default function AIChatPage() {
         );
 
         const payload = [
-            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            ...(effectiveSystem ? [{ role: 'system', content: effectiveSystem }] : []),
             ...history.map((m) => ({ role: m.role, content: m.content })),
             { role: 'user', content: text },
         ];
@@ -476,7 +524,17 @@ export default function AIChatPage() {
             messages: payload,
             params,
         });
-    }, [input, isLoaded, isGenerating, activeChat, activeChatId, systemPrompt, params, currentModelId]);
+    }, [
+        input,
+        isLoaded,
+        isGenerating,
+        activeChat,
+        activeChatId,
+        systemPrompt,
+        params,
+        currentModelId,
+        useKnowledgeBase,
+    ]);
 
     const handleStop = useCallback(() => {
         workerRef.current?.postMessage({ type: 'stop' });
@@ -760,6 +818,26 @@ export default function AIChatPage() {
                             )}
                         </div>
 
+                        {/* ===== App knowledge base ===== */}
+                        <div className="ai-card">
+                            <div className="ai-card-title">
+                                <BookOpen size={14} /> App knowledge
+                            </div>
+                            <label className="ai-kb-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={useKnowledgeBase}
+                                    onChange={(e) => setUseKnowledgeBase(e.target.checked)}
+                                />
+                                <span>
+                                    Use Help & docs to answer
+                                    <span className="ai-kb-hint">
+                                        {KNOWLEDGE_SIZE} sections indexed · retrieved per question
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
+
                         {/* ===== System prompt ===== */}
                         <div className="ai-card">
                             <button
@@ -897,11 +975,29 @@ export default function AIChatPage() {
                                 content={m.content}
                                 streaming={m.streaming}
                                 stopped={m.stopped}
+                                sources={m.sources}
                                 waitingNote={
                                     isLiveStream && !m.content
                                         ? `Warming up… ${(elapsedMs / 1000).toFixed(1)} s elapsed`
                                         : null
                                 }
+                                onSourceClick={(anchor) => {
+                                    if (!anchor) return;
+                                    // Fire a global event the App shell can
+                                    // intercept to navigate to Help + scroll
+                                    // to the anchor; we also best-effort try
+                                    // same-page scroll for users already on
+                                    // the Help tab.
+                                    try {
+                                        window.dispatchEvent(
+                                            new CustomEvent('nozeplot-navigate-help', {
+                                                detail: { anchor },
+                                            })
+                                        );
+                                        const el = document.getElementById(`help-${anchor}`);
+                                        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    } catch { /* ignore */ }
+                                }}
                             />
                         );
                     })}
@@ -955,8 +1051,17 @@ export default function AIChatPage() {
 
 /* -------------------- Sub-components -------------------- */
 
-function MessageBubble({ role, content, streaming, stopped, waitingNote }) {
+function MessageBubble({
+    role,
+    content,
+    streaming,
+    stopped,
+    waitingNote,
+    sources,
+    onSourceClick,
+}) {
     const isUser = role === 'user';
+    const hasSources = !isUser && Array.isArray(sources) && sources.length > 0;
     return (
         <div className={`ai-msg ai-msg--${role}`}>
             <div className="ai-msg-avatar">
@@ -975,6 +1080,26 @@ function MessageBubble({ role, content, streaming, stopped, waitingNote }) {
                     {streaming && <span className="ai-msg-caret" />}
                 </div>
                 {stopped && <div className="ai-msg-stopped">⏹ stopped</div>}
+                {hasSources && (
+                    <div className="ai-msg-sources">
+                        <span className="ai-msg-sources-label">
+                            <BookOpen size={11} /> Referenced
+                        </span>
+                        {sources.map((s) => (
+                            <button
+                                key={s.id}
+                                type="button"
+                                className="ai-msg-source-chip"
+                                title={`${s.source} · score ${s.score?.toFixed(2)}`}
+                                onClick={() => onSourceClick?.(s.anchor)}
+                                disabled={!s.anchor}
+                            >
+                                {s.title}
+                                <span className="ai-msg-source-origin">· {s.source}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
     );

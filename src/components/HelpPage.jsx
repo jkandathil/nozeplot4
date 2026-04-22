@@ -1235,9 +1235,11 @@ function FlowLabProbeTheory() {
 }
 
 /**
- * User guide sections: id = anchor for table of contents
+ * User guide sections: id = anchor for table of contents.
+ * Exported so the in-app AI assistant's knowledge base can index the
+ * same source-of-truth help text without risk of drift.
  */
-const GUIDE_SECTIONS = [
+export const GUIDE_SECTIONS = [
     {
         id: 'overview',
         icon: BookOpen,
