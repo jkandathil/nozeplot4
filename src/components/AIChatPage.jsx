@@ -463,11 +463,18 @@ export default function AIChatPage() {
         }
     }, [activeChatId, conversations]);
 
-    /* ============ Auto-scroll to latest message ============ */
+    /* ============ Auto-scroll to latest message ============
+       ChatGPT-style "sticky scroll": only auto-scroll if the user is
+       already near the bottom. If they scrolled up to re-read an
+       earlier reply, we must NOT yank them back down every time a new
+       streamed token arrives. */
     useEffect(() => {
         const el = scrollRef.current;
         if (!el) return;
-        el.scrollTop = el.scrollHeight;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (distanceFromBottom < 120) {
+            el.scrollTop = el.scrollHeight;
+        }
     }, [activeChat?.messages, streamingText]);
 
     /* ============ Helpers ============ */

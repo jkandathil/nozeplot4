@@ -152,29 +152,69 @@ export function retrieveContext(query, { k = 4 } = {}) {
     return INDEX.search(query, k);
 }
 
+/* ================================================================
+ *  App Primer — always-on knowledge about NozePlot
+ * ================================================================
+ * Small local LLMs like Gemma-270M cannot be fine-tuned on a user's
+ * data in-browser. The next best thing is a *curated, compact*
+ * summary of the app that we ALWAYS include in the system prompt,
+ * so the model behaves as if it had been trained on the docs. BM25
+ * retrieval still runs on top to pull deeper chunks for specific
+ * questions, but the primer guarantees the model can answer "what
+ * is NozePlot?", "how do I use FlowLab?", "where do I find X?"
+ * without any retrieval luck.
+ *
+ * Keep this under ~1500 chars so it never dominates tiny context
+ * windows. Hand-written so it's dense — not raw docs.
+ * ================================================================ */
+const APP_PRIMER = `
+NozePlot (a.k.a. NozePlot4, FeNOze, Noze Analytics) is a browser-first analytics workspace for "Digital Olfaction" — turning chemical sensor signals into insights. Everything runs locally in the user's browser; no data is uploaded to the cloud.
+
+Hardware context: the companion device FeNOse is a breath-analysis instrument with 64 metal-oxide (MOx) gas sensors in an 8×8 grid (columns A–H, rows 1–8, so "A1" through "H8"). It captures exhaled breath to measure FeNO (fractional exhaled nitric oxide) and other markers. Data is stored as CSV with one row per timestep and 64 sensor columns.
+
+Key pages the user can navigate to from the sidebar:
+- Workspace: file manager for CSV/Excel/.noze session files.
+- Dashboard: raw time-series plots of every sensor.
+- SE Analysis: general-purpose CSV plotting (pick X column, pick Y columns).
+- Normalize: baseline / noise / drift correction pipelines.
+- Aroma Analysis: pulse-response metrics, peak detection, feature extraction.
+- Drift Map / Separability / Sensitivity: array-quality diagnostics.
+- ML Studio: train classifiers on captured data (includes t-SNE Explorer).
+- Manufacturing Variation, Recovery, Dilution, Gas Design, Polymer–CB: R&D calculators and analyses.
+- AU Capture: live USB-serial capture from the FeNOse device (Chrome/Edge, WebSerial).
+- Serial Monitor: raw UART console for any USB serial device.
+- Code Studio: Monaco editor, runs Python in-browser via Pyodide.
+- Flow Lab: 2D Lattice-Boltzmann fluid/aroma simulator with live visualization and Data Visualizer.
+- Spreadsheet: grid with HyperFormula formulas.
+- File Viewer: code / JSON / PDF / Word / images.
+- Help: full user guide with theory sections.
+- AI Agents (this page): local LLM chat with an "app-awareness" toggle.
+
+Typical workflow: upload CSVs → select a main file and optional comparison files → open the relevant module (Dashboard, Normalize, Aroma, ML Studio, etc.). Sessions save as .noze files and restore the full workspace.
+
+When the user asks anything about NozePlot — features, where something lives, how to do X — answer from the primer above plus any retrieved section below. When the user asks something unrelated (math, general knowledge, coding, chit-chat), just be a normal helpful assistant.
+`.trim();
+
 /**
  * Build the full system prompt the AI model should receive.
  *
- * Design philosophy: the assistant should feel like a *general-purpose*
- * intelligent chatbot that happens to know the user's app. So:
- *
- *   • We always lead with a general-assistant persona — no "you are a
- *     documentation reader" framing.
- *   • Retrieved knowledge is only appended when BM25 actually finds
- *     something confident (top score above `minScore`). For generic
- *     questions ("what is 2+2", "write a haiku") nothing is injected
- *     and the model answers from its own world knowledge.
- *   • When relevant knowledge IS injected, it's framed as "background
- *     knowledge" the model owns — not as "documentation to cite". The
- *     model synthesizes it in its own words instead of parroting.
+ * Design:
+ *   1. Persona (user-supplied or default).
+ *   2. APP_PRIMER — always included when `useKnowledgeBase` is on,
+ *      so the model is always app-aware without relying on BM25
+ *      getting lucky with the query wording.
+ *   3. BM25-retrieved sections — only when scores clear `minScore`,
+ *      and only as *extra detail* on top of the primer.
  *
  *   - `userSystem`   : the user's own system prompt (never dropped).
  *   - `query`        : the current user message driving retrieval.
  *   - `history`      : last N user messages for richer retrieval context.
- *   - `budgetChars`  : soft ceiling for injected context (default 2400).
- *   - `k`            : max chunks to consider (default 4).
- *   - `minScore`     : BM25 score below which we treat retrieval as
- *                      noise and inject nothing (default 1.5).
+ *   - `budgetChars`  : soft ceiling for injected context (default 1800).
+ *   - `k`            : max chunks to consider (default 3).
+ *   - `minScore`     : BM25 score below which retrieved chunks are
+ *                      skipped. Kept low (0.6) because the primer
+ *                      already handles generic app questions; retrieval
+ *                      is now a *supplement*, not the primary path.
  *
  * Returns `{ prompt, sources, augmented }`.
  */
@@ -182,34 +222,34 @@ export function buildAugmentedSystemPrompt({
     userSystem,
     query,
     history = [],
-    budgetChars = 2400,
-    k = 4,
-    minScore = 1.5,
+    budgetChars = 1800,
+    k = 3,
+    minScore = 0.6,
 } = {}) {
     const retrievalQuery = [query, ...history.slice(-2)].filter(Boolean).join(' \n ');
     const rawHits = retrieveContext(retrievalQuery, { k });
-
-    /* Relevance gate: BM25 scores are unbounded, but for this corpus
-       (~40 sections) a score above ~1.5 reliably means the query
-       actually mentions something in the docs. Below that we're just
-       matching stop-word-ish tokens and we'd be polluting the prompt
-       with unrelated sections — exactly the behaviour that made the
-       assistant feel like a "documentation reader" on generic chat. */
     const hits = rawHits.filter((h) => h.score >= minScore);
 
     const basePrompt = (userSystem || '').trim() || DEFAULT_PERSONA;
 
+    // Primer-only path: the model still knows the app end-to-end.
     if (hits.length === 0) {
-        return { prompt: basePrompt, sources: [], augmented: false };
+        const prompt = [
+            basePrompt,
+            '',
+            '— What you know about NozePlot (the app the user is in) —',
+            APP_PRIMER,
+        ].join('\n');
+        return { prompt, sources: [], augmented: true };
     }
 
     // Budget chars across the retrieved chunks proportional to score.
     const totalScore = hits.reduce((s, h) => s + h.score, 0) || 1;
     const injected = hits.map((h) => {
-        const share = Math.max(300, Math.floor((h.score / totalScore) * budgetChars));
+        const share = Math.max(250, Math.floor((h.score / totalScore) * budgetChars));
         return {
             ...h,
-            clipped: clipText(h.text, Math.min(share, 1200)),
+            clipped: clipText(h.text, Math.min(share, 900)),
         };
     });
 
@@ -220,8 +260,11 @@ export function buildAugmentedSystemPrompt({
     const prompt = [
         basePrompt,
         '',
-        '— Background knowledge about NozePlot (the app the user is using) —',
-        'The notes below are things you, the assistant, already know about the app. Use them naturally when the user asks about the app, but write answers in your own words — do NOT quote, cite, or paste these notes verbatim. If the user asks a general question unrelated to the app, ignore this background entirely and answer from your general knowledge.',
+        '— What you know about NozePlot (the app the user is in) —',
+        APP_PRIMER,
+        '',
+        '— Extra detail relevant to this specific question —',
+        'These notes come straight from the in-app Help guide. Use them to give a more specific, accurate answer, but write in your own words — do NOT quote or paste them verbatim.',
         '',
         contextBlock,
     ].join('\n');
