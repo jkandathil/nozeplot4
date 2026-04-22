@@ -37,6 +37,86 @@ import {
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+/**
+ * Eager token-by-token streamer.
+ *
+ * The stock `TextStreamer` is word-boundary gated: it only fires
+ * `callback_function` after a space is decoded. For short replies
+ * ("Hi", "Yes.", code blocks with no spaces yet) the user sees an
+ * empty bubble with only a "warming up" dot until end() is called,
+ * which makes the UI look completely broken. This class decodes the
+ * whole token cache after every generated token and emits the delta,
+ * so text appears in the chat the instant it is produced.
+ *
+ * We deliberately extend `TextStreamer` (rather than the unexported
+ * `BaseStreamer`) so we inherit the special-token handling and the
+ * generate-loop's `put`/`end` protocol while overriding the flush
+ * heuristic with something that is NOT space-gated.
+ */
+class EagerTextStreamer extends TextStreamer {
+    constructor(tokenizer, options = {}) {
+        super(tokenizer, options);
+        this._emittedLen = 0;
+    }
+
+    put(value) {
+        if (value.length > 1) {
+            throw Error('EagerTextStreamer only supports batch size of 1');
+        }
+
+        const is_prompt = this.next_tokens_are_prompt;
+        if (is_prompt) {
+            this.next_tokens_are_prompt = false;
+            if (this.skip_prompt) return;
+        }
+
+        const tokens = value[0];
+        this.token_callback_function?.(tokens);
+
+        // Skip decoding when the ONLY token in this batch is a special
+        // token we're configured to hide.
+        if (tokens.length === 1 && this.special_ids.has(tokens[0])) {
+            if (this.decode_kwargs.skip_special_tokens) return;
+        }
+
+        this.token_cache.push(...tokens);
+
+        let decoded;
+        try {
+            decoded = this.tokenizer.decode(this.token_cache, this.decode_kwargs);
+        } catch {
+            // Very rarely, partial UTF-8 bytes can throw during decode;
+            // just wait for the next token to complete the sequence.
+            return;
+        }
+
+        if (decoded.length > this._emittedLen) {
+            const delta = decoded.slice(this._emittedLen);
+            this._emittedLen = decoded.length;
+            this.on_finalized_text(delta, false);
+        }
+    }
+
+    end() {
+        let decoded;
+        try {
+            decoded = this.tokenizer.decode(this.token_cache, this.decode_kwargs);
+        } catch {
+            decoded = '';
+        }
+        if (decoded.length > this._emittedLen) {
+            const delta = decoded.slice(this._emittedLen);
+            this._emittedLen = decoded.length;
+            this.on_finalized_text(delta, true);
+        } else {
+            this.on_finalized_text('', true);
+        }
+        this.token_cache = [];
+        this._emittedLen = 0;
+        this.next_tokens_are_prompt = true;
+    }
+}
+
 let generator = null;
 let currentModelId = null;
 let currentDevice = null;
@@ -150,7 +230,7 @@ async function generate(messages, params) {
     } catch { /* ignore */ }
 
     try {
-        const streamer = new TextStreamer(generator.tokenizer, {
+        const streamer = new EagerTextStreamer(generator.tokenizer, {
             skip_prompt: true,
             skip_special_tokens: true,
             callback_function: (text) => {
@@ -165,8 +245,6 @@ async function generate(messages, params) {
             },
             token_callback_function: () => {
                 tokensOut += 1;
-                // Low-level per-token pulse: lets the UI show "alive" dot
-                // well before the first word-boundary flush.
                 if (tokensOut === 1) {
                     post({ type: 'first-raw-token', delayMs: Math.round(performance.now() - t0) });
                 }
@@ -204,10 +282,20 @@ async function generate(messages, params) {
             finalText = raw;
         }
 
-        // If the model produced nothing (e.g. immediate EOS), fall back
-        // to whatever made it through the streamer so the user sees
-        // _something_ instead of an empty bubble.
+        // If the pipeline returned no text (happens with some chat
+        // templates when we can't round-trip the assistant role), fall
+        // back to whatever made it through the streamer.
         if (!finalText) finalText = streamedText;
+
+        // Last-resort: if truly nothing came out, surface a diagnostic
+        // instead of a silent empty bubble so the user isn't left
+        // wondering if the app broke.
+        if (!finalText) {
+            finalText = tokensOut > 0
+                ? `⚠️ The model emitted ${tokensOut} token(s) but the decoder produced empty text. Try a different dtype or model.`
+                : '⚠️ The model returned no output. Try reloading the model, lowering max_new_tokens, or switching dtype.';
+            logError('Generator produced empty final text', { tokensOut, streamedLen: streamedText.length });
+        }
 
         logInfo(`Done in ${dt.toFixed(2)}s · raw tokens=${tokensOut} · final=${finalText.length} chars`);
         post({
