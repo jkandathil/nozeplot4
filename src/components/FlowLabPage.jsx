@@ -3188,10 +3188,42 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             }
 
             if (e.key === 'Escape') {
-                // Universal "bail out" — cancel any in-progress interaction
-                // and fall back to the Select tool so the user is never
-                // stranded in a CAD mode they can't leave without clicking
-                // the toolbar.
+                // Escape commits a line-in-progress when enough points
+                // have been clicked — pressing Esc after "click, click"
+                // should leave the line on the canvas (same behaviour
+                // as Enter / double-click). Same for an in-progress
+                // polygon of 3+ points. If the chain is too short to
+                // be a valid entity, or we're not in a drawing tool,
+                // Escape falls back to the universal "bail out" below.
+                if (tool === TOOLS.LINE && pendingLinePoints.length >= 2) {
+                    const ent = createPolylineEntity(pendingLinePoints, { closed: false });
+                    const replaceId = pendingLineExtendId;
+                    setEntities((es) => {
+                        const filtered = replaceId
+                            ? es.filter((en) => en.id !== replaceId)
+                            : es;
+                        return [...filtered, ent];
+                    });
+                    setSelection({ entityId: ent.id, edgeIdx: null, vertexIdx: null });
+                    setMultiSelection(new Set([ent.id]));
+                    setPendingLineExtendId(null);
+                    setPendingLinePoints([]);
+                    setTool(TOOLS.SELECT);
+                    return;
+                }
+                if (tool === TOOLS.POLY && pendingPolyPoints.length >= 3) {
+                    const ent = createPolylineEntity(pendingPolyPoints, { closed: true });
+                    setEntities((es) => [...es, ent]);
+                    setSelection({ entityId: ent.id, edgeIdx: null, vertexIdx: null });
+                    setMultiSelection(new Set([ent.id]));
+                    setPendingPolyPoints([]);
+                    setTool(TOOLS.SELECT);
+                    return;
+                }
+                /* Universal "bail out" — cancel any in-progress
+                 * interaction and fall back to the Select tool so
+                 * the user is never stranded in a CAD mode they
+                 * can't leave without clicking the toolbar. */
                 setPendingPolyPoints([]);
                 setPendingLinePoints([]);
                 setPendingLineExtendId(null);
@@ -6445,12 +6477,14 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                 ? 'Line — click to drop the first point'
                                 : n === 1
                                     ? 'Line — 1 point placed · click again to extend · Esc cancels'
-                                    : `Line — ${n} points placed · click the first point or press Enter to close · Esc cancels`;
+                                    : `Line — ${n} points placed · click the first to close, Enter / Esc to finish as open line`;
                         } else if (tool === TOOLS.POLY) {
                             const n = pendingPolyPoints.length;
                             label = n === 0
                                 ? 'Polygon — click to drop the first vertex'
-                                : `Polygon — ${n} vertex${n === 1 ? '' : 'es'} placed · double-click or Enter to close · Esc cancels`;
+                                : n < 3
+                                    ? `Polygon — ${n} vertex${n === 1 ? '' : 'es'} placed · need ≥3 to close · Esc cancels`
+                                    : `Polygon — ${n} vertices placed · double-click / Enter / Esc to close`;
                         } else if (tool === TOOLS.ARC) {
                             const n = pendingArcPoints.length;
                             label = n === 0
