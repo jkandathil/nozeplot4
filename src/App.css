@@ -2,8 +2,9 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   width: 100%;
-  max-width: 100%;
+  max-width: 100vw;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
@@ -20,7 +21,11 @@
 }
 
 .main-content {
-  flex: 1;
+  flex: 1 1 0;
+  /* Without min-width:0, flex children default to min-content, which lets
+     inner pages (charts, schematics, wide tables) push the flex row past
+     the viewport and shove the sidebar visually off the left edge. */
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -129,11 +134,15 @@
   /* Let the drop happen */
 }
 
-/* Sidebar Styles (moved to component css ideally, but here for now) */
+/* Sidebar Styles (moved to component css ideally, but here for now).
+   The component sets its effective width inline so it can auto-collapse
+   on narrow viewports. The CSS fallback below is only used for the
+   tiny window between hydration and the resize-aware mount effect. */
 .sidebar {
   position: relative;
   z-index: 50;
-  width: 392px;
+  width: 340px;
+  max-width: 45vw;
   height: 100%;
   max-height: 100%;
   min-height: 0;
@@ -145,6 +154,18 @@
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
   overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  /* Narrow viewports: fallback rail width if React hasn't hydrated
+     yet. The component itself auto-collapses via window.innerWidth
+     in its initial state, so this rule mostly guards the rare SSR /
+     slow-device first-paint window. Inline styles from the user's
+     explicit expand still win once React is mounted. */
+  .sidebar {
+    max-width: 45vw;
+    padding: var(--spacing-sm);
+  }
 }
 
 /* Modal Styles */
@@ -218,4 +239,36 @@
 
 .modal-btn:hover {
   opacity: 0.9;
+}
+
+/* -------------------------------------------------------------- */
+/* Responsive breakpoints                                         */
+/*                                                                */
+/* Below 1100 px, tighten up the top-bar + content padding so     */
+/* the sidebar + main area can still breathe side-by-side. Below  */
+/* 900 px the Sidebar component auto-collapses to the 60 px zen   */
+/* rail (see Sidebar.jsx useEffect on window.resize), and below   */
+/* 600 px we hide the top-bar ornamental title to reclaim space.  */
+/* -------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  .main-content {
+    border-top-left-radius: var(--border-radius-lg);
+  }
+  .top-bar {
+    padding: 0 var(--spacing-md);
+  }
+}
+
+@media (max-width: 600px) {
+  .top-bar {
+    padding: 0 var(--spacing-sm);
+    height: 56px;
+  }
+  .main-content {
+    border-top-left-radius: var(--border-radius-md);
+  }
+  .title h1 {
+    font-size: 1rem;
+  }
 }

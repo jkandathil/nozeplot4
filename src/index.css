@@ -1,3 +1,15 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  /* Hard stops on page-level horizontal scroll. Any page whose inner
+     layout momentarily exceeds the viewport (wide SVG schematic, wide
+     chart, narrow-window before auto-collapse of the sidebar) will get
+     its own internal scrollbar rather than dragging the whole app shell
+     off-screen. */
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
 :root {
   /* Set by AuthGate when signed in (ResizeObserver) so 100vh/fixed overlays don’t sit under the session bar */
   --auth-session-bar-height: 0px;

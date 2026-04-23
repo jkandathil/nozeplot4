@@ -36,15 +36,52 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const sidebarScrollRef = useRef(null);
     const workspaceAnchorRef = useRef(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [sidebarWidth, setSidebarWidth] = useState(392);
+    const [sidebarWidth, setSidebarWidth] = useState(() => {
+        const saved = Number(localStorage.getItem('sidebarWidth'));
+        return Number.isFinite(saved) && saved >= 200 && saved <= 600 ? saved : 340;
+    });
     const [expandedFolders, setExpandedFolders] = useState(() => new Set(['root-data-files']));
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
     const [workspaceSectionOpen, setWorkspaceSectionOpen] = useState(
         () => localStorage.getItem('sidebarWorkspaceOpen') !== '0'
     );
 
-    // NEW: Global Sidebar minimization toggle
-    const [isCollapsed, setIsCollapsed] = useState(() => localStorage.getItem('zenMode') === 'true');
+    // Sidebar collapse toggle. Initial value auto-collapses on narrow
+    // viewports even if the user's stored preference is expanded — we
+    // don't want the rail eating half the screen on laptops/tablets
+    // on first load. After that, the user's explicit clicks always
+    // win: we only force-collapse on viewport *transitions* into
+    // narrow, not on every render.
+    const NARROW_BREAKPOINT = 900;
+    const [isCollapsed, setIsCollapsed] = useState(() => {
+        if (typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT) return true;
+        return localStorage.getItem('zenMode') === 'true';
+    });
+
+    // Persist user preference + keep the saved width clamped to a
+    // sensible fraction of the current viewport so a previously
+    // generous width can't push content off-screen after a resize.
+    useEffect(() => {
+        try { localStorage.setItem('zenMode', isCollapsed ? 'true' : 'false'); } catch { /* quota */ }
+    }, [isCollapsed]);
+
+    useEffect(() => {
+        try { localStorage.setItem('sidebarWidth', String(sidebarWidth)); } catch { /* quota */ }
+    }, [sidebarWidth]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        let wasNarrow = window.innerWidth < NARROW_BREAKPOINT;
+        const onResize = () => {
+            const narrow = window.innerWidth < NARROW_BREAKPOINT;
+            if (narrow && !wasNarrow) setIsCollapsed(true);
+            wasNarrow = narrow;
+            setSidebarWidth((w) => Math.min(w, Math.max(200, Math.floor(window.innerWidth * 0.45))));
+        };
+        window.addEventListener('resize', onResize);
+        onResize();
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
 
     // Theme cycle (Noze → Dark → Light). Read stored value once; `cycleTheme` persists and updates DOM.
     const [theme, setTheme] = useState(() => readStoredTheme());
@@ -113,11 +150,15 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = sidebarWidth;
+        const viewportMax = typeof window !== 'undefined'
+            ? Math.max(240, Math.floor(window.innerWidth * 0.45))
+            : 600;
+        const hardMax = Math.min(600, viewportMax);
 
         const onMouseMove = (moveEvent) => {
             let newWidth = startWidth + (moveEvent.clientX - startX);
             if (newWidth < 200) newWidth = 200;
-            if (newWidth > 600) newWidth = 600;
+            if (newWidth > hardMax) newWidth = hardMax;
             setSidebarWidth(newWidth);
         };
 
