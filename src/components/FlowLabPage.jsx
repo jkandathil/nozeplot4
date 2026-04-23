@@ -882,6 +882,20 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const canvasWrapRef = useRef(null);
     const [viewport, setViewport] = useState({ pxPerMm: 30, tx: 60, ty: 60 });
     const [canvasSize, setCanvasSize] = useState({ w: 800, h: 480 });
+    /* "Fit viewport to loaded geometry" request flag. Declared up
+     *  here (rather than next to fitToContent() below) because
+     *  several loaders — handleLoadProject, handleLoadResult and the
+     *  demo loaders — reference `scheduleFitToContent` in their
+     *  useCallback dependency arrays. Evaluating those deps at
+     *  render time before the declaration would hit a temporal dead
+     *  zone in production builds (minified to a 1-2 char name, then
+     *  surfacing as "Cannot access 'ko' before initialization"). The
+     *  actual fit logic — which does depend on `entities` and
+     *  `canvasSize` — stays near the other viewport helpers below. */
+    const pendingFitRef = useRef(false);
+    const scheduleFitToContent = useCallback(() => {
+        pendingFitRef.current = true;
+    }, []);
     const [cursorWorld, setCursorWorld] = useState(null);
     const [unit, setUnit] = useState('mm');
     const [gridOn, setGridOn] = useState(true);
@@ -2150,13 +2164,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      *  closure, so calling it immediately after `setEntities([...])`
      *  would fit to the previous geometry (stale closure). Loaders
      *  that replace the scene should therefore call
-     *  `scheduleFitToContent()` instead — it sets a ref flag that the
-     *  effect below honours on the next render, once the new
-     *  `entities` array has committed. It also waits for the canvas
-     *  to have a real size (landing page → canvas reveal can leave
-     *  canvasSize.w at 0 for one frame). */
-    const pendingFitRef = useRef(false);
-
+     *  `scheduleFitToContent()` instead (declared with the viewport
+     *  state near the top of the component, so loaders further up
+     *  can depend on it without hitting a TDZ in production) — it
+     *  sets a ref flag that the effect below honours on the next
+     *  render, once the new `entities` array has committed. It also
+     *  waits for the canvas to have a real size (landing page →
+     *  canvas reveal can leave canvasSize.w at 0 for one frame). */
     const fitToContent = useCallback((entsArg) => {
         const bb = entitiesBBox(entsArg || entities);
         if (!bb) return;
@@ -2175,10 +2189,6 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             ty: canvasSize.h / 2 + cyw * s,
         });
     }, [entities, canvasSize]);
-
-    const scheduleFitToContent = useCallback(() => {
-        pendingFitRef.current = true;
-    }, []);
 
     /* Consume any pending fit request once both the new entities
      *  and a real canvas size are available. We also clear the
