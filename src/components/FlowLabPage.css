@@ -12,6 +12,8 @@
     flex-direction: column;
     height: 100%;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     background: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
@@ -26,7 +28,10 @@
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-secondary);
     flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
 }
 .fl-toolgroup {
     display: flex;
@@ -280,8 +285,15 @@ html[data-theme="light"] .fl-mode-toggle button.is-active {
 .fl-main {
     flex: 1;
     display: grid;
-    grid-template-columns: 220px 1fr 280px;
+    /* minmax(0, ...) on every track so the grid can shrink below
+       min-content — without this, the fixed 220 + 280 side panels
+       plus the canvas push the row wider than .content-area on
+       narrow viewports (sidebar expanded, laptop ≲ 1100 px) and the
+       right panel disappears off the edge. */
+    grid-template-columns: minmax(0, 220px) minmax(0, 1fr) minmax(0, 280px);
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     transition: grid-template-columns 0.18s ease;
 }
@@ -289,6 +301,8 @@ html[data-theme="light"] .fl-mode-toggle button.is-active {
 .fl-left, .fl-right {
     padding: 10px;
     overflow-y: auto;
+    overflow-x: hidden;
+    min-width: 0;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -316,6 +330,49 @@ html[data-theme="light"] .fl-mode-toggle button.is-active {
 .fl-main--no-left .fl-left,
 .fl-main--no-right .fl-right {
     min-width: 0;
+}
+
+/* ───────── Narrow-column responsive fallback ─────────
+ * Uses container queries against the app's main column (declared
+ * in App.css as `container-name: main-col`). When the column —
+ * not the viewport — drops below the listed sizes, Flow Lab
+ * collapses the secondary (right) and then the primary (left)
+ * panel so the canvas always keeps a usable slab. This is what
+ * stops the three-column grid from spilling off-screen when the
+ * sidebar is expanded on a laptop.
+ *
+ * The inline `style.gridTemplateColumns` in FlowLabPage.jsx may
+ * still override the panel widths when the user explicitly toggles
+ * a panel; container queries only drive the *default* width. */
+@container main-col (max-width: 1100px) {
+    .fl-main:not(.fl-main--no-right) {
+        grid-template-columns: minmax(0, 220px) minmax(0, 1fr) minmax(0, 240px);
+    }
+    .fl-right { padding: 8px; }
+}
+@container main-col (max-width: 900px) {
+    .fl-main:not(.fl-main--no-right) {
+        grid-template-columns: minmax(0, 200px) minmax(0, 1fr) 0;
+    }
+    .fl-right {
+        padding: 0;
+        border-left-width: 0;
+        overflow: hidden;
+        pointer-events: none;
+        opacity: 0;
+    }
+}
+@container main-col (max-width: 700px) {
+    .fl-main:not(.fl-main--no-left) {
+        grid-template-columns: 0 minmax(0, 1fr) 0;
+    }
+    .fl-left {
+        padding: 0;
+        border-right-width: 0;
+        overflow: hidden;
+        pointer-events: none;
+        opacity: 0;
+    }
 }
 
 /* Floating edge toggles that sit on the canvas so the panels can be

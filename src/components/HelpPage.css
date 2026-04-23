@@ -44,15 +44,34 @@
 /* Two-column: TOC + sections */
 .help-body {
     display: grid;
-    grid-template-columns: minmax(200px, 240px) 1fr;
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
     gap: 28px;
     align-items: start;
     padding-bottom: 24px;
+    min-width: 0;
+    max-width: 100%;
 }
 
+/* Container-query fallback so the TOC collapses when the main
+   column — not the viewport — is narrow (e.g. sidebar expanded). */
+@container main-col (max-width: 900px) {
+    .help-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .help-toc {
+        position: relative !important;
+        top: auto !important;
+    }
+    .glass-toc {
+        position: relative !important;
+        top: auto !important;
+        max-height: none;
+        overflow-y: visible;
+    }
+}
 @media (max-width: 900px) {
     .help-body {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
     .help-toc {
         position: relative !important;

@@ -108,6 +108,16 @@
   container-name: main-col;
 }
 
+/* Safety net: every direct child of the content-area is the root
+   of a page. They must not exceed the column width. Individual
+   pages that legitimately need horizontal scroll (e.g. the
+   spreadsheet data grid) opt in with their own `overflow-x: auto`
+   rule on a descendant — this rule only clips the page root. */
+.content-area > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
 /* Serial monitor: only the log panel scrolls; keep controls + disconnect reachable */
 .content-area:has(.serial-monitor-root) {
   display: flex;

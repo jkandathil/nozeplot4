@@ -99,11 +99,24 @@
 /* Grid View */
 .charts-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    /* 2 Columns as requested */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* minmax(0, 1fr) so chart cards can shrink below min-content —
+       without it, wide Recharts SVGs push the grid past the viewport. */
     gap: 16px;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     padding-bottom: 16px;
+}
+
+/* Narrow main column: stack the two chart grid cards so Recharts
+   surfaces never push the row past the viewport. Uses container
+   queries so the page tracks the real main-col width (not the
+   viewport) — expanding the sidebar is enough to trigger the stack. */
+@container main-col (max-width: 1024px) {
+    .charts-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .chart-grid-item {
