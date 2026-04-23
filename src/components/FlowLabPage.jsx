@@ -3273,6 +3273,21 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     setSelectedSectionId(null);
                     return;
                 }
+                /* Bulk delete — multi-selection (right-drag marquee or
+                 * Ctrl/Cmd-A) takes priority over single-vertex / edge
+                 * editing. Only kicks in when the primary selection is
+                 * at the entity level (not on a specific vertex / edge
+                 * inside an entity), so surgical edits on one shape are
+                 * never accidentally escalated to "wipe everything". */
+                if (multiSelection.size > 1
+                    && (!selection
+                        || (selection.vertexIdx == null && selection.edgeIdx == null))) {
+                    const ids = new Set(multiSelection);
+                    setEntities((es) => es.filter((en) => !ids.has(en.id)));
+                    setSelection(null);
+                    setMultiSelection(new Set());
+                    return;
+                }
                 if (!selection) return;
                 const ent = entities.find((en) => en.id === selection.entityId);
                 if (!ent) return;
@@ -3332,10 +3347,25 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             else if ((e.key === 'u' || e.key === 'U') && !typing && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault(); runUnion();
             }
+            /* Ctrl/Cmd-A selects every entity on the canvas (classic
+             * CAD "Select All"). Shift variant deselects everything
+             * so you don't have to click empty canvas to clear. */
+            else if ((e.key === 'a' || e.key === 'A') && !typing && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    setSelection(null);
+                    setMultiSelection(new Set());
+                } else if (entities.length > 0) {
+                    const ids = entities.map((en) => en.id);
+                    setMultiSelection(new Set(ids));
+                    setSelection({ entityId: ids[0], edgeIdx: null, vertexIdx: null });
+                    if (tool !== TOOLS.SELECT) setTool(TOOLS.SELECT);
+                }
+            }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [tool, pendingPolyPoints, pendingLinePoints, selection, entities, fitToContent, undo, redo, handleSaveProject, handleSaveAsProject, selectedSectionId, runUnion]);
+    }, [tool, pendingPolyPoints, pendingLinePoints, selection, multiSelection, entities, fitToContent, undo, redo, handleSaveProject, handleSaveAsProject, selectedSectionId, runUnion]);
 
     /* ── BC editing ─────────────────────────────────────────────── */
     const updateSelectedEdgeBC = (patch) => {
@@ -5940,7 +5970,37 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                         <div className="fl-entity-hint fl-muted">
                             Tick checkboxes to build a multi-selection for <b>Union</b> / boolean tools.
                             <b> Right-drag</b> a box on the canvas to grab several; hold <kbd>Shift</kbd> while releasing to add to the current set.
+                            <b> {navigator?.platform?.includes('Mac') ? '⌘A' : 'Ctrl+A'}</b> selects all; press <kbd>Del</kbd> to remove everything selected.
                         </div>
+                        {multiSelection.size > 1 && (
+                            <div className="fl-entity-bulk">
+                                <span className="fl-muted">{multiSelection.size} entities selected</span>
+                                <button
+                                    type="button"
+                                    className="fl-toolbtn fl-toolbtn-danger"
+                                    title="Delete every selected entity"
+                                    onClick={() => {
+                                        const ids = new Set(multiSelection);
+                                        setEntities((es) => es.filter((en) => !ids.has(en.id)));
+                                        setSelection(null);
+                                        setMultiSelection(new Set());
+                                    }}
+                                >
+                                    Delete {multiSelection.size}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="fl-toolbtn"
+                                    title="Clear the multi-selection"
+                                    onClick={() => {
+                                        setSelection(null);
+                                        setMultiSelection(new Set());
+                                    }}
+                                >
+                                    Clear
+                                </button>
+                            </div>
+                        )}
                         {entities.length === 0 ? (
                             <div className="fl-muted">No geometry yet. Draw a rectangle, circle or polyline to start.</div>
                         ) : entities.map((e) => (

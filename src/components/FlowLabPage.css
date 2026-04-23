@@ -426,6 +426,30 @@ html[data-theme="light"] .fl-edge-toggle.is-closed {
     margin: -2px 0 8px;
     padding: 0 2px;
 }
+.fl-entity-bulk {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 6px 8px;
+    margin: 0 0 8px;
+    border-radius: 6px;
+    background: rgba(244, 63, 94, 0.08);
+    border: 1px solid rgba(244, 63, 94, 0.25);
+    font-size: 0.72rem;
+}
+.fl-entity-bulk .fl-toolbtn {
+    padding: 3px 8px;
+    font-size: 0.7rem;
+}
+.fl-toolbtn-danger {
+    background: rgba(244, 63, 94, 0.2);
+    color: #fecaca;
+    border-color: rgba(244, 63, 94, 0.5);
+}
+.fl-toolbtn-danger:hover {
+    background: rgba(244, 63, 94, 0.35);
+}
 .fl-entity-list-row {
     display: flex;
     align-items: stretch;
