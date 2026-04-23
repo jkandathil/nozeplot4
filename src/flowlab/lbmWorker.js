@@ -60,7 +60,7 @@ let state = null;
 
 function buildInitialState({
     nx, ny, mask, inletDir, inletU_lb, outletDir,
-    inletDirsPerCell, inletCPerCell,
+    inletDirsPerCell, inletCPerCell, inletUScalePerCell,
     tau, stepsPerPost, postEvery,
     species, sensorEdges, dt_s,
     pulseId, pulseParams,
@@ -95,11 +95,13 @@ function buildInitialState({
         f, fNext, rho, ux, uy, prevUmag,
         inletDir, inletU_lb, outletDir,
         // Per-INLET-cell overrides. When present, each INLET cell uses
-        // its own inward normal + concentration multiplier instead of
-        // the single global inletDir / cInletValue. Multi-stream
-        // mixers (two streams with c=1 / c=0) need these.
+        // its own inward normal + concentration multiplier + velocity
+        // scale instead of the single global inletDir / cInletValue /
+        // inletU_lb. Multi-stream mixers (two streams with different
+        // flow rates or concentrations) need these.
         inletDirsPerCell: inletDirsPerCell || null,
         inletCPerCell: inletCPerCell || null,
+        inletUScalePerCell: inletUScalePerCell || null,
         tau, invTau: 1 / tau,
         iter: 0,
         residual: 1,
@@ -157,6 +159,7 @@ function step(s) {
 
     /* 2. Inlet / outlet BCs. */
     const idPerCell = s.inletDirsPerCell;
+    const usPerCell = s.inletUScalePerCell;
     for (let k = 0; k < N; k++) {
         if (mask[k] !== INLET) continue;
         // Per-cell inward direction if available (multi-stream mixer),
@@ -168,8 +171,10 @@ function step(s) {
             const dyp = idPerCell[2 * k + 1];
             if (dxp !== 0 || dyp !== 0) { dxDir = dxp; dyDir = dyp; }
         }
-        const tx = dxDir * inletU_lb;
-        const ty = dyDir * inletU_lb;
+        // Per-cell velocity scale (MFC-style per-inlet flow). Default 1.
+        const uScale = usPerCell && usPerCell[k] > 0 ? usPerCell[k] : 1;
+        const tx = dxDir * inletU_lb * uScale;
+        const ty = dyDir * inletU_lb * uScale;
         ux[k] = tx;
         uy[k] = ty;
         rho[k] = 1;
@@ -374,12 +379,39 @@ function computeSensorSnapshots(s) {
 function postField(s) {
     const umag = new Float32Array(s.N);
     let umax = 0;
+    // First pass — velocity magnitude + umax. Second pass uses umax
+    // to count dead-zone cells (|u| < 1% of peak). Single pass over
+    // mask indices because N can be ≫ 10⁶ on fine meshes.
     for (let k = 0; k < s.N; k++) {
         if (s.mask[k] === WALL) { umag[k] = 0; continue; }
         const m = Math.hypot(s.ux[k], s.uy[k]);
         umag[k] = m;
         if (m > umax) umax = m;
     }
+
+    // Inlet / outlet mean density for pressure-drop KPI.  In LBM
+    // p_lat = ρ_lat / 3 and the main thread converts to Pa using
+    // Δp_phys = ρ_gas · (dx/dt)² · (ρ̄_in − ρ̄_out) / 3.
+    let rhoInletSum = 0, nInlet = 0;
+    let rhoOutletSum = 0, nOutlet = 0;
+    // Dead-zone cell count (fluid only, |u| < 1% of umax). Reported as
+    // a fraction of all fluid cells so it's geometry-independent.
+    const deadThresh = umax * 0.01;
+    let nFluid = 0, nDead = 0;
+    for (let k = 0; k < s.N; k++) {
+        const mk = s.mask[k];
+        if (mk === WALL) continue;
+        if (mk === INLET)  { rhoInletSum  += s.rho[k]; nInlet++;  }
+        else if (mk === OUTLET) { rhoOutletSum += s.rho[k]; nOutlet++; }
+        else {
+            nFluid++;
+            if (umag[k] < deadThresh) nDead++;
+        }
+    }
+    const rhoInletMean  = nInlet  > 0 ? rhoInletSum  / nInlet  : NaN;
+    const rhoOutletMean = nOutlet > 0 ? rhoOutletSum / nOutlet : NaN;
+    const deadZoneFrac  = nFluid  > 0 ? nDead / nFluid : 0;
+
     const msg = {
         type: 'field',
         iter: s.iter,
@@ -390,6 +422,9 @@ function postField(s) {
         umax,
         t_s: s.iter * s.dt_s,
         sensorSnapshot: computeSensorSnapshots(s),
+        // Design KPIs piggybacked onto the field message.
+        rhoInletMean, rhoOutletMean, nInletCells: nInlet, nOutletCells: nOutlet,
+        deadZoneFrac,
     };
     if (s.speciesEnabled && s.c) {
         msg.c = new Float32Array(s.c);

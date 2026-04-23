@@ -3938,3 +3938,72 @@ html[data-theme="light"] .fl-mixer-table thead th { background: #f1f5f9; color: 
 html[data-theme="light"] .fl-mixer-table tbody tr + tr td { border-top-color: #e2e8f0; }
 html[data-theme="light"] .fl-mixer-hint  { color: #475569; }
 html[data-theme="light"] .fl-mixer-empty { color: #64748b; }
+
+/* Secondary KPI strip — Δp, dead-zone fraction, outlet COV. Sits
+   between the per-section table and the design hint. */
+.fl-mixer-secondary {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 6px;
+}
+.fl-mixer-kv { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fl-mixer-kv-k {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fl-mixer-kv-v {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+}
+.fl-mixer-kv-v.fl-ok      { color: #4ade80; }
+.fl-mixer-kv-v.fl-ok-soft { color: #a3e635; }
+.fl-mixer-kv-v.fl-warn    { color: #fbbf24; }
+.fl-mixer-kv-v.fl-bad     { color: #f87171; }
+
+/* RTD sub-block inside the mixer panel. Same table styling as the
+   section KPI table above but with its own title row. */
+.fl-mixer-rtd { margin-top: 10px; }
+.fl-mixer-subtitle {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #cbd5e1;
+    margin-bottom: 4px;
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+.fl-mixer-subtitle-warn {
+    font-size: 10px;
+    color: #fbbf24;
+    text-transform: none;
+    letter-spacing: 0;
+    font-style: italic;
+}
+.fl-mixer-rtd .fl-mixer-table { margin-top: 0; }
+
+html[data-theme="light"] .fl-mixer-secondary {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+html[data-theme="light"] .fl-mixer-kv-k { color: #64748b; }
+html[data-theme="light"] .fl-mixer-kv-v { color: #0f172a; }
+html[data-theme="light"] .fl-mixer-kv-v.fl-ok      { color: #16a34a; }
+html[data-theme="light"] .fl-mixer-kv-v.fl-ok-soft { color: #65a30d; }
+html[data-theme="light"] .fl-mixer-kv-v.fl-warn    { color: #d97706; }
+html[data-theme="light"] .fl-mixer-kv-v.fl-bad     { color: #dc2626; }
+html[data-theme="light"] .fl-mixer-subtitle        { color: #334155; }
+html[data-theme="light"] .fl-mixer-subtitle-warn   { color: #d97706; }

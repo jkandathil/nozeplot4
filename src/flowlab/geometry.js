@@ -627,8 +627,15 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
     //   inletCPerCell[k]       = concentration multiplier in [0,1]
     //                            (defaults to 1 for back-compat when
     //                            edgeBC[e].c is unset)
+    //   inletUScalePerCell[k]  = velocity magnitude multiplier (MFC-style
+    //                            per-inlet flow scaling). Defaults to 1.
+    //                            Lets users model "10 sccm into 100 sccm"
+    //                            dilutions without resizing geometry —
+    //                            just set Stream A U_scale=1 and Stream
+    //                            B U_scale=10 on two equal-area inlets.
     const inletDirsPerCell = new Float32Array(nx * ny * 2);
     const inletCPerCell = new Float32Array(nx * ny);
+    const inletUScalePerCell = new Float32Array(nx * ny);
 
     for (let j = 0; j < ny; j++) {
         const yc = ymin + (j + 0.5) * dy;
@@ -710,6 +717,11 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
                 // before. Multi-stream mixers override it per edge.
                 const cMul = Number.isFinite(bc.c) ? bc.c : 1;
                 inletCPerCell[k] = Math.max(0, Math.min(1, cMul));
+                // Per-inlet velocity scale — default 1 (unchanged).
+                // Clamp to a sane range so the lattice stays stable
+                // (|u_lb| must remain < 1).
+                const uMul = Number.isFinite(bc.U_scale) ? bc.U_scale : 1;
+                inletUScalePerCell[k] = Math.max(0, Math.min(20, uMul));
             }
             else if (bc.type === 'outlet') mask[k] = 3;
             // Sensor edges are logically walls for the flow solver (no-slip),
@@ -783,6 +795,7 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
         inletLength_mm,       // total length of all inlet edges (mm)
         inletDirsPerCell,     // Float32Array(2N): inward normal per INLET cell
         inletCPerCell,        // Float32Array(N):  concentration per INLET cell
+        inletUScalePerCell,   // Float32Array(N):  velocity scale per INLET cell
     };
 }
 

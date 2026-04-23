@@ -626,8 +626,8 @@ const TMIXER_TOUR_STEPS = [
     },
     {
         target: 'gas-inlet',
-        title: '2 / Two inlets, same velocity',
-        body: 'Both inlets receive the same inlet speed (or sccm flow rate — the solver back-computes U from the inlet cross-section). Per-edge concentration is the multi-stream trick: each inlet cell carries its own c multiplier (0..1), set in Properties ▸ BC type = Inlet ▸ Stream fraction. Swap these numbers to change the analyte / carrier ratio.',
+        title: '2 / Two inlets, two knobs',
+        body: 'Click any inlet edge and open Properties. You get TWO per-inlet knobs now: Stream fraction (c, 0..1) sets the analyte fraction at that inlet, and Flow rate scale (U_scale) multiplies the global inlet velocity for this edge only. That lets you model classic MFC-style asymmetric dilutions (e.g. stream A U_scale = 1, stream B U_scale = 10 → 11× dilution) without resizing geometry.',
     },
     {
         target: 'species',
@@ -642,7 +642,7 @@ const TMIXER_TOUR_STEPS = [
     {
         target: 'mixer',
         title: '5 / Mixer analysis panel',
-        body: 'The right-rail panel computes cross-section KPIs in real time. Mixing index M = 1 − σ(c)/σ_max, where σ_max = √(c̄(1 − c̄)) is the theoretical max for a bimodal mixture. M → 1 means perfectly mixed. L_90 is the shortest downstream distance at which M ≥ 0.9 — the classic "mixing length" for design.',
+        body: 'The right-rail panel computes cross-section KPIs in real time. Headline: Mixing index M = 1 − σ(c)/σ_max (1 = perfect) and L_90, the shortest downstream distance to reach M ≥ 0.9 — the classic "mixing length". Below the section table you also get Δp (pumping cost), Dead-zone fraction (recirculation / stagnation pockets), and Outlet COV = σ(c)/c̄ (the stricter industrial uniformity metric, target ≤ 5 %). A bad mixer scores well on M but poorly on Δp or dead-zone — Flow Lab exposes the trade-off.',
     },
     {
         target: 'section',
@@ -656,13 +656,18 @@ const TMIXER_TOUR_STEPS = [
     },
     {
         target: 'mixer',
-        title: '8 / Mixer KPIs checklist',
-        body: 'Typical design targets: M ≥ 0.90 at outlet for adequate mixing, M ≥ 0.95 for high-uniformity delivery; short L_90 for compact layouts; minimise pressure drop (velocity × channel length ∝ pumping energy); and low dead-zone fraction (check for recirculation near the corner).',
+        title: '8 / KPI checklist — what "good" looks like',
+        body: 'Design targets for a passive 2-D mixer: M_outlet ≥ 0.90 (adequate) or ≥ 0.95 (high-uniformity delivery); L_90 short enough to fit your footprint; Δp below your pump budget; dead-zone fraction ≤ 5 %; COV ≤ 0.05. If the T-mixer fails L_90, try a serpentine or baffled main channel — mixing quality improves dramatically while Δp only climbs linearly.',
+    },
+    {
+        target: 'mixer',
+        title: '9 / Residence Time Distribution (RTD)',
+        body: 'Switch the pulse from Step → Gaussian (or Rectangular) in the Species panel. The probes (P_pre / P_mid / P_out) then see a finite tracer puff, and Flow Lab computes the mean residence time τ, its spread σ_τ, and the axial Peclet number Pe ≈ 2τ²/σ_τ² per probe. Larger Pe ≈ plug flow; smaller Pe ≈ more axial dispersion. Growing σ_τ from P_pre → P_out confirms the mixer is actually homogenising, not just co-flowing.',
     },
     {
         target: null,
-        title: '9 / Try these experiments',
-        body: '(a) Cut stream-A velocity in half by drawing an obstacle in its inlet channel → c̄ at outlet shifts. (b) Add a second lamina by widening stream B → faster mixing. (c) Insert 2–3 small pillars along the main channel → mixing accelerates (split-and-recombine). (d) Switch analyte to Nitrogen dioxide → D drops → L_90 grows. All without redrawing the T.',
+        title: '10 / Try these experiments',
+        body: '(a) Edit inlet B\'s Flow rate scale to 10 → heavy dilution of A. (b) Cut stream-A velocity in half with an obstacle → asymmetric split. (c) Insert 2–3 small pillars along the main channel → split-and-recombine, L_90 drops. (d) Switch analyte to Nitrogen dioxide → D falls → L_90 grows. All of this without redrawing the T — just edit, press Run again.',
     },
 ];
 
@@ -3895,6 +3900,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     cInletValue: m.cInletValue || 0,
                     cMax: m.cMax || 0,
                     cMaxFluid: m.cMaxFluid || 0,
+                    // Pressure-drop + dead-zone KPIs computed once per
+                    // snapshot inside the worker (cheap single pass).
+                    rhoInletMean:  Number.isFinite(m.rhoInletMean)  ? m.rhoInletMean  : NaN,
+                    rhoOutletMean: Number.isFinite(m.rhoOutletMean) ? m.rhoOutletMean : NaN,
+                    deadZoneFrac:  Number.isFinite(m.deadZoneFrac)  ? m.deadZoneFrac  : 0,
                 });
                 // Trim history to last 500 points; keeps the mini-chart cheap.
                 const hist = residualHistoryRef.current;
@@ -4092,6 +4102,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             // the scalar inletDir / cInletValue when they're missing.
             inletDirsPerCell: raster.inletDirsPerCell,
             inletCPerCell: raster.inletCPerCell,
+            inletUScalePerCell: raster.inletUScalePerCell,
             tau,
             stepsPerPost: 6,
             postEvery: 33, // ~30 fps
@@ -5006,8 +5017,30 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
          M_outlet   = mixing index at the last (right-most) section
                       — the headline "how well did my mixer mix?" */
     const mixerKPIs = useMemo(() => {
+        /* Δp (Pa) across the mixer, computed from the LBM density
+           field: p_lat = ρ_lat / 3, and Δp_phys = ρ_gas · c_s² · Δρ_lat.
+           Where c_s (sound speed, SI) = dx_m / dt_s / √3, so
+           c_s² = (dx_m / dt_s)² / 3. The result is meaningful once the
+           flow has developed — before that Δρ_lat is dominated by the
+           rho=1 inlet BC. We still surface it so the user sees it
+           converge as they iterate. */
+        let pressureDrop_Pa = NaN;
+        if (field && solverInfo?.dx_m && solverInfo?.dt_s && gas?.rho
+            && Number.isFinite(field.rhoInletMean) && Number.isFinite(field.rhoOutletMean)) {
+            const cs2_phys = (solverInfo.dx_m / solverInfo.dt_s) ** 2 / 3;
+            pressureDrop_Pa = gas.rho * cs2_phys * (field.rhoInletMean - field.rhoOutletMean);
+        }
+        const deadZoneFrac = field && Number.isFinite(field.deadZoneFrac) ? field.deadZoneFrac : NaN;
+
         if (!speciesEnabled || !field || sectionProfiles.length < 2) {
-            return { ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN };
+            /* Even without species data we can still return Δp and
+               dead-zone fraction — they're purely hydrodynamic and
+               useful for non-mixer flows too. */
+            return {
+                ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN,
+                pressureDrop_Pa, deadZoneFrac,
+                COV_outlet: NaN,
+            };
         }
         const rows = [];
         for (const p of sectionProfiles) {
@@ -5040,7 +5073,10 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             });
         }
         if (rows.length < 2) {
-            return { ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN };
+            return {
+                ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN,
+                pressureDrop_Pa, deadZoneFrac, COV_outlet: NaN,
+            };
         }
         rows.sort((r1, r2) => r1.axisVal - r2.axisVal);
         const base = rows[0].axisVal;
@@ -5050,9 +5086,100 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             if (!Number.isFinite(L_90) && r.M >= 0.90) L_90 = r.distance_mm;
             if (!Number.isFinite(L_95) && r.M >= 0.95) L_95 = r.distance_mm;
         }
-        const M_outlet = rows[rows.length - 1].M;
-        return { ok: true, rows, L_90, L_95, M_outlet };
-    }, [sectionProfiles, speciesEnabled, field]);
+        const outletRow = rows[rows.length - 1];
+        const M_outlet = outletRow.M;
+        // Coefficient of variation at the outlet: σ(c)/c̄ — a stricter
+        // uniformity metric than M (M normalises by the theoretical
+        // bimodal max σ_max = √(c̄(1−c̄)); COV uses the actual mean).
+        const COV_outlet = outletRow.c_mean > 1e-6
+            ? outletRow.c_std / outletRow.c_mean
+            : NaN;
+        return {
+            ok: true, rows, L_90, L_95, M_outlet,
+            pressureDrop_Pa, deadZoneFrac, COV_outlet,
+        };
+    }, [sectionProfiles, speciesEnabled, field, solverInfo, gas]);
+
+    /* ── Residence Time Distribution (per point probe) ───────────
+       Reads each probe's recorded c(t) trace and computes:
+         τ   = ∫t·c(t)dt / ∫c(t)dt          (mean residence time)
+         σ_τ = √(∫(t−τ)²·c(t)dt / ∫c(t)dt)  (standard deviation)
+         Pe  ≈ 2·τ²/σ_τ²                    (axial Peclet number,
+                                             Levenspiel open-vessel
+                                             RTD interpretation)
+
+       Requires a pulse with finite support — step pulses never
+       decay so ∫t·c(t)dt diverges; we flag `nonConvergent=true`
+       in that case so the UI can warn. Gaussian / rectangular /
+       exp pulses work correctly. */
+    const rtdMetrics = useMemo(() => {
+        if (!speciesEnabled || !pointProbes?.length || !sensorHistory) {
+            return { ok: false, probes: [], note: 'Enable species and add point probes' };
+        }
+        const isStep = pulseId === 'step';
+        const probes = [];
+        for (const pp of pointProbes) {
+            const h = sensorHistory[`P:${pp.id}`];
+            if (!h || !h.t_s?.length) {
+                probes.push({ id: pp.id, label: pp.label, ok: false });
+                continue;
+            }
+            const N = h.t_s.length;
+            let intC = 0, intTC = 0;
+            for (let i = 1; i < N; i++) {
+                const dt = h.t_s[i] - h.t_s[i - 1];
+                if (!Number.isFinite(dt) || dt <= 0) continue;
+                const cA = Number.isFinite(h.c[i - 1]) ? h.c[i - 1] : 0;
+                const cB = Number.isFinite(h.c[i]) ? h.c[i] : 0;
+                const tA = h.t_s[i - 1], tB = h.t_s[i];
+                /* Trapezoidal rule — cheap and ≥ 2nd-order accurate
+                   for smooth c(t). */
+                intC  += 0.5 * (cA + cB) * dt;
+                intTC += 0.5 * (tA * cA + tB * cB) * dt;
+            }
+            if (intC < 1e-12) {
+                probes.push({ id: pp.id, label: pp.label, ok: false, reason: 'tracer has not arrived yet' });
+                continue;
+            }
+            const tau = intTC / intC;
+            let intVar = 0;
+            for (let i = 1; i < N; i++) {
+                const dt = h.t_s[i] - h.t_s[i - 1];
+                if (!Number.isFinite(dt) || dt <= 0) continue;
+                const cA = Number.isFinite(h.c[i - 1]) ? h.c[i - 1] : 0;
+                const cB = Number.isFinite(h.c[i]) ? h.c[i] : 0;
+                const dA = (h.t_s[i - 1] - tau) ** 2 * cA;
+                const dB = (h.t_s[i]     - tau) ** 2 * cB;
+                intVar += 0.5 * (dA + dB) * dt;
+            }
+            const sigma2 = intC > 1e-12 ? intVar / intC : NaN;
+            const sigma  = Number.isFinite(sigma2) && sigma2 >= 0 ? Math.sqrt(sigma2) : NaN;
+            /* Peclet from RTD — dispersion model. Lower Pe ↔ more
+               axial dispersion ↔ better mixing in series-of-tanks
+               reading but worse plug-flow behaviour. Ill-defined
+               for step pulses. */
+            const Pe = Number.isFinite(sigma) && sigma > 1e-9 ? 2 * tau * tau / (sigma * sigma) : NaN;
+            probes.push({
+                id: pp.id,
+                label: pp.label,
+                x_mm: pp.x_mm, y_mm: pp.y_mm,
+                ok: true,
+                tau_s: tau,
+                sigma_s: sigma,
+                Pe,
+                samples: N,
+                nonConvergent: isStep,
+            });
+        }
+        return {
+            ok: probes.some((p) => p.ok),
+            probes,
+            nonConvergent: isStep,
+            note: isStep
+                ? 'τ diverges for step pulses — switch to Gaussian or rectangular for a meaningful RTD.'
+                : undefined,
+        };
+    }, [speciesEnabled, pointProbes, sensorHistory, pulseId]);
 
     /* ── Time-history recorder ──────────────────────────────────────
        On every field post (≈ 30 Hz) append one row to the time-history
@@ -7527,20 +7654,36 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                             </select>
                                         </label>
                                         {selectedEdgeBC.type === 'inlet' && (
-                                            <label className="fl-field fl-field-inset"
-                                                title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
-                                                <span>Stream fraction (0..1)</span>
-                                                <input
-                                                    type="number"
-                                                    min={0} max={1} step={0.05}
-                                                    value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
-                                                    onChange={(e) => {
-                                                        const v = Number(e.target.value);
-                                                        if (!Number.isFinite(v)) return;
-                                                        updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
-                                                    }}
-                                                />
-                                            </label>
+                                            <>
+                                                <label className="fl-field fl-field-inset"
+                                                    title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
+                                                    <span>Stream fraction (0..1)</span>
+                                                    <input
+                                                        type="number"
+                                                        min={0} max={1} step={0.05}
+                                                        value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value);
+                                                            if (!Number.isFinite(v)) return;
+                                                            updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
+                                                        }}
+                                                    />
+                                                </label>
+                                                <label className="fl-field fl-field-inset"
+                                                    title="Velocity magnitude multiplier at this inlet edge. Default 1.0 → same speed as every other inlet. Set to 10 to model a 10× flow-rate MFC (e.g. 100 sccm vs 10 sccm) without changing geometry. Keep the product U_inlet·U_scale well below the sound-speed limit (the solver clamps to 20).">
+                                                    <span>Flow rate scale</span>
+                                                    <input
+                                                        type="number"
+                                                        min={0} max={20} step={0.1}
+                                                        value={Number.isFinite(selectedEdgeBC.U_scale) ? selectedEdgeBC.U_scale : 1}
+                                                        onChange={(e) => {
+                                                            const v = Number(e.target.value);
+                                                            if (!Number.isFinite(v)) return;
+                                                            updateSelectedEdgeBC({ U_scale: Math.max(0, Math.min(20, v)) });
+                                                        }}
+                                                    />
+                                                </label>
+                                            </>
                                         )}
                                     </>
                                 )}
@@ -7553,6 +7696,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
 
                     <MixerAnalysisPanel
                         kpis={mixerKPIs}
+                        rtd={rtdMetrics}
                         speciesEnabled={speciesEnabled}
                         field={field}
                         cUnit={cUnit}
@@ -7994,20 +8138,36 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                     </select>
                                 </label>
                                 {selectedEdgeBC.type === 'inlet' && (
-                                    <label className="fl-field fl-field-inset"
-                                        title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
-                                        <span>Stream fraction (0..1)</span>
-                                        <input
-                                            type="number"
-                                            min={0} max={1} step={0.05}
-                                            value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
-                                            onChange={(e) => {
-                                                const v = Number(e.target.value);
-                                                if (!Number.isFinite(v)) return;
-                                                updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
-                                            }}
-                                        />
-                                    </label>
+                                    <>
+                                        <label className="fl-field fl-field-inset"
+                                            title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
+                                            <span>Stream fraction (0..1)</span>
+                                            <input
+                                                type="number"
+                                                min={0} max={1} step={0.05}
+                                                value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
+                                                onChange={(e) => {
+                                                    const v = Number(e.target.value);
+                                                    if (!Number.isFinite(v)) return;
+                                                    updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
+                                                }}
+                                            />
+                                        </label>
+                                        <label className="fl-field fl-field-inset"
+                                            title="Velocity magnitude multiplier at this inlet edge. Default 1.0 → same speed as every other inlet. Set to 10 to model a 10× flow-rate MFC (e.g. 100 sccm vs 10 sccm) without changing geometry. Keep the product U_inlet·U_scale well below the sound-speed limit (the solver clamps to 20).">
+                                            <span>Flow rate scale</span>
+                                            <input
+                                                type="number"
+                                                min={0} max={20} step={0.1}
+                                                value={Number.isFinite(selectedEdgeBC.U_scale) ? selectedEdgeBC.U_scale : 1}
+                                                onChange={(e) => {
+                                                    const v = Number(e.target.value);
+                                                    if (!Number.isFinite(v)) return;
+                                                    updateSelectedEdgeBC({ U_scale: Math.max(0, Math.min(20, v)) });
+                                                }}
+                                            />
+                                        </label>
+                                    </>
                                 )}
                             </>
                         )}
@@ -9072,6 +9232,7 @@ const SectionRow = ({ section, stats, selected, onSelect, onToggleVisible, onRen
  *  discoverable. */
 const MixerAnalysisPanel = ({
     kpis,
+    rtd,
     speciesEnabled,
     field,
     cUnit,
@@ -9080,6 +9241,18 @@ const MixerAnalysisPanel = ({
     ...rest
 }) => {
     const fmtPct = (v) => Number.isFinite(v) ? `${(v * 100).toFixed(1)} %` : '—';
+    const fmtPa = (v) => {
+        if (!Number.isFinite(v)) return '—';
+        const abs = Math.abs(v);
+        if (abs >= 1000) return `${(v / 1000).toFixed(2)} kPa`;
+        if (abs >= 1)    return `${v.toFixed(2)} Pa`;
+        return `${(v * 1000).toFixed(2)} mPa`;
+    };
+    const fmtTime = (v) => {
+        if (!Number.isFinite(v)) return '—';
+        if (Math.abs(v) >= 1) return `${v.toFixed(3)} s`;
+        return `${(v * 1000).toFixed(1)} ms`;
+    };
     const fmtC = (v) => {
         if (!Number.isFinite(v)) return '—';
         if (cUnit === 'frac') return v.toFixed(3);
@@ -9245,11 +9418,79 @@ const MixerAnalysisPanel = ({
                 </table>
             </div>
 
+            {/* Secondary KPIs — pressure drop, dead-zone, COV. These are
+                purely hydrodynamic (Δp, dead-zone) or hydrodynamic +
+                species (COV) and are useful even before M reaches the
+                design target. */}
+            <div className="fl-mixer-secondary">
+                <div className="fl-mixer-kv">
+                    <span className="fl-mixer-kv-k" title="Pressure drop across the mixer = ρ_gas · c_s² · (ρ̄_in − ρ̄_out) in LBM units. Lower Δp = cheaper to drive. Compare Δp vs L_90 to judge the pumping-cost / mixing-quality trade-off.">Δp (inlet → outlet)</span>
+                    <span className="fl-mixer-kv-v">{fmtPa(kpis.pressureDrop_Pa)}</span>
+                </div>
+                <div className="fl-mixer-kv">
+                    <span className="fl-mixer-kv-k" title="Fraction of fluid volume where |u| < 1% of peak velocity. Tracks recirculation pockets and dead corners where analyte can stagnate. Good passive mixer designs keep this below ~5%.">Dead-zone fraction</span>
+                    <span className={
+                        !Number.isFinite(kpis.deadZoneFrac) ? 'fl-mixer-kv-v'
+                        : kpis.deadZoneFrac <= 0.05 ? 'fl-mixer-kv-v fl-ok'
+                        : kpis.deadZoneFrac <= 0.15 ? 'fl-mixer-kv-v fl-warn'
+                        : 'fl-mixer-kv-v fl-bad'
+                    }>{fmtPct(kpis.deadZoneFrac)}</span>
+                </div>
+                <div className="fl-mixer-kv">
+                    <span className="fl-mixer-kv-k" title="Coefficient of variation at the outlet = σ(c) / c̄. A stricter uniformity metric than M (which normalises by √(c̄(1−c̄))). Industry aims for COV ≤ 0.05 (5%).">Outlet COV</span>
+                    <span className={
+                        !Number.isFinite(kpis.COV_outlet) ? 'fl-mixer-kv-v'
+                        : kpis.COV_outlet <= 0.05 ? 'fl-mixer-kv-v fl-ok'
+                        : kpis.COV_outlet <= 0.10 ? 'fl-mixer-kv-v fl-ok-soft'
+                        : kpis.COV_outlet <= 0.20 ? 'fl-mixer-kv-v fl-warn'
+                        : 'fl-mixer-kv-v fl-bad'
+                    }>{Number.isFinite(kpis.COV_outlet) ? kpis.COV_outlet.toFixed(3) : '—'}</span>
+                </div>
+            </div>
+
+            {/* RTD — per-probe mean residence time + dispersion. Only
+                meaningful when a finite-support pulse (Gaussian, rect,
+                exp) is used — step pulses make τ divergent.*/}
+            {rtd?.ok && rtd.probes?.length > 0 && (
+                <div className="fl-mixer-rtd">
+                    <div className="fl-mixer-subtitle">
+                        Residence time (per probe)
+                        {rtd.nonConvergent && (
+                            <span className="fl-mixer-subtitle-warn" title="Step pulses keep c(t) non-zero indefinitely, which makes the integrals diverge — the numbers below are the partial integrals only. Use a Gaussian or rectangular pulse for a proper RTD.">
+                                · step pulse: τ not fully converged
+                            </span>
+                        )}
+                    </div>
+                    <table className="fl-mixer-table">
+                        <thead>
+                            <tr>
+                                <th>Probe</th>
+                                <th>τ</th>
+                                <th>σ_τ</th>
+                                <th title="Axial Peclet = 2τ²/σ_τ². Higher Pe ⇒ closer to plug flow; lower Pe ⇒ more axial dispersion.">Pe</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rtd.probes.map((p) => (
+                                <tr key={p.id}>
+                                    <td>{p.label}</td>
+                                    <td>{p.ok ? fmtTime(p.tau_s) : <span className="fl-muted">—</span>}</td>
+                                    <td>{p.ok ? fmtTime(p.sigma_s) : <span className="fl-muted">—</span>}</td>
+                                    <td>{p.ok && Number.isFinite(p.Pe) ? p.Pe.toFixed(1) : '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
             <div className="fl-mixer-hint">
                 Design targets: <b>M ≥ 0.90</b> for adequate mixing,
                 <b> M ≥ 0.95</b> for high-uniformity delivery.
                 Shorter L_90 ↔ more compact layout; smaller σ at
-                outlet ↔ lower stream-to-stream variability.
+                outlet ↔ lower stream-to-stream variability. Watch Δp
+                and dead-zone fraction to catch geometry that mixes
+                well but is expensive to drive or traps tracer.
             </div>
         </div>
     );
