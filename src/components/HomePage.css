@@ -23,7 +23,10 @@
 .home-hero {
     position: relative;
     display: grid;
-    grid-template-columns: 1fr auto;
+    /* minmax(0, 1fr) lets the title column actually shrink below its
+       min-content width; without it, long titles + wide right-side
+       stats cluster push the grid past its container. */
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 28px;
     align-items: flex-end;
     padding: 20px 26px;
@@ -565,8 +568,21 @@
     background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-secondary));
 }
 
-/* ───────── RESPONSIVE ───────── */
-@media (max-width: 960px) {
+/* ───────── RESPONSIVE ─────────
+ *
+ * Container queries on the main column (set up in App.css via
+ * container-name: main-col) — so HomePage reflows based on the
+ * width it actually has, not the viewport width. This matters
+ * because the sidebar can take 60–450 px off the left, and the
+ * page should reformat regardless of whether the viewport itself
+ * is also narrow.
+ *
+ * Legacy `@media` fallbacks are still here for browsers that
+ * somehow don't support container queries (all 2023+ evergreens
+ * already do) and for the folder-compare page which renders
+ * outside .content-area.
+ */
+@container main-col (max-width: 960px) {
     .home-page {
         padding: 20px 18px 28px;
     }
@@ -587,7 +603,7 @@
     }
 }
 
-@media (max-width: 560px) {
+@container main-col (max-width: 560px) {
     .home-hero-right {
         flex-wrap: wrap;
         gap: 10px 18px;
@@ -605,4 +621,20 @@
     .home-recent-row-size {
         display: none;
     }
+}
+
+@media (max-width: 960px) {
+    .home-page { padding: 20px 18px 28px; }
+    .home-hero { grid-template-columns: 1fr; align-items: flex-start; gap: 18px; }
+    .home-hero-right { align-self: stretch; justify-content: space-between; }
+    .home-row-recent { grid-template-columns: 1fr; }
+    .home-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+    .home-hero-right { flex-wrap: wrap; gap: 10px 18px; }
+    .home-hero-stat + .home-hero-stat { padding-left: 0; border-left: none; }
+    .home-tiles { grid-template-columns: 1fr; }
+    .home-recent-row { grid-template-columns: 16px minmax(0, 1fr) auto; }
+    .home-recent-row-size { display: none; }
 }

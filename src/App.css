@@ -92,6 +92,7 @@
 .content-area {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   padding: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -99,6 +100,12 @@
   -webkit-overflow-scrolling: touch;
   /* Don’t let wheel/touch scroll chain to the window and shift the whole shell */
   overscroll-behavior: contain;
+  /* Container query context — lets inner pages (HomePage, ChartArea…)
+     adapt to the actual main-column width instead of the viewport
+     width, so collapsing/expanding the sidebar or opening dev tools
+     doesn't leave content outside the visible area. */
+  container-type: inline-size;
+  container-name: main-col;
 }
 
 /* Serial monitor: only the log panel scrolls; keep controls + disconnect reachable */
