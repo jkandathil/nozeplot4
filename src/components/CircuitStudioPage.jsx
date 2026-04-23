@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
 import { buildContext, solveDC, solveTran, solveAC } from '../circuit/solver.js';
-import { layoutSchematic, componentLabel } from '../circuit/schematic.js';
+import { layoutSchematic } from '../circuit/schematic.js';
 import { DEMOS } from '../circuit/demos.js';
 import './CircuitStudioPage.css';
 
@@ -453,12 +453,12 @@ function CircuitStudioPage() {
 /* ============================================================ */
 
 const SchematicSvg = React.memo(function SchematicSvg({ layout, zoom }) {
-    const { nodes, comps, nodeColor, width, height } = layout;
-    const nodeById = useMemo(() => {
-        const m = new Map();
-        for (const n of nodes) m.set(n.id, n);
-        return m;
-    }, [nodes]);
+    const { width, height, offsetX, offsetY, components, wires, junctions, nodes, nodeColor } = layout;
+
+    // Shared wire colour (monochrome = classic schematic look); nodes
+    // still carry their tinted pips and labels so signals stay
+    // visually distinguishable.
+    const wireStroke = 'var(--sch-wire)';
 
     return (
         <div className="cs-schematic-scroller">
@@ -467,83 +467,183 @@ const SchematicSvg = React.memo(function SchematicSvg({ layout, zoom }) {
                 width={width * zoom}
                 height={height * zoom}
                 className="cs-schematic-svg"
+                shapeRendering="geometricPrecision"
             >
-                {/* Wires */}
-                {comps.flatMap((c) =>
-                    c.pins.map((nId, pi) => {
-                        const n = nodeById.get(nId);
-                        if (!n) return null;
-                        return (
-                            <line
-                                key={`${c.index}-${pi}`}
-                                x1={c.x} y1={c.y} x2={n.x} y2={n.y}
-                                stroke={nodeColor.get(nId)} strokeWidth={1.4}
-                                strokeOpacity={0.7}
-                            />
-                        );
-                    })
-                )}
-                {/* Node junctions */}
-                {nodes.map((n) => (
-                    <g key={`n-${n.id}`} transform={`translate(${n.x}, ${n.y})`}>
-                        {n.isGround ? (
-                            <g>
-                                <line x1={0} y1={-6} x2={0} y2={0} stroke="#94a3b8" strokeWidth={1.5} />
-                                <line x1={-9} y1={0} x2={9} y2={0} stroke="#94a3b8" strokeWidth={2} />
-                                <line x1={-6} y1={3} x2={6} y2={3} stroke="#94a3b8" strokeWidth={1.5} />
-                                <line x1={-3} y1={6} x2={3} y2={6} stroke="#94a3b8" strokeWidth={1.5} />
-                                <text x={0} y={20} fontSize={10} textAnchor="middle" fill="#64748b">GND</text>
-                            </g>
-                        ) : (
-                            <g>
-                                <circle r={4} fill={nodeColor.get(n.id)} stroke="#111827" strokeWidth={0.8} />
-                                <text x={6} y={-6} fontSize={10} fill={nodeColor.get(n.id)}>{n.label}</text>
-                            </g>
-                        )}
-                    </g>
-                ))}
-                {/* Components */}
-                {comps.map((c) => (
-                    <ComponentGlyph key={`c-${c.index}`} comp={c} />
-                ))}
+                <g transform={`translate(${offsetX}, ${offsetY})`}>
+                    {/* Wires — drawn first so components render on top */}
+                    {wires.map((w, i) => (
+                        <polyline
+                            key={`w-${i}`}
+                            points={w.points.map((p) => `${p[0]},${p[1]}`).join(' ')}
+                            fill="none"
+                            stroke={wireStroke}
+                            strokeWidth={1.8}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    ))}
+
+                    {/* Junction dots where three or more wires meet */}
+                    {junctions.map((j, i) => (
+                        <circle key={`j-${i}`} cx={j.x} cy={j.y} r={3.2} fill={wireStroke} />
+                    ))}
+
+                    {/* Node labels (the coloured signal names) */}
+                    {nodes.map((n) => (
+                        <NodeLabel key={`nl-${n.id}`} node={n} color={nodeColor.get(n.id) || '#64748b'} />
+                    ))}
+
+                    {/* Components */}
+                    {components.map((c) => (
+                        <ComponentSymbol key={`c-${c.index}`} comp={c} />
+                    ))}
+                </g>
             </svg>
         </div>
     );
 });
 
-function ComponentGlyph({ comp }) {
-    const { x, y, element } = comp;
-    const label = componentLabel(element);
-    const sym = symbolFor(element.type);
+function NodeLabel({ node, color }) {
+    if (node.isGround) {
+        return (
+            <g transform={`translate(${node.x}, ${node.y})`}>
+                <line x1={0} y1={-10} x2={0} y2={0} stroke="var(--sch-wire)" strokeWidth={1.8} />
+                <line x1={-10} y1={0} x2={10} y2={0} stroke="var(--sch-wire)" strokeWidth={2.2} />
+                <line x1={-7} y1={4} x2={7} y2={4} stroke="var(--sch-wire)" strokeWidth={1.8} />
+                <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-wire)" strokeWidth={1.8} />
+                <text x={0} y={22} fontSize={10} textAnchor="middle" fill="var(--sch-gnd-label)">GND</text>
+            </g>
+        );
+    }
     return (
-        <g transform={`translate(${x}, ${y})`} className={`cs-comp cs-comp-${element.type}`}>
-            <rect x={-26} y={-18} width={52} height={36} rx={6} ry={6}
-                  fill="rgba(15, 23, 42, 0.94)" stroke="#334155" strokeWidth={1}/>
-            <text x={0} y={-3} textAnchor="middle" fontSize={14} fontWeight={700} fill="#f1f5f9">
-                {sym}
-            </text>
-            <text x={0} y={12} textAnchor="middle" fontSize={8} fill="#cbd5e1">
-                {label.split('\n')[0]}
-            </text>
-            <text x={0} y={28} textAnchor="middle" fontSize={8.5} fill="#94a3b8">
-                {label.split('\n')[1] || ''}
+        <g transform={`translate(${node.x}, ${node.y})`}>
+            <text x={8} y={-6} fontSize={10} fill={color} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
+                {node.label}
             </text>
         </g>
     );
 }
 
-function symbolFor(type) {
-    switch (type) {
-        case 'R': return 'R';
-        case 'C': return '┤├';
-        case 'L': return 'L';
-        case 'V': return 'V';
-        case 'I': return 'I';
-        case 'D': return '▷|';
-        case 'E': return 'E';
-        case 'G': return 'G';
-        case 'O': return '▷';
-        default: return '?';
+function ComponentSymbol({ comp }) {
+    const { x, y, rot, sym, labelRef, labelVal } = comp;
+    const transform = `translate(${x}, ${y}) rotate(${rot})`;
+    return (
+        <g className={`cs-comp cs-comp-${comp.type}`}>
+            <g transform={transform}>
+                {sym.shapes.map((s, i) => renderShape(s, i))}
+            </g>
+            {labelRef ? (
+                <text
+                    x={labelRef.x}
+                    y={labelRef.y}
+                    textAnchor={labelRef.anchor}
+                    fontSize={11}
+                    fontWeight={600}
+                    fill="var(--sch-label)"
+                    fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                >
+                    {labelRef.text}
+                </text>
+            ) : null}
+            {labelVal && labelVal.text ? (
+                <text
+                    x={labelVal.x}
+                    y={labelVal.y}
+                    textAnchor={labelVal.anchor}
+                    fontSize={10}
+                    fill="var(--sch-label-dim)"
+                    fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                >
+                    {labelVal.text}
+                </text>
+            ) : null}
+        </g>
+    );
+}
+
+function renderShape(s, key) {
+    const strokeColor = 'var(--sch-stroke)';
+    const strokeWidth = s.strokeWidth ?? 1.6;
+    switch (s.kind) {
+        case 'line':
+            return (
+                <line
+                    key={key}
+                    x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
+                    stroke={strokeColor}
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={s.strokeDasharray}
+                    strokeLinecap="round"
+                />
+            );
+        case 'path':
+            return (
+                <path
+                    key={key}
+                    d={s.d}
+                    fill={s.fill === 'var(--sch-stroke)' ? 'var(--sch-stroke)'
+                         : s.fill === 'var(--sch-body)'  ? 'var(--sch-body)'
+                         : s.fill || 'none'}
+                    stroke={s.fill === 'var(--sch-stroke)' ? 'none' : strokeColor}
+                    strokeWidth={strokeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+            );
+        case 'circle':
+            return (
+                <circle
+                    key={key}
+                    cx={s.cx} cy={s.cy} r={s.r}
+                    fill={s.fill || 'none'}
+                    stroke={strokeColor}
+                    strokeWidth={strokeWidth}
+                />
+            );
+        case 'polarity':
+            return (
+                <text
+                    key={key}
+                    x={s.x} y={s.y}
+                    textAnchor="middle" dominantBaseline="middle"
+                    fontSize={13} fontWeight={700}
+                    fill={strokeColor}
+                    fontFamily="serif"
+                >
+                    {s.sign}
+                </text>
+            );
+        case 'text':
+            return (
+                <text
+                    key={key}
+                    x={s.x} y={s.y}
+                    textAnchor={s.anchor || 'middle'}
+                    dominantBaseline={s.baseline || 'middle'}
+                    fontSize={s.fontSize || 11}
+                    fontWeight={s.fontWeight || 500}
+                    fill={strokeColor}
+                    fontFamily={s.fontFamily || 'ui-sans-serif, system-ui, sans-serif'}
+                >
+                    {s.text}
+                </text>
+            );
+        case 'arrow': {
+            const size = s.size || 6;
+            const dx = s.dir === 'R' ? size : s.dir === 'L' ? -size : 0;
+            const dy = s.dir === 'D' ? size : s.dir === 'U' ? -size : 0;
+            const perpX = -dy, perpY = dx;
+            const points = [
+                [s.x, s.y],
+                [s.x - dx + perpX * 0.5, s.y - dy + perpY * 0.5],
+                [s.x - dx - perpX * 0.5, s.y - dy - perpY * 0.5],
+            ].map((p) => p.join(',')).join(' ');
+            return (
+                <polygon key={key} points={points} fill={strokeColor} />
+            );
+        }
+        default:
+            return null;
     }
 }
 
