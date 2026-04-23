@@ -159,7 +159,12 @@
   position: relative;
   z-index: 50;
   width: 340px;
-  max-width: 45vw;
+  /* Hard-clamp the rail so a previously-saved wide width from
+     localStorage can't eat the main column. `width` inline from JS
+     loses to `max-width` in CSS when they conflict (as long as we
+     don't also set `min-width` inline, which we now drop below the
+     max-width below — see Sidebar.jsx). */
+  max-width: min(45vw, 380px);
   height: 100%;
   max-height: 100%;
   min-height: 0;

@@ -38,7 +38,11 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
     const [searchTerm, setSearchTerm] = useState('');
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         const saved = Number(localStorage.getItem('sidebarWidth'));
-        return Number.isFinite(saved) && saved >= 200 && saved <= 600 ? saved : 340;
+        const MAX = typeof window !== 'undefined'
+            ? Math.min(380, Math.max(240, Math.floor(window.innerWidth * 0.42)))
+            : 340;
+        const raw = Number.isFinite(saved) && saved >= 200 && saved <= 600 ? saved : 320;
+        return Math.min(raw, MAX);
     });
     const [expandedFolders, setExpandedFolders] = useState(() => new Set(['root-data-files']));
     const [activeUploadFolderId, setActiveUploadFolderId] = useState(null);
@@ -76,7 +80,17 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
             const narrow = window.innerWidth < NARROW_BREAKPOINT;
             if (narrow && !wasNarrow) setIsCollapsed(true);
             wasNarrow = narrow;
-            setSidebarWidth((w) => Math.min(w, Math.max(200, Math.floor(window.innerWidth * 0.45))));
+            /* Clamp the rail to the smaller of 380 px or 42 vw so it
+               can never steal more than that slice of the screen —
+               no matter what width was saved in localStorage or what
+               the user dragged the resize handle to on a wider
+               monitor. This keeps the main column usable. */
+            setSidebarWidth((w) =>
+                Math.min(
+                    w,
+                    Math.min(380, Math.max(200, Math.floor(window.innerWidth * 0.42)))
+                )
+            );
         };
         window.addEventListener('resize', onResize);
         onResize();
@@ -150,10 +164,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = sidebarWidth;
+        /* Keep the drag clamp in lock-step with the auto-resize clamp
+           above: the rail can never take more than 380 px / 42 vw so
+           the main column always has room to show its page fully. */
         const viewportMax = typeof window !== 'undefined'
-            ? Math.max(240, Math.floor(window.innerWidth * 0.45))
-            : 600;
-        const hardMax = Math.min(600, viewportMax);
+            ? Math.max(240, Math.floor(window.innerWidth * 0.42))
+            : 380;
+        const hardMax = Math.min(380, viewportMax);
 
         const onMouseMove = (moveEvent) => {
             let newWidth = startWidth + (moveEvent.clientX - startX);
