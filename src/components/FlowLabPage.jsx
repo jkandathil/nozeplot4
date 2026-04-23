@@ -2172,7 +2172,14 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      *  waits for the canvas to have a real size (landing page →
      *  canvas reveal can leave canvasSize.w at 0 for one frame). */
     const fitToContent = useCallback((entsArg) => {
-        const bb = entitiesBBox(entsArg || entities);
+        /* Accept an explicit entities array override (loaders use this
+         *  to fit to geometry that hasn't committed to state yet),
+         *  otherwise fall back to current state. Guard against the
+         *  common mistake of wiring this directly to onClick, where
+         *  `entsArg` would be a React SyntheticEvent — if it isn't an
+         *  array, ignore it. */
+        const useEnts = Array.isArray(entsArg) ? entsArg : entities;
+        const bb = entitiesBBox(useEnts);
         if (!bb) return;
         if (!canvasSize.w || !canvasSize.h) return;
         const margin = 60; // px
@@ -5326,7 +5333,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             setViewport((v) => ({ ...v, pxPerMm: Math.max(0.5, v.pxPerMm / 1.25) }))}>
                             <ZoomOut size={14} />
                         </button>
-                        <button className="fl-toolbtn" title="Fit to content (F)" onClick={fitToContent}>
+                        <button className="fl-toolbtn" title="Fit to content (F)" onClick={() => fitToContent()}>
                             <Maximize2 size={14} /> Fit
                         </button>
                     </div>
