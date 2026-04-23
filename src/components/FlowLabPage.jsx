@@ -7724,22 +7724,79 @@ const EntitySvg = ({ entity, toScreen, selected, selectedEdgeIdx, selectedVertex
                     <line key={i} x1={sa.x} y1={sa.y} x2={sb.x} y2={sb.y} className={cls} />
                 );
             })}
-            {pts.map((p, i) => {
-                if (isPreview && i === pts.length - 1) return null; // preview's last pt = cursor
-                const s = toScreen(p);
-                const isSel = selected && selectedVertexIdx === i;
-                // When an entity is selected we enlarge every vertex so
-                // they're easy to target. Otherwise a subtle dot is
-                // enough not to clutter the drawing.
-                const r = selected ? (isSel ? 5 : 3.5) : 2.5;
+            {/* Vertex dots. Parametric curved shapes (circle / ellipse
+             * / arc) are stored as dense sampled polylines (48–64
+             * points) — rendering a dot per sample turns the outline
+             * into a ring of dots, which is noisy and meaningless
+             * because users edit these shapes via the Properties
+             * panel (centre / radius / semi-axes), not by dragging
+             * individual samples. We therefore suppress per-vertex
+             * dots on curved shapes and render clean parametric
+             * handles (centre + radius) instead when selected. Rect,
+             * line, and free polylines keep their normal dots. */}
+            {entity.shape === 'circle' || entity.shape === 'ellipse' || entity.shape === 'arc'
+                ? null
+                : pts.map((p, i) => {
+                    if (isPreview && i === pts.length - 1) return null; // preview's last pt = cursor
+                    const s = toScreen(p);
+                    const isSel = selected && selectedVertexIdx === i;
+                    const r = selected ? (isSel ? 5 : 3.5) : 2.5;
+                    return (
+                        <circle
+                            key={`v${i}`}
+                            cx={s.x} cy={s.y} r={r}
+                            className={`fl-vertex${isSel ? ' is-selected' : ''}${selected ? ' is-visible' : ''}`}
+                        />
+                    );
+                })}
+
+            {/* Parametric handles — render a small cross at the centre
+             * (and a dot at the +X radius endpoint for circles /
+             * ellipses) when the shape is selected. Gives the user a
+             * visible anchor without cluttering the silhouette. */}
+            {selected && !isPreview && entity.params && entity.shape === 'circle' && (() => {
+                const { cx, cy, r } = entity.params;
+                const c = toScreen({ x: cx, y: cy });
+                const rp = toScreen({ x: cx + r, y: cy });
                 return (
-                    <circle
-                        key={`v${i}`}
-                        cx={s.x} cy={s.y} r={r}
-                        className={`fl-vertex${isSel ? ' is-selected' : ''}${selected ? ' is-visible' : ''}`}
-                    />
+                    <g className="fl-shape-handles">
+                        <line x1={c.x - 4} y1={c.y} x2={c.x + 4} y2={c.y} />
+                        <line x1={c.x} y1={c.y - 4} x2={c.x} y2={c.y + 4} />
+                        <circle cx={c.x} cy={c.y} r={2.5} />
+                        <circle cx={rp.x} cy={rp.y} r={3} className="fl-shape-handle-radius" />
+                    </g>
                 );
-            })}
+            })()}
+            {selected && !isPreview && entity.params && entity.shape === 'ellipse' && (() => {
+                const { cx, cy, rx, ry } = entity.params;
+                const c = toScreen({ x: cx, y: cy });
+                const hx = toScreen({ x: cx + rx, y: cy });
+                const hy = toScreen({ x: cx, y: cy + ry });
+                return (
+                    <g className="fl-shape-handles">
+                        <line x1={c.x - 4} y1={c.y} x2={c.x + 4} y2={c.y} />
+                        <line x1={c.x} y1={c.y - 4} x2={c.x} y2={c.y + 4} />
+                        <circle cx={c.x} cy={c.y} r={2.5} />
+                        <circle cx={hx.x} cy={hx.y} r={3} className="fl-shape-handle-radius" />
+                        <circle cx={hy.x} cy={hy.y} r={3} className="fl-shape-handle-radius" />
+                    </g>
+                );
+            })()}
+            {selected && !isPreview && entity.params && entity.shape === 'arc' && (() => {
+                const { cx, cy, r, a0, a1 } = entity.params;
+                const c = toScreen({ x: cx, y: cy });
+                const sPt = toScreen({ x: cx + r * Math.cos(a0), y: cy + r * Math.sin(a0) });
+                const ePt = toScreen({ x: cx + r * Math.cos(a1), y: cy + r * Math.sin(a1) });
+                return (
+                    <g className="fl-shape-handles">
+                        <line x1={c.x - 4} y1={c.y} x2={c.x + 4} y2={c.y} />
+                        <line x1={c.x} y1={c.y - 4} x2={c.x} y2={c.y + 4} />
+                        <circle cx={c.x} cy={c.y} r={2.5} />
+                        <circle cx={sPt.x} cy={sPt.y} r={3} className="fl-shape-handle-radius" />
+                        <circle cx={ePt.x} cy={ePt.y} r={3} className="fl-shape-handle-radius" />
+                    </g>
+                );
+            })()}
         </g>
     );
 };

@@ -945,6 +945,27 @@ html[data-theme="light"] .fl-origin-label {
     stroke-width: 1.3;
 }
 
+/* Parametric curved-shape handles — circle / ellipse / arc show a
+   centre cross and key radius endpoints when selected, in place of
+   the dense per-sample dots the polyline would otherwise render. */
+.fl-shape-handles line {
+    stroke: var(--accent-primary);
+    stroke-width: 1.2;
+    pointer-events: none;
+}
+.fl-shape-handles circle {
+    fill: var(--accent-primary);
+    stroke: rgba(0, 0, 0, 0.35);
+    stroke-width: 0.8;
+    pointer-events: none;
+}
+.fl-shape-handle-radius {
+    fill: #facc15 !important;
+}
+html[data-theme="light"] .fl-shape-handles line { stroke: #05c07d; }
+html[data-theme="light"] .fl-shape-handles circle { fill: #05c07d; stroke: rgba(0,0,0,0.25); }
+html[data-theme="light"] .fl-shape-handle-radius { fill: #eab308 !important; }
+
 /* ── Open polylines (Line tool "sketch" geometry) ── */
 .fl-entity.is-open .fl-entity-fill { display: none; }
 .fl-edge-open {
