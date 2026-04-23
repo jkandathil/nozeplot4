@@ -807,7 +807,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      *     Modify, Combine) exposed for drawing / editing.
      *  The canvas, entity list and physics panels remain visible in
      *  both modes; only the toolbar contents change. */
-    const [cadMode, setCadMode] = useState(false);
+    /* CAD mode is on by default — a fresh Flow Lab session should land
+     * the user in the geometry editor, not the solver panel, because
+     * there's nothing to simulate until a scene is drawn. The
+     * persisted preference below can still override this for users
+     * who explicitly switched to Simulation mode last time and want
+     * it to stick across reloads. */
+    const [cadMode, setCadMode] = useState(true);
     const [rectDrag, setRectDrag] = useState(null); // {x0,y0,x1,y1}
     const [circleDrag, setCircleDrag] = useState(null); // {cx,cy,r}
     const [ellipseDrag, setEllipseDrag] = useState(null); // {x0,y0,x1,y1}
@@ -1008,17 +1014,25 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         try { localStorage.setItem('flowlab.panelsAutoHide', panelsAutoHide ? '1' : '0'); } catch (_) { /* ignore */ }
     }, [panelsAutoHide]);
 
-    /* Persist cadMode across sessions. */
+    /* Persist cadMode across sessions (after the first restore pass,
+     * tracked by the ref below so we don't stomp the stored value
+     * with the React default on the very first render). */
+    const cadModeRestoredRef = useRef(false);
     useEffect(() => {
+        if (!cadModeRestoredRef.current) return;
         try { localStorage.setItem('flowlab.cadMode', cadMode ? '1' : '0'); } catch (_) { /* ignore */ }
     }, [cadMode]);
-    /* Restore on mount. Safe to do once; subsequent writes are handled
-       by the effect above. */
+    /* Restore on mount. Honors both values this time — previously we
+     * only restored '1', which meant users who'd explicitly switched
+     * to Simulation last session got bounced back into CAD on every
+     * reload. */
     useEffect(() => {
         try {
             const v = localStorage.getItem('flowlab.cadMode');
-            if (v === '1') setCadMode(true);
+            if (v === '0') setCadMode(false);
+            else if (v === '1') setCadMode(true);
         } catch (_) { /* ignore */ }
+        cadModeRestoredRef.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -1454,6 +1468,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setCurrentProjectFileId(null);
         setCurrentProjectFileName(null);
         setIsDirty(false);
+        /* A blank project has nothing to simulate, so land the user
+         * in CAD mode with the Select tool ready — they'll want to
+         * draw geometry before touching the solver. */
+        setCadMode(true);
+        setTool(TOOLS.SELECT);
         setSaveStatus('New project — canvas cleared. ⌘Z to undo.');
         setTimeout(() => setSaveStatus(''), 4000);
     }, []);
