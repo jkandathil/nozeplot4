@@ -512,6 +512,160 @@ const AROMA_CHAMBER_SECTION = () => ({
     points: [{ x: 15, y: 0 }, { x: 15, y: 10 }],
 });
 
+/* ────────────────────────────────────────────────────────────────
+ *  T-junction gas-mixer demo geometry.
+ *
+ *  A classic 2-D passive mixer with two orthogonal inlets merging
+ *  into a long downstream mixing channel:
+ *
+ *     stream B (c = 0)    ← top inlet (4 mm wide)
+ *           │
+ *           ▼
+ *   ┌───────┐ ┌──────────────────────────────┐
+ *   │   A → │ │           mixing channel      │ → outlet
+ *   │(c=1)  │ │                               │
+ *   └───────┘ └──────────────────────────────┘
+ *    x=0   x=10                               x=40   (y = 0..4)
+ *
+ *  Stream A enters at the left edge with a concentration multiplier
+ *  c = 1 (normalised), stream B from the top with c = 0 (carrier
+ *  gas). Under symmetric flow the confluence produces a 50:50
+ *  blend; downstream, molecular diffusion smears the interface and
+ *  the cross-section standard deviation drops from σ_max → 0. The
+ *  four pre-placed vertical sections (pre-T, just-after, mid-
+ *  channel, outlet) drive the Mixer-analysis KPIs — mixing index
+ *  M(x) = 1 − σ(c)/σ_max and the L_90 mixing length.
+ * ──────────────────────────────────────────────────────────────── */
+const TMIXER_DOMAIN = () => {
+    /* 8-vertex CCW polygon, y-up. Lengths in mm. */
+    const pts = [
+        { x: 0,  y: 0  }, // 0  BL (main channel)
+        { x: 40, y: 0  }, // 1  BR
+        { x: 40, y: 4  }, // 2  TR outlet top
+        { x: 14, y: 4  }, // 3  T-junction right-inner
+        { x: 14, y: 10 }, // 4  top-arm TR
+        { x: 10, y: 10 }, // 5  top-arm TL
+        { x: 10, y: 4  }, // 6  T-junction left-inner
+        { x: 0,  y: 4  }, // 7  TL (top of stream-A inlet)
+    ];
+    const ent = createPolylineEntity(pts);
+    /* Edge BC table. Edges are numbered so edge i runs from
+       points[i] → points[(i+1) mod n]. */
+    ent.edgeBC = {
+        0: { type: 'wall' },              // main bottom
+        1: { type: 'outlet' },            // right end (outlet)
+        2: { type: 'wall' },              // main top right of T
+        3: { type: 'wall' },              // top-arm right wall
+        4: { type: 'inlet', c: 0 },       // stream B inlet (carrier, c=0)
+        5: { type: 'wall' },              // top-arm left wall
+        6: { type: 'wall' },              // main top left of T
+        7: { type: 'inlet', c: 1 },       // stream A inlet (analyte, c=1)
+    };
+    return ent;
+};
+
+/* Four pre-placed vertical sections along the mixing channel of
+ *  the T-mixer demo. Their midpoint-x is used to order them along
+ *  the flow direction; the first is UPSTREAM of the T-junction
+ *  (to capture the pure stream-A state, a helpful "0 % mixed"
+ *  baseline), the rest progress downstream. */
+const TMIXER_SECTIONS = () => ([
+    {
+        id: 's_tmix_s1',
+        type: 'section',
+        label: 'S1  pre-junction',
+        color: SECTION_COLORS[0],
+        visible: true,
+        points: [{ x: 5, y: 0 }, { x: 5, y: 4 }],
+    },
+    {
+        id: 's_tmix_s2',
+        type: 'section',
+        label: 'S2  post-junction',
+        color: SECTION_COLORS[1],
+        visible: true,
+        points: [{ x: 18, y: 0 }, { x: 18, y: 4 }],
+    },
+    {
+        id: 's_tmix_s3',
+        type: 'section',
+        label: 'S3  mid-channel',
+        color: SECTION_COLORS[2],
+        visible: true,
+        points: [{ x: 28, y: 0 }, { x: 28, y: 4 }],
+    },
+    {
+        id: 's_tmix_s4',
+        type: 'section',
+        label: 'S4  outlet',
+        color: SECTION_COLORS[3],
+        visible: true,
+        points: [{ x: 38, y: 0 }, { x: 38, y: 4 }],
+    },
+]);
+
+/* Point probes on the centreline of the mixing channel for a
+ *  quick at-a-glance time series of the local concentration as
+ *  the pulse / steady streams develop. */
+const TMIXER_PROBES = () => ([
+    { id: 'p_tmix_pre',  label: 'P_pre (pre-T)',    x_mm: 5,  y_mm: 2, color: PROBE_COLORS[0] },
+    { id: 'p_tmix_mid',  label: 'P_mid (mid)',      x_mm: 24, y_mm: 2, color: PROBE_COLORS[1] },
+    { id: 'p_tmix_out',  label: 'P_out (outlet)',   x_mm: 38, y_mm: 2, color: PROBE_COLORS[2] },
+]);
+
+const TMIXER_TOUR_STEPS = [
+    {
+        target: null,
+        title: 'Welcome to the gas-mixer demo',
+        body: 'You just loaded a classic 2-D T-junction gas mixer. Stream A enters from the left at c = 1, stream B enters from the top at c = 0, and they merge into a 40 × 4 mm mixing channel that ends in an outlet on the right. This 9-step tour walks through the KPIs engineers care about when designing a passive mixer. Skip any time.',
+    },
+    {
+        target: 'canvas',
+        title: '1 / The geometry',
+        body: 'Main channel 40 × 4 mm on the horizontal, orthogonal top arm 4 × 6 mm meeting at x = 10..14 mm. The LEFT edge is stream A (carrier + analyte, c = 1). The TOP edge of the arm is stream B (clean carrier, c = 0). The RIGHT edge is the outlet; every other edge is a no-slip wall.',
+    },
+    {
+        target: 'gas-inlet',
+        title: '2 / Two inlets, same velocity',
+        body: 'Both inlets receive the same inlet speed (or sccm flow rate — the solver back-computes U from the inlet cross-section). Per-edge concentration is the multi-stream trick: each inlet cell carries its own c multiplier (0..1), set in Properties ▸ BC type = Inlet ▸ Stream fraction. Swap these numbers to change the analyte / carrier ratio.',
+    },
+    {
+        target: 'species',
+        title: '3 / Species transport is on',
+        body: 'Analyte = Passive tracer, D ≈ 2×10⁻⁵ m²/s. Pulse is set to a continuous step (value = 1), which keeps stream A at c = 1 for the whole run — stream B stays clean at c = 0 throughout. You can switch to Gaussian or rectangular pulses if you want to see a transient mixing front.',
+    },
+    {
+        target: 'run',
+        title: '4 / Press ▶ Run',
+        body: 'Click Run. Within ~150 iterations the velocity field settles; the c field then develops a diffusion-smeared interface between the two streams. Turbo + viridis overlays show velocity and concentration side-by-side if you pick fieldView = "both".',
+    },
+    {
+        target: 'mixer',
+        title: '5 / Mixer analysis panel',
+        body: 'The right-rail panel computes cross-section KPIs in real time. Mixing index M = 1 − σ(c)/σ_max, where σ_max = √(c̄(1 − c̄)) is the theoretical max for a bimodal mixture. M → 1 means perfectly mixed. L_90 is the shortest downstream distance at which M ≥ 0.9 — the classic "mixing length" for design.',
+    },
+    {
+        target: 'section',
+        title: '6 / Read the section profiles',
+        body: 'Four sections: S1 upstream (pure stream A), S2 just after the T (two distinct bands → σ at its max), S3 halfway, S4 at the outlet. Switch "Quantity to plot" to "c" in the Post-sim analysis panel to see the transverse c(y) broadening from a step → flat as mixing progresses.',
+    },
+    {
+        target: 'flowrate',
+        title: '7 / Check mass balance',
+        body: 'Q across S1 (main inlet only) must equal the combined outlet Q at S4 (stream A + stream B). For a symmetric 2-stream setup, Q_out ≈ 2·Q_A. Big mismatches usually mean the mesh is too coarse near the T junction — bump mesh resolution in the Solver mesh panel.',
+    },
+    {
+        target: 'mixer',
+        title: '8 / Mixer KPIs checklist',
+        body: 'Typical design targets: M ≥ 0.90 at outlet for adequate mixing, M ≥ 0.95 for high-uniformity delivery; short L_90 for compact layouts; minimise pressure drop (velocity × channel length ∝ pumping energy); and low dead-zone fraction (check for recirculation near the corner).',
+    },
+    {
+        target: null,
+        title: '9 / Try these experiments',
+        body: '(a) Cut stream-A velocity in half by drawing an obstacle in its inlet channel → c̄ at outlet shifts. (b) Add a second lamina by widening stream B → faster mixing. (c) Insert 2–3 small pillars along the main channel → mixing accelerates (split-and-recombine). (d) Switch analyte to Nitrogen dioxide → D drops → L_90 grows. All without redrawing the T.',
+    },
+];
+
 /**
  * Guided-tour script for the aroma demo. Each step highlights one DOM
  * target (via `data-tour-id` attributes rendered elsewhere in the JSX)
@@ -900,7 +1054,8 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const [explorerExpanded, setExplorerExpanded] = useState(() => new Set(['']));
 
     /* Guided-tour state. `tourIdx` is the step index into
-       `AROMA_TOUR_STEPS`, or null when the tour is inactive. Only set
+       an entry in the active tour steps array (AROMA_TOUR_STEPS or
+       TMIXER_TOUR_STEPS), or null when the tour is inactive. Only set
        by the "Load aroma demo" button — the tour is OPT-IN so regular
        workflow is never interrupted. */
     const [tourIdx, setTourIdx] = useState(null);
@@ -3930,6 +4085,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             inletDir: [-n.x, -n.y],  // inflow = opposite of outward normal
             inletU_lb: TARGET_U_LB,
             outletDir,
+            // Per-cell inlet overrides — enable multi-stream mixers
+            // (e.g. T-junction with stream A at c=1 and stream B at
+            // c=0). Each INLET cell carries its own inward direction
+            // and concentration multiplier; the worker falls back to
+            // the scalar inletDir / cInletValue when they're missing.
+            inletDirsPerCell: raster.inletDirsPerCell,
+            inletCPerCell: raster.inletCPerCell,
             tau,
             stepsPerPost: 6,
             postEvery: 33, // ~30 fps
@@ -4180,6 +4342,44 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         };
     }, [handleImportCadFile]);
 
+    /* Active tour steps. `null` → fall back to AROMA_TOUR_STEPS, which
+       is the historical default. Set by demo loaders that ship their
+       own walkthrough (e.g. the T-junction gas-mixer demo). */
+    const [tourSteps, setTourSteps] = useState(null);
+    const activeTourSteps = tourSteps || AROMA_TOUR_STEPS;
+
+    const loadTMixerDemo = useCallback(({ startTour = true } = {}) => {
+        hardResetSolverAndProject();
+        skipNextHistoryRef.current = true;
+        setEntities([TMIXER_DOMAIN()]);
+        setSections(TMIXER_SECTIONS());
+        setPointProbes(TMIXER_PROBES());
+        setSelectedSectionId('s_tmix_s4');
+        setInletMode('velocity');
+        /* 0.05 m/s on a 4 mm channel of air → Re ≈ 13 (laminar), which
+           keeps the simulation stable and diffusion-dominated — exactly
+           the regime a 2-D passive gas mixer is designed for. */
+        setInletU_m_s(0.05);
+        setChannelDepthMm(1);
+        setSpeciesEnabled(true);
+        setFieldView('both');
+        /* Passive tracer so diffusion is modest and the transition
+           from segregated to mixed is visible in a single run. */
+        setAnalyteId('tracer');
+        setAnalyteT_C(25);
+        setAnalyteRH_pct(40);
+        /* Step pulse held at 1.0 — stream A is continuously "on" so
+           the outlet c settles around 0.5 (50/50 blend) rather than
+           riding up and down through a transient. */
+        setPulseId('step');
+        setPulseParams({ t_start: 0, value: 1.0 });
+        setProjectName('Gas mixer demo');
+        scheduleFitToContent();
+        setTourSteps(TMIXER_TOUR_STEPS);
+        if (startTour) setTourIdx(0);
+        else setTourIdx(null);
+    }, [hardResetSolverAndProject, scheduleFitToContent]);
+
     const loadAromaDemo = useCallback(({ startTour = true } = {}) => {
         hardResetSolverAndProject();
         skipNextHistoryRef.current = true;
@@ -4206,6 +4406,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setPulseParams({ t_start: 0.2, t_dur: 1.0 });
         setProjectName('Aroma demo');
         scheduleFitToContent();
+        setTourSteps(null);
         if (startTour) setTourIdx(0);
         else setTourIdx(null);
     }, [hardResetSolverAndProject, scheduleFitToContent]);
@@ -4636,10 +4837,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         const ty = (b.y - a.y) / lenMm;
         const nxn = -ty, nyn = tx;
         const { bbox, dx_m, dt_s } = solverInfo;
-        const { nx, ny, umag, ux, uy } = field;
+        const { nx, ny, umag, ux, uy, c } = field;
         const dx_mm = (bbox.xmax - bbox.xmin) / nx;
         const dy_mm = (bbox.ymax - bbox.ymin) / ny;
         const latticeToMps = dx_m / Math.max(dt_s, 1e-30);
+        const hasC = !!c;
 
         const nSamples = 120;
         const samples = [];
@@ -4652,7 +4854,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             const i0 = Math.floor(i), j0 = Math.floor(j);
             const fi = i - i0, fj = j - j0;
             const inRange = i0 >= 0 && i0 < nx - 1 && j0 >= 0 && j0 < ny - 1;
-            let u_lb = NaN, ux_lb = NaN, uy_lb = NaN;
+            let u_lb = NaN, ux_lb = NaN, uy_lb = NaN, c_lb = NaN;
             if (inRange) {
                 const k00 = j0 * nx + i0;
                 const k10 = j0 * nx + i0 + 1;
@@ -4665,12 +4867,17 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                 u_lb  = w00 * umag[k00] + w10 * umag[k10] + w01 * umag[k01] + w11 * umag[k11];
                 ux_lb = w00 * ux[k00]   + w10 * ux[k10]   + w01 * ux[k01]   + w11 * ux[k11];
                 uy_lb = w00 * uy[k00]   + w10 * uy[k10]   + w01 * uy[k01]   + w11 * uy[k11];
+                if (hasC) {
+                    c_lb = w00 * c[k00] + w10 * c[k10] + w01 * c[k01] + w11 * c[k11];
+                }
             }
             samples.push({
                 s_mm: t * lenMm,
                 u_mps:  u_lb  * latticeToMps,
                 ux_mps: ux_lb * latticeToMps,
                 uy_mps: uy_lb * latticeToMps,
+                // Normalised concentration (0..1). NaN outside the fluid.
+                c_frac: hasC ? c_lb : NaN,
             });
         }
         return { samples, tx, ty, nxn, nyn, lenMm };
@@ -4689,6 +4896,16 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
 
             let peak = 0, sum = 0, sum2 = 0, minVal = Infinity, maxAbs = 0;
             let n = 0, flux_m2ps = 0;
+            // Concentration moments for mixer KPIs. Only accumulated
+            // when field.c is available (species enabled) — otherwise
+            // they stay at their zero defaults and the mixer panel
+            // just shows an "enable species" hint.
+            let cSum = 0, cSum2 = 0, cN = 0;
+            let cMin = Infinity, cMax = -Infinity;
+            // Flux-weighted c, for flow-weighted outlet mean (useful
+            // when comparing two unequal streams — area-weighted c̄
+            // can be misleading if one side dominates flow).
+            let cFluxSum = 0, fluxSum = 0;
             for (let i = 0; i < samples.length; i++) {
                 const s = samples[i];
                 if (!Number.isFinite(s.u_mps)) continue;
@@ -4707,6 +4924,18 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                         flux_m2ps += 0.5 * (un0 + un1) * ds_m;
                     }
                 }
+                if (Number.isFinite(s.c_frac)) {
+                    cSum  += s.c_frac;
+                    cSum2 += s.c_frac * s.c_frac;
+                    cN++;
+                    if (s.c_frac < cMin) cMin = s.c_frac;
+                    if (s.c_frac > cMax) cMax = s.c_frac;
+                    const un = s.ux_mps * nxn + s.uy_mps * nyn;
+                    if (Number.isFinite(un) && un > 0) {
+                        cFluxSum += s.c_frac * un;
+                        fluxSum  += un;
+                    }
+                }
             }
             const mean = n > 0 ? sum / n : 0;
             const variance = n > 0 ? Math.max(0, sum2 / n - mean * mean) : 0;
@@ -4718,6 +4947,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             const volFlow_sccm = volFlow_m3ps * 1e6 * 60;   // (same magnitude; gas-depends but OK at ≈STP)
             const Re_local = reynolds(gas, mean, lenMm);
 
+            const c_mean_area = cN > 0 ? cSum / cN : NaN;
+            const c_var = cN > 0 ? Math.max(0, cSum2 / cN - c_mean_area * c_mean_area) : 0;
+            const c_std = Math.sqrt(c_var);
+            const c_mean_flux = fluxSum > 1e-12 ? cFluxSum / fluxSum : c_mean_area;
+            const c_uniformity = Number.isFinite(c_mean_area) && c_mean_area > 1e-12
+                ? Math.max(0, 1 - c_std / c_mean_area)
+                : 0;
             return {
                 section, ok: true, samples, tx, ty, nxn, nyn, lenMm,
                 stats: {
@@ -4733,6 +4969,14 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     volFlow_sccm,
                     Re_local,
                     nSamples: n,
+                    // Concentration moments for mixer analysis.
+                    c_mean:      c_mean_area,      // area-averaged c̄
+                    c_mean_flux: c_mean_flux,      // flux-weighted c̄
+                    c_std:       c_std,            // cross-section σ(c)
+                    c_min:       Number.isFinite(cMin) ? cMin : NaN,
+                    c_max:       Number.isFinite(cMax) ? cMax : NaN,
+                    c_uniformity,
+                    c_n:         cN,
                 },
             };
         });
@@ -4741,6 +4985,74 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     /* Legacy aliases kept so existing callers (tests, etc.) don't break. */
     const profileSamples = sectionProfiles[0]?.samples || null;
     const profileStats = sectionProfiles[0]?.stats || null;
+
+    /* ───────────── Mixer KPIs (derived) ────────────────────────
+       Computes mixing diagnostics across all sections that have
+       valid concentration samples. Used by the Mixer analysis
+       right-rail panel AND the canvas overlay badges.
+
+       Metrics (per section):
+         M          = 1 − σ(c)/σ_max   (mixing index; 1 = perfect)
+         σ_max      = √(c̄(1 − c̄))     (bimodal-mixture theoretical max)
+         c̄          = area-average at that section
+         c̄_flux     = flux-weighted average (downstream sections)
+
+       Global:
+         x_axis     = centreline x of each section (mm; assumes a
+                      left-to-right flow; purely a display convention)
+         L_90       = shortest x-distance from the first section to
+                      the first section whose M ≥ 0.90 (NaN if none)
+         L_95       = same, threshold 0.95
+         M_outlet   = mixing index at the last (right-most) section
+                      — the headline "how well did my mixer mix?" */
+    const mixerKPIs = useMemo(() => {
+        if (!speciesEnabled || !field || sectionProfiles.length < 2) {
+            return { ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN };
+        }
+        const rows = [];
+        for (const p of sectionProfiles) {
+            if (!p?.ok || !p.stats || !Number.isFinite(p.stats.c_mean)) continue;
+            const cbar = p.stats.c_mean;
+            const sigma = p.stats.c_std;
+            const sigmaMax = Math.sqrt(Math.max(0, cbar * (1 - cbar)));
+            const M = sigmaMax > 1e-6 ? Math.max(0, Math.min(1, 1 - sigma / sigmaMax)) : 1;
+            /* Midpoint of this section — used purely for ordering
+               along the flow direction. We sort by x when the section
+               is closer-to-vertical (|Δy| > |Δx|, i.e. crosses the
+               channel cross-stream), otherwise by y. Handles both
+               horizontal-channel mixers (typical) and occasional
+               vertical-stack layouts without user intervention. */
+            const a = p.section.points[0], b = p.section.points[1];
+            const verticalCut = Math.abs(b.y - a.y) >= Math.abs(b.x - a.x);
+            const xMid = 0.5 * (a.x + b.x);
+            const yMid = 0.5 * (a.y + b.y);
+            rows.push({
+                sectionId: p.section.id,
+                label: p.section.label || p.section.id,
+                color: p.section.color,
+                xMid, yMid,
+                axisVal: verticalCut ? xMid : yMid,
+                c_mean: cbar,
+                c_mean_flux: p.stats.c_mean_flux,
+                c_std: sigma,
+                sigmaMax,
+                M,
+            });
+        }
+        if (rows.length < 2) {
+            return { ok: false, rows: [], L_90: NaN, L_95: NaN, M_outlet: NaN };
+        }
+        rows.sort((r1, r2) => r1.axisVal - r2.axisVal);
+        const base = rows[0].axisVal;
+        rows.forEach((r) => { r.distance_mm = r.axisVal - base; });
+        let L_90 = NaN, L_95 = NaN;
+        for (const r of rows) {
+            if (!Number.isFinite(L_90) && r.M >= 0.90) L_90 = r.distance_mm;
+            if (!Number.isFinite(L_95) && r.M >= 0.95) L_95 = r.distance_mm;
+        }
+        const M_outlet = rows[rows.length - 1].M;
+        return { ok: true, rows, L_90, L_95, M_outlet };
+    }, [sectionProfiles, speciesEnabled, field]);
 
     /* ── Time-history recorder ──────────────────────────────────────
        On every field post (≈ 30 Hz) append one row to the time-history
@@ -5450,14 +5762,14 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             .querySelectorAll('[data-tour-highlight="true"]')
             .forEach((el) => el.removeAttribute('data-tour-highlight'));
         if (tourIdx == null) return;
-        const step = AROMA_TOUR_STEPS[tourIdx];
+        const step = activeTourSteps[tourIdx];
         if (!step?.target) return;
         const el = document.querySelector(`[data-tour-id="${step.target}"]`);
         if (!el) return;
         el.setAttribute('data-tour-highlight', 'true');
         try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { /* ignore */ }
         return () => el.removeAttribute('data-tour-highlight');
-    }, [tourIdx]);
+    }, [tourIdx, activeTourSteps]);
 
     /* Recent projects for the Home page — newest first, capped at 8.
        The `displayName` strips the `.flowlab.json` suffix so the card
@@ -5495,6 +5807,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setShowLanding(false);
     }, [loadAromaDemo]);
 
+    const handleLandingTMixer = useCallback(() => {
+        loadTMixerDemo({ startTour: true });
+        setShowLanding(false);
+    }, [loadTMixerDemo]);
+
     const handleLandingSimple = useCallback(() => {
         loadSimpleChannelDemo();
         setShowLanding(false);
@@ -5529,10 +5846,10 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             {tourIdx !== null && createPortal(
                 <div className="fl-tour-card" role="dialog" aria-modal="false">
                     <div className="fl-tour-step-label">
-                        Step {tourIdx + 1} of {AROMA_TOUR_STEPS.length} · Aroma demo tour
+                        Step {tourIdx + 1} of {activeTourSteps.length} · {tourSteps === TMIXER_TOUR_STEPS ? 'Gas mixer tour' : 'Aroma demo tour'}
                     </div>
-                    <div className="fl-tour-title">{AROMA_TOUR_STEPS[tourIdx].title}</div>
-                    <div className="fl-tour-body">{AROMA_TOUR_STEPS[tourIdx].body}</div>
+                    <div className="fl-tour-title">{activeTourSteps[tourIdx].title}</div>
+                    <div className="fl-tour-body">{activeTourSteps[tourIdx].body}</div>
                     <div className="fl-tour-actions">
                         <button type="button"
                                 className="fl-toolbtn"
@@ -5549,13 +5866,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                         <button type="button"
                                 className="fl-toolbtn fl-toolbtn-primary"
                                 onClick={() => {
-                                    if (tourIdx >= AROMA_TOUR_STEPS.length - 1) {
+                                    if (tourIdx >= activeTourSteps.length - 1) {
                                         setTourIdx(null);
                                     } else {
                                         setTourIdx((i) => (i ?? 0) + 1);
                                     }
                                 }}>
-                            {tourIdx >= AROMA_TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
+                            {tourIdx >= activeTourSteps.length - 1 ? 'Finish' : 'Next'}
                         </button>
                     </div>
                 </div>,
@@ -6130,6 +6447,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             recents={recentProjects}
                             onOpenRecent={handleLandingOpenRecent}
                             onLoadAromaDemo={handleLandingAroma}
+                            onLoadTMixerDemo={handleLandingTMixer}
                             onLoadSimpleChannel={handleLandingSimple}
                     onCreateNewProject={handleLandingCreateNew}
                     onClose={() => setShowLanding(false)}
@@ -7198,15 +7516,33 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                     onSetAngle={(deg) => setEdgeAngle(selectedEntity.id, selection.edgeIdx, deg)}
                                 />
                                 {selectedEdgeBC && (
-                                    <label className="fl-field fl-field-inset">
-                                        <span>BC type</span>
-                                        <select value={selectedEdgeBC.type}
-                                            onChange={(e) => updateSelectedEdgeBC({ type: e.target.value })}>
-                                            {BC_TYPES.map((t) => (
-                                                <option key={t.id} value={t.id}>{t.label}</option>
-                                            ))}
-                                        </select>
-                                    </label>
+                                    <>
+                                        <label className="fl-field fl-field-inset">
+                                            <span>BC type</span>
+                                            <select value={selectedEdgeBC.type}
+                                                onChange={(e) => updateSelectedEdgeBC({ type: e.target.value })}>
+                                                {BC_TYPES.map((t) => (
+                                                    <option key={t.id} value={t.id}>{t.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        {selectedEdgeBC.type === 'inlet' && (
+                                            <label className="fl-field fl-field-inset"
+                                                title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
+                                                <span>Stream fraction (0..1)</span>
+                                                <input
+                                                    type="number"
+                                                    min={0} max={1} step={0.05}
+                                                    value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
+                                                    onChange={(e) => {
+                                                        const v = Number(e.target.value);
+                                                        if (!Number.isFinite(v)) return;
+                                                        updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
+                                                    }}
+                                                />
+                                            </label>
+                                        )}
+                                    </>
                                 )}
                             </>
                         )}
@@ -7214,6 +7550,16 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             <EntityInfo entity={selectedEntity} unit={unit} onShapeChange={setShapeParams} />
                         )}
                     </div>
+
+                    <MixerAnalysisPanel
+                        kpis={mixerKPIs}
+                        speciesEnabled={speciesEnabled}
+                        field={field}
+                        cUnit={cUnit}
+                        cAmplitude={cAmplitude}
+                        formatLength={(v) => formatLength(v, unit)}
+                        data-tour-id="mixer"
+                    />
 
                     <div className="fl-panel" data-tour-id="section">
                         <div className="fl-panel-title">Post-sim analysis</div>
@@ -7525,6 +7871,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             Load aroma demo
                         </button>
                         <button className="fl-toolbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
+                            onClick={() => loadTMixerDemo({ startTour: true })}
+                            title="Classic 2-stream passive T-junction gas mixer with four pre-placed analysis sections and the Mixer-KPI panel populated live.">
+                            Load gas-mixer demo
+                        </button>
+                        <button className="fl-toolbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
                             onClick={() => setShowLanding(true)}
                             title="Open the Flow Lab home page (demos + recent files)">
                             Home
@@ -7632,15 +7983,33 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             onSetAngle={(deg) => setEdgeAngle(selectedEntity.id, selection.edgeIdx, deg)}
                         />
                         {selectedEdgeBC && (
-                            <label className="fl-field fl-field-inset">
-                                <span>BC type</span>
-                                <select value={selectedEdgeBC.type}
-                                    onChange={(e) => updateSelectedEdgeBC({ type: e.target.value })}>
-                                    {BC_TYPES.map((t) => (
-                                        <option key={t.id} value={t.id}>{t.label}</option>
-                                    ))}
-                                </select>
-                            </label>
+                            <>
+                                <label className="fl-field fl-field-inset">
+                                    <span>BC type</span>
+                                    <select value={selectedEdgeBC.type}
+                                        onChange={(e) => updateSelectedEdgeBC({ type: e.target.value })}>
+                                        {BC_TYPES.map((t) => (
+                                            <option key={t.id} value={t.id}>{t.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                {selectedEdgeBC.type === 'inlet' && (
+                                    <label className="fl-field fl-field-inset"
+                                        title="Concentration multiplier at this inlet edge, normalised 0..1. Set multiple inlets to different values to model two-stream gas mixers — e.g. stream A at 1 (analyte) and stream B at 0 (carrier).">
+                                        <span>Stream fraction (0..1)</span>
+                                        <input
+                                            type="number"
+                                            min={0} max={1} step={0.05}
+                                            value={Number.isFinite(selectedEdgeBC.c) ? selectedEdgeBC.c : 1}
+                                            onChange={(e) => {
+                                                const v = Number(e.target.value);
+                                                if (!Number.isFinite(v)) return;
+                                                updateSelectedEdgeBC({ c: Math.max(0, Math.min(1, v)) });
+                                            }}
+                                        />
+                                    </label>
+                                )}
+                            </>
                         )}
                     </>
                 )}
@@ -8686,6 +9055,208 @@ const SectionRow = ({ section, stats, selected, onSelect, onToggleVisible, onRen
 };
 
 /* ──────────────────────────────────────────────────────────────
+ *  MixerAnalysisPanel — 2-D passive-mixer KPI panel
+ * ──────────────────────────────────────────────────────────────
+ *
+ *  Surfaces the live mixing diagnostics computed by the
+ *  `mixerKPIs` memo:
+ *    - Per-section  c̄, σ(c), σ_max, mixing index M
+ *    - Global L_90 / L_95 mixing lengths (first x at which
+ *      M crosses 0.90 / 0.95)
+ *    - Outlet M  — the headline number
+ *
+ *  It's shown on the right-rail whenever Flow Lab is in sim
+ *  mode. When there's nothing useful to display yet (species
+ *  off, fewer than 2 sections, no run data), it shows a short
+ *  "how to use" block instead so the feature is always
+ *  discoverable. */
+const MixerAnalysisPanel = ({
+    kpis,
+    speciesEnabled,
+    field,
+    cUnit,
+    cAmplitude,
+    formatLength,
+    ...rest
+}) => {
+    const fmtPct = (v) => Number.isFinite(v) ? `${(v * 100).toFixed(1)} %` : '—';
+    const fmtC = (v) => {
+        if (!Number.isFinite(v)) return '—';
+        if (cUnit === 'frac') return v.toFixed(3);
+        if (cUnit === 'pct')  return `${(v * 100).toFixed(2)} %`;
+        const amp = Number.isFinite(cAmplitude) ? cAmplitude : 1;
+        const mul = cUnit === 'ppm' ? 1e6 : cUnit === 'ppb' ? 1e9 : 1e12;
+        const sig = v * amp * mul;
+        return `${sig.toFixed(2)} ${cUnit}`;
+    };
+
+    const tourAttr = rest['data-tour-id'] || 'mixer';
+
+    if (!speciesEnabled) {
+        return (
+            <div className="fl-panel fl-mixer-panel" data-tour-id={tourAttr}>
+                <div className="fl-panel-title">Mixer analysis</div>
+                <div className="fl-mixer-empty">
+                    Enable <b>Species transport</b> and tag at least
+                    two inlet edges with different <b>Stream fraction</b>
+                    values (e.g. 1.0 and 0.0) to compute mixing KPIs.
+                </div>
+            </div>
+        );
+    }
+    if (!field) {
+        return (
+            <div className="fl-panel fl-mixer-panel" data-tour-id={tourAttr}>
+                <div className="fl-panel-title">Mixer analysis</div>
+                <div className="fl-mixer-empty">
+                    Press <b>Run</b> — KPIs fill in live as the field
+                    develops. For meaningful numbers you'll want at
+                    least 2 sections along the mixing channel.
+                </div>
+            </div>
+        );
+    }
+    if (!kpis?.ok || kpis.rows.length < 2) {
+        return (
+            <div className="fl-panel fl-mixer-panel" data-tour-id={tourAttr}>
+                <div className="fl-panel-title">Mixer analysis</div>
+                <div className="fl-mixer-empty">
+                    Add at least <b>2 sections</b> across the mixing
+                    channel (Section tool in the CAD toolbar). One
+                    near the inlet, one near the outlet, plus 1–2
+                    intermediate for best results.
+                </div>
+            </div>
+        );
+    }
+
+    const { rows, L_90, L_95, M_outlet } = kpis;
+    const outletRow = rows[rows.length - 1];
+    const inletRow  = rows[0];
+
+    /* Simple M(x) sparkline — cheap SVG, 1 px per % of distance. */
+    const W = 220, H = 54, pad = 6;
+    const xMin = rows[0].distance_mm;
+    const xMax = rows[rows.length - 1].distance_mm;
+    const xSpan = Math.max(1e-9, xMax - xMin);
+    const sparkPts = rows.map((r) => {
+        const x = pad + (r.distance_mm - xMin) / xSpan * (W - 2 * pad);
+        const y = H - pad - r.M * (H - 2 * pad);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const tgt90y = H - pad - 0.90 * (H - 2 * pad);
+    const tgt95y = H - pad - 0.95 * (H - 2 * pad);
+
+    /* Colour the outlet M value against the classic design targets. */
+    const outletClass = M_outlet >= 0.95 ? 'fl-mixer-val fl-ok'
+        : M_outlet >= 0.90 ? 'fl-mixer-val fl-ok-soft'
+        : M_outlet >= 0.70 ? 'fl-mixer-val fl-warn'
+        : 'fl-mixer-val fl-bad';
+
+    return (
+        <div className="fl-panel fl-mixer-panel" data-tour-id={tourAttr}>
+            <div className="fl-panel-title">Mixer analysis</div>
+            <div className="fl-mixer-row">
+                <div className="fl-mixer-metric">
+                    <div className="fl-mixer-metric-label">Outlet M</div>
+                    <div className={outletClass}>{M_outlet.toFixed(3)}</div>
+                    <div className="fl-mixer-metric-hint">
+                        {M_outlet >= 0.95 ? 'excellent (≥ 0.95)'
+                            : M_outlet >= 0.90 ? 'adequate (≥ 0.90)'
+                            : M_outlet >= 0.70 ? 'partial — lengthen channel'
+                            : 'poorly mixed — redesign'}
+                    </div>
+                </div>
+                <div className="fl-mixer-metric">
+                    <div className="fl-mixer-metric-label">L_90</div>
+                    <div className="fl-mixer-val">
+                        {Number.isFinite(L_90) ? formatLength(L_90) : 'not reached'}
+                    </div>
+                    <div className="fl-mixer-metric-hint">
+                        {Number.isFinite(L_95)
+                            ? `L_95 = ${formatLength(L_95)}`
+                            : 'L_95 not reached'}
+                    </div>
+                </div>
+                <div className="fl-mixer-metric">
+                    <div className="fl-mixer-metric-label">Outlet c̄</div>
+                    <div className="fl-mixer-val">{fmtC(outletRow.c_mean)}</div>
+                    <div className="fl-mixer-metric-hint">
+                        inlet c̄ = {fmtC(inletRow.c_mean)}
+                    </div>
+                </div>
+            </div>
+
+            <svg className="fl-mixer-spark" viewBox={`0 0 ${W} ${H}`}>
+                <line x1={pad} y1={tgt90y} x2={W - pad} y2={tgt90y}
+                    className="fl-mixer-spark-ref" strokeDasharray="3 3" />
+                <line x1={pad} y1={tgt95y} x2={W - pad} y2={tgt95y}
+                    className="fl-mixer-spark-ref-soft" strokeDasharray="2 4" />
+                <polyline points={sparkPts} className="fl-mixer-spark-line" fill="none" />
+                {rows.map((r, i) => {
+                    const x = pad + (r.distance_mm - xMin) / xSpan * (W - 2 * pad);
+                    const y = H - pad - r.M * (H - 2 * pad);
+                    return (
+                        <circle key={i} cx={x} cy={y} r={2.5}
+                            className="fl-mixer-spark-dot"
+                            fill={r.color || '#22d3ee'} />
+                    );
+                })}
+            </svg>
+            <div className="fl-mixer-spark-axis">
+                <span>M = 1 − σ(c)/σ_max &nbsp;·&nbsp; dashed = 0.90/0.95 targets</span>
+            </div>
+
+            <div className="fl-mixer-table-wrap">
+                <table className="fl-mixer-table">
+                    <thead>
+                        <tr>
+                            <th>Section</th>
+                            <th>Δx</th>
+                            <th>c̄</th>
+                            <th>σ(c)</th>
+                            <th>M</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((r) => (
+                            <tr key={r.sectionId}>
+                                <td>
+                                    <span className="fl-mixer-swatch"
+                                        style={{ background: r.color || '#22d3ee' }} />
+                                    {r.label}
+                                </td>
+                                <td>{formatLength(r.distance_mm)}</td>
+                                <td>{fmtC(r.c_mean)}</td>
+                                <td>{r.c_std.toFixed(3)}</td>
+                                <td>
+                                    <span className={
+                                        r.M >= 0.95 ? 'fl-mixer-mvalue fl-ok'
+                                        : r.M >= 0.90 ? 'fl-mixer-mvalue fl-ok-soft'
+                                        : r.M >= 0.70 ? 'fl-mixer-mvalue fl-warn'
+                                        : 'fl-mixer-mvalue fl-bad'
+                                    }>
+                                        {r.M.toFixed(3)}
+                                    </span>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="fl-mixer-hint">
+                Design targets: <b>M ≥ 0.90</b> for adequate mixing,
+                <b> M ≥ 0.95</b> for high-uniformity delivery.
+                Shorter L_90 ↔ more compact layout; smaller σ at
+                outlet ↔ lower stream-to-stream variability.
+            </div>
+        </div>
+    );
+};
+
+
+/* ──────────────────────────────────────────────────────────────
  *  FlowLabLanding — home page shown on Flow Lab entry
  * ──────────────────────────────────────────────────────────────
  *  A clean welcome surface with two main sections:
@@ -8706,6 +9277,7 @@ const FlowLabLanding = ({
     recents,
     onOpenRecent,
     onLoadAromaDemo,
+    onLoadTMixerDemo,
     onLoadSimpleChannel,
     onCreateNewProject,
     onClose,
@@ -8793,6 +9365,29 @@ const FlowLabLanding = ({
                                 <div className="fl-landing-card-tags">
                                     <span>species</span>
                                     <span>pulse</span>
+                                    <span>guided tour</span>
+                                </div>
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            className="fl-landing-card fl-landing-card--featured"
+                            onClick={onLoadTMixerDemo}
+                        >
+                            <div className="fl-landing-card-icon"><Activity size={22} /></div>
+                            <div className="fl-landing-card-body">
+                                <div className="fl-landing-card-title">Gas mixer demo (T-junction)</div>
+                                <div className="fl-landing-card-desc">
+                                    Classic 2-stream passive mixer. Stream A (c = 1) from the
+                                    left, stream B (c = 0) from the top, 40 × 4 mm mixing
+                                    channel, four pre-placed sections, live mixer-KPI panel
+                                    (M, L_90, outlet uniformity). Guided tour included.
+                                </div>
+                                <div className="fl-landing-card-tags">
+                                    <span>mixer</span>
+                                    <span>two-stream</span>
+                                    <span>KPIs</span>
                                     <span>guided tour</span>
                                 </div>
                             </div>

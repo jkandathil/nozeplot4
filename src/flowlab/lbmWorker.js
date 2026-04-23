@@ -60,6 +60,7 @@ let state = null;
 
 function buildInitialState({
     nx, ny, mask, inletDir, inletU_lb, outletDir,
+    inletDirsPerCell, inletCPerCell,
     tau, stepsPerPost, postEvery,
     species, sensorEdges, dt_s,
     pulseId, pulseParams,
@@ -93,6 +94,12 @@ function buildInitialState({
         nx, ny, N, mask,
         f, fNext, rho, ux, uy, prevUmag,
         inletDir, inletU_lb, outletDir,
+        // Per-INLET-cell overrides. When present, each INLET cell uses
+        // its own inward normal + concentration multiplier instead of
+        // the single global inletDir / cInletValue. Multi-stream
+        // mixers (two streams with c=1 / c=0) need these.
+        inletDirsPerCell: inletDirsPerCell || null,
+        inletCPerCell: inletCPerCell || null,
         tau, invTau: 1 / tau,
         iter: 0,
         residual: 1,
@@ -149,10 +156,20 @@ function step(s) {
     }
 
     /* 2. Inlet / outlet BCs. */
+    const idPerCell = s.inletDirsPerCell;
     for (let k = 0; k < N; k++) {
         if (mask[k] !== INLET) continue;
-        const tx = inletDir[0] * inletU_lb;
-        const ty = inletDir[1] * inletU_lb;
+        // Per-cell inward direction if available (multi-stream mixer),
+        // else fall back to the global inlet direction (single-inlet case).
+        let dxDir = inletDir[0];
+        let dyDir = inletDir[1];
+        if (idPerCell) {
+            const dxp = idPerCell[2 * k];
+            const dyp = idPerCell[2 * k + 1];
+            if (dxp !== 0 || dyp !== 0) { dxDir = dxp; dyDir = dyp; }
+        }
+        const tx = dxDir * inletU_lb;
+        const ty = dyDir * inletU_lb;
         ux[k] = tx;
         uy[k] = ty;
         rho[k] = 1;
@@ -259,7 +276,11 @@ function step(s) {
                 const m = mask[k];
                 if (m === WALL) { cNext[k] = 0; continue; }
                 if (m === INLET) {
-                    cNext[k] = s.cInletValue;
+                    // Two-stream mixers: each INLET cell carries a
+                    // per-edge multiplier (0..1). Streams tagged c=0
+                    // stay clean even while the pulse is on at c=1.
+                    const mul = s.inletCPerCell ? s.inletCPerCell[k] : 1;
+                    cNext[k] = s.cInletValue * mul;
                     continue;
                 }
                 // Sample neighbours with zero-flux wall fallback (copy centre).

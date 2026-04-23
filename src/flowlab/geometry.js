@@ -618,6 +618,17 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
 
     const mask = new Uint8Array(nx * ny);
     mask.fill(1); // wall by default
+    // Per-INLET-cell metadata (filled only where mask[k] === 2).
+    // Enables multi-stream mixers where each inlet edge carries its
+    // own inward direction and its own concentration (e.g. T/Y junction
+    // with stream A at c=1 and stream B at c=0).
+    //   inletDirsPerCell[2k]   = inward normal x (unit vector)
+    //   inletDirsPerCell[2k+1] = inward normal y (unit vector)
+    //   inletCPerCell[k]       = concentration multiplier in [0,1]
+    //                            (defaults to 1 for back-compat when
+    //                            edgeBC[e].c is unset)
+    const inletDirsPerCell = new Float32Array(nx * ny * 2);
+    const inletCPerCell = new Float32Array(nx * ny);
 
     for (let j = 0; j < ny; j++) {
         const yc = ymin + (j + 0.5) * dy;
@@ -686,7 +697,20 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
             }
             const bc = entity.edgeBC?.[bestIdx];
             if (!bc) continue;
-            if (bc.type === 'inlet') mask[k] = 2;
+            if (bc.type === 'inlet') {
+                mask[k] = 2;
+                // Compute inward unit normal of that inlet edge and
+                // stamp it at this cell. Inward = opposite of the
+                // polygon's outward normal.
+                const n = edgeOutwardNormal(pts, bestIdx);
+                inletDirsPerCell[2 * k]     = -n.x;
+                inletDirsPerCell[2 * k + 1] = -n.y;
+                // Default concentration multiplier is 1.0 so geometries
+                // without explicit `c` per inlet behave exactly as
+                // before. Multi-stream mixers override it per edge.
+                const cMul = Number.isFinite(bc.c) ? bc.c : 1;
+                inletCPerCell[k] = Math.max(0, Math.min(1, cMul));
+            }
             else if (bc.type === 'outlet') mask[k] = 3;
             // Sensor edges are logically walls for the flow solver (no-slip),
             // but we keep a map of which fluid cell borders each sensor
@@ -757,6 +781,8 @@ export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
         bbox: { xmin, ymin, xmax, ymax },
         sensorEdges,          // [{edgeIdx, cells:[k,…], length_mm, label}, …]
         inletLength_mm,       // total length of all inlet edges (mm)
+        inletDirsPerCell,     // Float32Array(2N): inward normal per INLET cell
+        inletCPerCell,        // Float32Array(N):  concentration per INLET cell
     };
 }
 
