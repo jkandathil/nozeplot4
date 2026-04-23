@@ -2197,16 +2197,29 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         });
     }, [entities, canvasSize]);
 
-    /* Consume any pending fit request once both the new entities
-     *  and a real canvas size are available. We also clear the
-     *  pending flag on no-op runs where bbox can't be computed
-     *  (e.g. startBlankCanvas with no entities) so it doesn't fire
-     *  stale later. */
+    /* Consume a pending fit request. This runs on EVERY render where
+     *  entities or canvasSize changed and the pending flag is set,
+     *  re-fitting each time. We only clear the flag once the canvas
+     *  size has stayed stable for a short window — because hiding
+     *  the landing page triggers the side panels to re-appear,
+     *  which shrinks fl-canvas-wrap on the next frame; the
+     *  ResizeObserver pushes the new canvasSize a tick later. If we
+     *  cleared the flag on the first run we'd fit to the old (wider)
+     *  canvas and the geometry would overflow. Running on each
+     *  change and debouncing the clear handles that cleanly. */
     useEffect(() => {
         if (!pendingFitRef.current) return;
         if (!canvasSize.w || !canvasSize.h) return;
-        pendingFitRef.current = false;
+        // Re-fit with the latest entities + canvasSize every time
+        // this effect triggers.
         fitToContent(entities);
+        // Clear the pending flag once the canvas has settled. Any
+        // further size change cancels this timer and keeps the flag
+        // alive so the next run re-fits.
+        const id = setTimeout(() => {
+            pendingFitRef.current = false;
+        }, 150);
+        return () => clearTimeout(id);
     }, [entities, canvasSize, fitToContent]);
 
     // Fit once on first mount after canvas sized.
