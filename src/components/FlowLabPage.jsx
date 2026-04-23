@@ -7743,31 +7743,68 @@ const EntitySvg = ({ entity, toScreen, selected, selectedEdgeIdx, selectedVertex
                     <line key={i} x1={sa.x} y1={sa.y} x2={sb.x} y2={sb.y} className={cls} />
                 );
             })}
-            {/* Vertex dots. Parametric curved shapes (circle / ellipse
-             * / arc) are stored as dense sampled polylines (48–64
-             * points) — rendering a dot per sample turns the outline
-             * into a ring of dots, which is noisy and meaningless
-             * because users edit these shapes via the Properties
-             * panel (centre / radius / semi-axes), not by dragging
-             * individual samples. We therefore suppress per-vertex
-             * dots on curved shapes and render clean parametric
-             * handles (centre + radius) instead when selected. Rect,
-             * line, and free polylines keep their normal dots. */}
+            {/* Vertex dots — corner-aware rendering.
+             *
+             * Two flavours of clutter we're suppressing:
+             *   1. Parametric curved shapes (circle / ellipse / arc)
+             *      never show per-sample dots (those vertices are just
+             *      rendering samples, not editable handles).
+             *   2. Free polygons — typically produced by booleans,
+             *      offsets, or imports — very often *mostly* lie on a
+             *      smooth curve (e.g. a unioned circle + rect still
+             *      has ~48 samples around the arc). We hide dots on
+             *      every vertex whose turn angle is below a corner
+             *      threshold so the outline reads cleanly, and only
+             *      keep dots where the geometry actually has a corner
+             *      the user can meaningfully grab.
+             *
+             * Always-visible exceptions: the endpoints of an open
+             * polyline (users need to see where to grab them to
+             * extend / trim), the currently selected vertex, and
+             * vertices on a short polyline where every point is a
+             * legitimate handle (n ≤ 8). */
             {entity.shape === 'circle' || entity.shape === 'ellipse' || entity.shape === 'arc'
                 ? null
-                : pts.map((p, i) => {
-                    if (isPreview && i === pts.length - 1) return null; // preview's last pt = cursor
-                    const s = toScreen(p);
-                    const isSel = selected && selectedVertexIdx === i;
-                    const r = selected ? (isSel ? 5 : 3.5) : 2.5;
-                    return (
-                        <circle
-                            key={`v${i}`}
-                            cx={s.x} cy={s.y} r={r}
-                            className={`fl-vertex${isSel ? ' is-selected' : ''}${selected ? ' is-visible' : ''}`}
-                        />
-                    );
-                })}
+                : (() => {
+                    const n = pts.length;
+                    const shortEntity = n <= 8;
+                    const CORNER_DEG = 18;
+                    const cornerCos = Math.cos((CORNER_DEG * Math.PI) / 180);
+                    return pts.map((p, i) => {
+                        if (isPreview && i === n - 1) return null;
+                        const isSel = selected && selectedVertexIdx === i;
+                        const isEndpoint = !isClosed && (i === 0 || i === n - 1);
+                        let isCorner = shortEntity || isEndpoint;
+                        if (!isCorner) {
+                            const prevIdx = (i - 1 + n) % n;
+                            const nextIdx = (i + 1) % n;
+                            if (!isClosed && (prevIdx === n - 1 && i === 0)) { /* skip wrap for open */ }
+                            const pa = pts[prevIdx];
+                            const pb = pts[nextIdx];
+                            if (pa && pb) {
+                                const vx1 = p.x - pa.x, vy1 = p.y - pa.y;
+                                const vx2 = pb.x - p.x, vy2 = pb.y - p.y;
+                                const l1 = Math.hypot(vx1, vy1);
+                                const l2 = Math.hypot(vx2, vy2);
+                                if (l1 > 1e-9 && l2 > 1e-9) {
+                                    const dot = (vx1 * vx2 + vy1 * vy2) / (l1 * l2);
+                                    /* Turn angle < CORNER_DEG → smooth, skip dot. */
+                                    if (dot < cornerCos) isCorner = true;
+                                }
+                            }
+                        }
+                        if (!isCorner && !isSel) return null;
+                        const s = toScreen(p);
+                        const r = selected ? (isSel ? 5 : 3.5) : 2.5;
+                        return (
+                            <circle
+                                key={`v${i}`}
+                                cx={s.x} cy={s.y} r={r}
+                                className={`fl-vertex${isSel ? ' is-selected' : ''}${selected ? ' is-visible' : ''}`}
+                            />
+                        );
+                    });
+                })()}
 
             {/* Parametric handles — render a small cross at the centre
              * (and a dot at the +X radius endpoint for circles /
