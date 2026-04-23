@@ -379,10 +379,29 @@ export function entitiesBBox(entities) {
  *      if that edge has an inlet/outlet BC, upgrade the fluid cell to
  *      INLET or OUTLET. (2-cell band gives a smoother Zou-He inlet.)
  */
-export function rasterizeDomain(entity, nxTarget) {
+export function rasterizeDomain(entity, nxTarget, { obstacles = [] } = {}) {
     if (!entity || entity.closed === false) return null;
     const pts = entity.points;
     if (pts.length < 3) return null;
+
+    /* Normalise obstacle polygons into a uniform shape the inner loop
+     *  can test cheaply. Each entry carries its own bbox so we can skip
+     *  whole cell ranges when an obstacle is far from a given row. */
+    const obstacleRings = (Array.isArray(obstacles) ? obstacles : [])
+        .map((ob) => {
+            const opts = ob?.points;
+            if (!Array.isArray(opts) || opts.length < 3) return null;
+            let xmn = Infinity, ymn = Infinity, xmx = -Infinity, ymx = -Infinity;
+            for (const p of opts) {
+                if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+                if (p.x < xmn) xmn = p.x;
+                if (p.y < ymn) ymn = p.y;
+                if (p.x > xmx) xmx = p.x;
+                if (p.y > ymx) ymx = p.y;
+            }
+            return { points: opts, xmin: xmn, ymin: ymn, xmax: xmx, ymax: ymx };
+        })
+        .filter(Boolean);
 
     let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
     for (const p of pts) {
@@ -423,6 +442,29 @@ export function rasterizeDomain(entity, nxTarget) {
         for (let i = 0; i < nx; i++) {
             const xc = xmin + (i + 0.5) * dx;
             if (pointInPolygon(pts, xc, yc)) mask[j * nx + i] = 0; // fluid
+        }
+    }
+
+    /* Carve out obstacles ─ any cell whose centre falls inside an
+     *  obstacle polygon flips back to wall. Done BEFORE inlet/outlet
+     *  tagging so obstacle-adjacent cells aren't mistaken for
+     *  boundary fluid. Per-obstacle bbox short-circuits the cell scan
+     *  for non-overlapping shapes. */
+    if (obstacleRings.length > 0) {
+        for (const ob of obstacleRings) {
+            const jLo = Math.max(0, Math.floor((ob.ymin - ymin) / dy) - 1);
+            const jHi = Math.min(ny - 1, Math.ceil((ob.ymax - ymin) / dy) + 1);
+            const iLo = Math.max(0, Math.floor((ob.xmin - xmin) / dx) - 1);
+            const iHi = Math.min(nx - 1, Math.ceil((ob.xmax - xmin) / dx) + 1);
+            for (let j = jLo; j <= jHi; j++) {
+                const yc = ymin + (j + 0.5) * dy;
+                for (let i = iLo; i <= iHi; i++) {
+                    const k = j * nx + i;
+                    if (mask[k] !== 0) continue; // already wall / inlet / outlet
+                    const xc = xmin + (i + 0.5) * dx;
+                    if (pointInPolygon(ob.points, xc, yc)) mask[k] = 1;
+                }
+            }
         }
     }
 
@@ -830,36 +872,63 @@ function entityToRing(entity) {
 }
 
 /** polygon-clipping returns MultiPolygon: [[outerRing, hole1, …], …].
- *  For the flow solver we only keep OUTER rings (no holes — holes
- *  would require a second polygon inside the domain, which the
- *  rasteriser already supports if they're drawn as separate entities,
- *  but not via a single entity with holes). Each outer ring becomes
- *  its own closed polyline entity that inherits metadata from the
- *  first operand. */
+ *  Each outer ring becomes a closed-polyline entity (the fluid domain
+ *  candidate). Every HOLE ring is emitted as a separate entity tagged
+ *  with `obstacle: true` — the solver rasteriser recognises these and
+ *  carves them out of the fluid domain as no-slip walls. This lets
+ *  "rect − circle" produce a rectangle with a circular void, matching
+ *  the user's mental model of boolean subtract. */
 function multiPolygonToEntities(mp, templateEntity, { idFactory } = {}) {
     const out = [];
     const nextId = idFactory || (() => `${templateEntity?.id || 'bool'}_${Math.floor(Math.random() * 1e6).toString(36)}`);
+
+    /* Normalise a polyclip ring (array of [x,y], first == last) into a
+     *  CCW-oriented list of {x,y} with the trailing closure vertex
+     *  dropped. Returns null on degenerate input. */
+    const ringToCCWPts = (ring, { forceCCW = true } = {}) => {
+        if (!ring || ring.length < 4) return null; // 3 verts + closure
+        const bare = ring.slice(0, ring.length - 1);
+        const pts = bare.map(([x, y]) => ({ x, y }));
+        const area = signedArea(pts);
+        if (forceCCW && area < 0) pts.reverse();
+        return pts;
+    };
+
     for (const poly of mp) {
         if (!poly || !poly.length) continue;
-        const outer = poly[0]; // first ring is outer; holes ignored
-        if (!outer || outer.length < 4) continue; // 3 verts + closure
-        // Drop the trailing duplicate closure vertex.
-        const ring = outer.slice(0, outer.length - 1);
-        // Enforce counter-clockwise for downstream rasterisation
-        // (point-in-polygon uses a ray cast that's orientation-agnostic,
-        // but we keep CCW as the canonical outer-ring convention).
-        const pts = ring.map(([x, y]) => ({ x, y }));
-        const area = signedArea(pts);
-        if (area < 0) pts.reverse();
-        const edgeBC = {};
-        for (let i = 0; i < pts.length; i++) edgeBC[i] = { type: 'wall' };
+
+        // Outer ring → regular domain/region entity.
+        const outerPts = ringToCCWPts(poly[0]);
+        if (!outerPts) continue;
+        const outerEdgeBC = {};
+        for (let i = 0; i < outerPts.length; i++) outerEdgeBC[i] = { type: 'wall' };
         out.push({
             id: nextId(),
             type: 'region',
             closed: true,
-            points: pts,
-            edgeBC,
+            points: outerPts,
+            edgeBC: outerEdgeBC,
         });
+
+        // Hole rings → obstacle entities (no-slip voids carved from
+        // the outer domain). polygon-clipping reports holes as inner
+        // rings of the same polygon. Keep them CCW for the solver —
+        // the `obstacle: true` flag is what makes them walls, not the
+        // winding order.
+        for (let h = 1; h < poly.length; h++) {
+            const holePts = ringToCCWPts(poly[h]);
+            if (!holePts) continue;
+            const holeEdgeBC = {};
+            for (let i = 0; i < holePts.length; i++) holeEdgeBC[i] = { type: 'wall' };
+            out.push({
+                id: nextId(),
+                type: 'obstacle',
+                closed: true,
+                obstacle: true,
+                points: holePts,
+                edgeBC: holeEdgeBC,
+            });
+        }
     }
     return out;
 }

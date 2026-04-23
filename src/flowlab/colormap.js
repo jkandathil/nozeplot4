@@ -85,10 +85,48 @@ export const RDBU = buildLUT([
     [1.0,  178,  24,  43],
 ]);
 
+/* Inferno — black → purple → orange → yellow. Perceptually uniform,
+ * excellent for concentration / density / heat-like scalar fields
+ * because low values fade to near-black so they read as "empty"
+ * instead of competing with the velocity field underneath. */
+export const INFERNO = buildLUT([
+    [0.0,    0,   0,   4],
+    [0.15,  31,  12,  72],
+    [0.3,   85,  15, 109],
+    [0.45, 136,  34, 106],
+    [0.6,  186,  54,  85],
+    [0.75, 227,  89,  51],
+    [0.88, 249, 142,  9],
+    [1.0,  252, 255, 164],
+]);
+
+/* Magma — similar family to inferno but with a softer end. Second
+ * strong choice for aroma concentration plots. */
+export const MAGMA = buildLUT([
+    [0.0,    0,   0,   4],
+    [0.25,  51,  16,  87],
+    [0.5,  128,  37, 129],
+    [0.75, 221,  81, 111],
+    [1.0,  252, 253, 191],
+]);
+
+/* Cividis — perceptually uniform AND colorblind-friendly (unlike
+ * viridis for some kinds of CVD). Good default for shared plots. */
+export const CIVIDIS = buildLUT([
+    [0.0,   0,  32,  76],
+    [0.25, 62,  73, 137],
+    [0.5, 124, 123, 120],
+    [0.75, 182, 177, 97],
+    [1.0,  255, 234,  70],
+]);
+
 export const COLORMAPS = {
     viridis: VIRIDIS,
     plasma: PLASMA,
     turbo: TURBO,
+    inferno: INFERNO,
+    magma: MAGMA,
+    cividis: CIVIDIS,
     gray: GRAY,
     rdbu: RDBU,
 };

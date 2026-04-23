@@ -23,6 +23,7 @@ import {
 import './AIChatPage.css';
 import {
     buildAugmentedSystemPrompt,
+    buildGroundedAppAnswer,
     KNOWLEDGE_SIZE,
 } from '../ai/kb/knowledgeBase.js';
 import {
@@ -148,9 +149,18 @@ const DTYPE_OPTIONS = [
 const DEFAULT_SYSTEM_PROMPT = [
     'You are NozeAssistant, a friendly, knowledgeable AI assistant.',
     '',
-    'Answer any question the user asks — general knowledge, technical, creative, conversational, coding, math, writing, everyday life. Think it through and give a clear, specific, helpful answer. Use simple language by default, and be concise unless the user asks for depth.',
+    'Answer any question the user asks — general knowledge, technical, creative, conversational, coding, math, writing, everyday life. Think it through and give a clear, specific, helpful answer.',
     '',
-    'You are embedded inside NozePlot, an analytics app for sensor / aroma data. If the user asks about NozePlot or its features, you have background knowledge about it that will be added to your context when relevant — use it naturally and synthesize it in your own words, don\'t read it back to them. For anything not about NozePlot, just answer from your own knowledge.',
+    'Response style (Markdown — your output is rendered as Markdown in a chat bubble):',
+    '- Lead with the direct answer in 1 short sentence.',
+    '- Use `### Heading` sections only when the answer has 2+ natural groupings (e.g. "What it does" / "How to use it").',
+    '- Use `- ` bullets for lists, `1.` for ordered/sequential steps.',
+    '- Use **bold** for UI labels, settings, tab names, or key terms.',
+    '- Use `inline code` for file paths, identifiers, or short code; use ```fenced code blocks``` for multi-line code.',
+    '- Keep tone warm, confident, practical. No filler, no apologies, no recap, no "I hope this helps".',
+    '- Stop as soon as the question is answered. Depth over length.',
+    '',
+    'You are embedded inside NozePlot, an analytics app for sensor / aroma data. If the user asks about NozePlot or its features, background knowledge will be added to your context when relevant — synthesize it in your own words, do not read it back. For anything not about NozePlot, answer from your own knowledge.',
     '',
     'You remember the conversation. Prior messages in this chat are real — use them to resolve references ("that plot", "what I said", "the previous answer"), stay consistent with earlier explanations, and build on previous answers when the user follows up. Do not ask the user to repeat things they already told you.',
 ].join('\n');
@@ -168,8 +178,12 @@ const LS_MODEL = 'ai-chat:selected-model';
 const LS_CUSTOM = 'ai-chat:custom-model';
 const LS_DEVICE = 'ai-chat:device';
 const LS_DTYPE = 'ai-chat:dtype';
-const LS_PARAMS = 'ai-chat:params';
-const LS_SYSTEM = 'ai-chat:system-prompt';
+/* v2 because v1 stored creative-writing defaults (temp=0.7, top_p=0.9,
+   max_new_tokens=512) that triggered run-on degeneracy in browser-resident
+   LLMs. Bumping the key forces a one-time reset to Q&A-friendly defaults. */
+const LS_PARAMS = 'ai-chat:params:v3';
+/* v2 to roll out the new response style defaults globally. */
+const LS_SYSTEM = 'ai-chat:system-prompt:v3';
 const LS_CHATS = 'ai-chat:conversations:v1';
 const LS_ACTIVE_CHAT = 'ai-chat:active-conversation';
 const LS_KB_ENABLED = 'ai-chat:kb-enabled';
@@ -196,6 +210,18 @@ function saveLS(key, value) {
 
 function makeChatId() {
     return 'chat_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+function looksLikeNozePlotQuestion(text) {
+    const q = String(text || '').toLowerCase();
+    if (!q.trim()) return false;
+    const hints = [
+        'nozeplot', 'fenoze', 'fenose', 'app', 'tab', 'page', 'module',
+        'flow lab', 'aroma', 'se analysis', 'normalize', 'ml studio',
+        'dashboard', 'workspace', 'drift map', 'separability', 'sensitivity',
+        'serial monitor', 'code studio', 'spreadsheet', 'help',
+    ];
+    return hints.some((h) => q.includes(h));
 }
 
 function newConversation(modelId = '') {
@@ -258,11 +284,25 @@ export default function AIChatPage() {
     const [lastPayload, setLastPayload] = useState(null);
     const [showPayloadModal, setShowPayloadModal] = useState(false);
 
-    /* -------- Generation params -------- */
+    /* -------- Generation params --------
+       Defaults are tuned for Q&A / assistant use, not creative writing.
+       In the latter regime (temp 0.7+, top_p 0.9+, large max_new_tokens)
+       browser-resident small/medium LLMs reliably degenerate into
+       run-on cadences and thesaurus-style word lists once they exhaust
+       their grounded answer ("…cornerstone categorically cardinal
+       bedrock bonesback core linchpin…"). The values below match what
+       OpenAI/Anthropic use as chat defaults. */
     const [params, setParams] = useState(() => ({
-        max_new_tokens: 512,
-        temperature: 0.7,
+        max_new_tokens: 500,
+        temperature: 0.5,
         top_p: 0.9,
+        top_k: 50,
+        /* 1.08 is the sweet-spot for 'great' tier chat models
+           (Phi-3.5, SmolLM2-1.7B). Higher values cause article-dropping
+           degeneracy on long general-knowledge answers. The per-tier
+           clamps below will raise this for weaker models. */
+        repetition_penalty: 1.08,
+        no_repeat_ngram_size: 0,
         ...loadLS(LS_PARAMS, {}),
     }));
     const [systemPrompt, setSystemPrompt] = useState(
@@ -612,6 +652,101 @@ export default function AIChatPage() {
             usedSources = sources;
         }
 
+        const isLikelyAppQuestion = looksLikeNozePlotQuestion(text);
+        const topSourceScore = usedSources.length ? (usedSources[0].score || 0) : 0;
+        const hasStrongGrounding = usedSources.length > 0 && topSourceScore >= 1.6;
+        const isUngroundedAppQuestion = useKnowledgeBase && isLikelyAppQuestion && !hasStrongGrounding;
+
+        /* Grounded intelligence path:
+           For app-specific questions with strong retrieval, answer
+           directly from retrieved knowledge chunks (deterministic
+           synthesis) instead of free-form generation. This removes the
+           remaining hallucination surface while preserving source chips. */
+        if (useKnowledgeBase && isLikelyAppQuestion && hasStrongGrounding) {
+            const grounded = buildGroundedAppAnswer({ query: text, minScore: 1.6, k: 5 });
+            if (grounded?.text) {
+                const newUserMsg = { role: 'user', content: text, ts: Date.now() };
+                const newAssistantMsg = {
+                    role: 'assistant',
+                    content: grounded.text,
+                    streaming: false,
+                    ts: Date.now(),
+                    sources: grounded.sources || usedSources,
+                };
+                setConversations((prev) =>
+                    prev.map((c) => {
+                        if (c.id !== targetChatId) return c;
+                        const msgs = [...c.messages, newUserMsg, newAssistantMsg];
+                        const title =
+                            c.title === 'New chat' || !c.title
+                                ? text.slice(0, 40)
+                                : c.title;
+                        return { ...c, messages: msgs, title, modelId: currentModelId, updatedAt: Date.now() };
+                    })
+                );
+                setContextInfo({
+                    turnsSent: 0,
+                    turnsDropped: 0,
+                    historyTokens: 0,
+                    systemTokens: Math.ceil(effectiveSystem.length / 3.8),
+                    kb: useKnowledgeBase,
+                    sourcesUsed: (grounded.sources || usedSources).length,
+                });
+                return;
+            }
+        }
+
+        /* Anti-hallucination guard:
+           For app-specific questions, if retrieval cannot find relevant
+           grounded context, do NOT let the model improvise page/module
+           behavior. Return a clear "can't verify" answer and ask for a
+           more specific path/label so retrieval can lock onto docs. */
+        if (isUngroundedAppQuestion) {
+            const newUserMsg = { role: 'user', content: text, ts: Date.now() };
+            const newAssistantMsg = {
+                role: 'assistant',
+                content: [
+                    'I can help, but I cannot verify that from the app knowledge I have loaded right now.',
+                    'Please ask with the exact tab/page name (for example: "Flow Lab", "SE Analysis", "Normalize", "Aroma Analysis"), and I will answer using grounded app context only.',
+                ].join(' '),
+                streaming: false,
+                ts: Date.now(),
+                sources: [],
+            };
+            setConversations((prev) =>
+                prev.map((c) => {
+                    if (c.id !== targetChatId) return c;
+                    const msgs = [...c.messages, newUserMsg, newAssistantMsg];
+                    const title =
+                        c.title === 'New chat' || !c.title
+                            ? text.slice(0, 40)
+                            : c.title;
+                    return { ...c, messages: msgs, title, modelId: currentModelId, updatedAt: Date.now() };
+                })
+            );
+            setContextInfo({
+                turnsSent: 0,
+                turnsDropped: 0,
+                historyTokens: 0,
+                systemTokens: Math.ceil(effectiveSystem.length / 3.8),
+                kb: useKnowledgeBase,
+                sourcesUsed: 0,
+            });
+            return;
+        }
+        const isAppFeatureQuestion = useKnowledgeBase && usedSources.length > 0;
+        if (isAppFeatureQuestion) {
+            effectiveSystem = [
+                effectiveSystem,
+                '',
+                'When answering NozePlot feature/how-to questions:',
+                '- Use plain English.',
+                '- Keep it short: max 5 bullets or 3-6 short sentences.',
+                '- Prioritize exact UI actions (what to click/open).',
+                '- Do not write long run-on paragraphs or filler text.',
+            ].join('\n');
+        }
+
         /* ---------- 2. Context-aware history packing ----------
            Small local models almost always have a 2–4k token window.
            If we don't trim ourselves, the tokenizer will truncate from
@@ -677,19 +812,88 @@ export default function AIChatPage() {
             });
         } catch { /* ignore */ }
 
-        /* Tiny 'experimental' models (270–360M params) sample way off
-           distribution at the default temperature, producing garbled
-           tokens ("眷", "iyev") and hallucinated jargon. Clamp temp
-           and repetition_penalty for them so output stays coherent. */
-        const effectiveParams = currentModelMeta?.quality === 'experimental'
-            ? {
-                ...params,
-                temperature: Math.min(params.temperature ?? 0.7, 0.4),
-                top_p: Math.min(params.top_p ?? 0.9, 0.85),
-                repetition_penalty: Math.min(params.repetition_penalty ?? 1.1, 1.05),
-                max_new_tokens: Math.min(params.max_new_tokens ?? 512, 300),
-            }
-            : params;
+        /* Per-tier sampling clamps.
+           Small LLMs love to fall into a degeneracy trap: the model
+           latches onto a cadence ('circumstantial circumstances
+           surrounding dialogue participants ...') and keeps emitting
+           off-distribution tokens until max_new_tokens runs out. Two
+           counter-measures work together:
+             1. Cap max_new_tokens so even if it drifts, it dies fast.
+             2. Raise repetition_penalty so the drift is less likely
+                to begin in the first place.
+           We ONLY override when user's param is looser than the tier
+           ceiling — if the user dialled it down manually we respect
+           their choice. */
+        const tier = currentModelMeta?.quality || 'good';
+        const clamp = (v, ceil) => (v == null ? ceil : Math.min(v, ceil));
+
+        /* Tier-aware guardrails.
+           LESSON LEARNED: the previous "universal" no_repeat_ngram_size=4
+           + repetition_penalty=1.15 combo works great for tiny models
+           but actively DAMAGES 'great' tier models. With Phi-3.5, once
+           common 4-grams like "one mole of a" or "the number of atoms"
+           get blocked, the model drops articles/prepositions to avoid
+           any 4-gram repeat and spirals into word salad
+           ("count macroscale amounts material science physical sciences
+           rely heavily today thanks largely contribution…"). We now
+           scale the guardrails to the model's self-regulation ability.
+
+           • experimental: hard clamps — small models absolutely need
+             them or they loop ("circumstantial circumstances…").
+           • basic/good: moderate clamps.
+           • great: disable no_repeat_ngram_size entirely and use a
+             gentle repetition penalty (1.08). Phi-3.5 & SmolLM2-1.7B
+             self-regulate well enough that heavier clamps do more harm
+             than good. */
+        let effectiveParams = { ...params };
+        if (tier === 'experimental') {
+            effectiveParams = {
+                ...effectiveParams,
+                temperature: clamp(params.temperature, 0.35),
+                top_p: clamp(params.top_p, 0.85),
+                top_k: clamp(params.top_k ?? 30, 30),
+                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.2),
+                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
+                max_new_tokens: clamp(params.max_new_tokens, 280),
+            };
+        } else if (tier === 'basic' || tier === 'good') {
+            effectiveParams = {
+                ...effectiveParams,
+                temperature: clamp(params.temperature, 0.5),
+                top_p: clamp(params.top_p, 0.9),
+                top_k: params.top_k ?? 40,
+                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
+                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
+                max_new_tokens: clamp(params.max_new_tokens, 420),
+            };
+        } else {
+            // 'great' tier (Phi-3.5, SmolLM2-1.7B): gentle guards only.
+            effectiveParams = {
+                ...effectiveParams,
+                temperature: clamp(params.temperature, 0.5),
+                top_p: clamp(params.top_p, 0.9),
+                top_k: params.top_k ?? 50,
+                repetition_penalty: Math.max(params.repetition_penalty ?? 1.05, 1.08),
+                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 0,
+                max_new_tokens: clamp(params.max_new_tokens, 600),
+            };
+        }
+
+        /* App-feature Q&A should be factual and stable, not creative.
+           If retrieval found relevant app passages, force deterministic
+           decoding so answers don't drift into verbose nonsense. */
+        if (isAppFeatureQuestion) {
+            effectiveParams = {
+                ...effectiveParams,
+                do_sample: false,
+                temperature: 0,
+                top_p: 1,
+                top_k: 0,
+                max_new_tokens: clamp(params.max_new_tokens, 220),
+                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
+                no_repeat_ngram_size: Math.max(effectiveParams.no_repeat_ngram_size ?? 0, 4),
+            };
+        }
 
         workerRef.current?.postMessage({
             type: 'generate',
@@ -1391,13 +1595,15 @@ function MessageBubble({
             <div className="ai-msg-body">
                 <div className="ai-msg-role">{isUser ? 'You' : 'Assistant'}</div>
                 <div className={`ai-msg-content ${streaming ? 'ai-msg-content--streaming' : ''}`}>
-                    {content || (
-                        streaming ? (
+                    {content
+                        ? (isUser
+                            ? content
+                            : <MarkdownContent text={content} />)
+                        : (streaming ? (
                             <em className="ai-msg-wait">
                                 {waitingNote || 'thinking…'}
                             </em>
-                        ) : ''
-                    )}
+                        ) : '')}
                     {streaming && <span className="ai-msg-caret" />}
                 </div>
                 {stopped && <div className="ai-msg-stopped">⏹ stopped</div>}
@@ -1422,6 +1628,313 @@ function MessageBubble({
                     </div>
                 )}
             </div>
+        </div>
+    );
+}
+
+/* ---------------- LaTeX → Unicode math transform ----------------
+   We don't want to ship KaTeX (300KB+) just for inline math. Instead
+   we convert LaTeX math delimiters (\(…\), \[…\], $…$) to readable
+   Unicode on the fly. Handles the common cases our models produce:
+   Greek letters, ×/·/±/→/≤/≥/≈/∞, \text{}/\mathrm{} wrappers,
+   \bar/\hat/\vec accents, _{sub}/^{sup}/\frac{a}{b}, etc. */
+
+const GREEK_MAP = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε',
+    varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ',
+    iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν',
+    xi: 'ξ', omicron: 'ο', pi: 'π', varpi: 'ϖ', rho: 'ρ',
+    varrho: 'ϱ', sigma: 'σ', varsigma: 'ς', tau: 'τ',
+    upsilon: 'υ', phi: 'φ', varphi: 'ϕ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    Alpha: 'Α', Beta: 'Β', Gamma: 'Γ', Delta: 'Δ', Epsilon: 'Ε',
+    Zeta: 'Ζ', Eta: 'Η', Theta: 'Θ', Iota: 'Ι', Kappa: 'Κ',
+    Lambda: 'Λ', Mu: 'Μ', Nu: 'Ν', Xi: 'Ξ', Omicron: 'Ο',
+    Pi: 'Π', Rho: 'Ρ', Sigma: 'Σ', Tau: 'Τ', Upsilon: 'Υ',
+    Phi: 'Φ', Chi: 'Χ', Psi: 'Ψ', Omega: 'Ω',
+};
+const SYMBOL_MAP = {
+    times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓',
+    to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔',
+    Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔',
+    mapsto: '↦', implies: '⇒', iff: '⇔',
+    leq: '≤', le: '≤', geq: '≥', ge: '≥', ne: '≠', neq: '≠',
+    approx: '≈', sim: '∼', simeq: '≃', cong: '≅', equiv: '≡',
+    propto: '∝', infty: '∞', partial: '∂', nabla: '∇',
+    int: '∫', iint: '∬', iiint: '∭', oint: '∮',
+    sum: '∑', prod: '∏', sqrt: '√',
+    cdots: '⋯', ldots: '…', dots: '…', vdots: '⋮', ddots: '⋱',
+    forall: '∀', exists: '∃', in: '∈', notin: '∉', subset: '⊂',
+    supset: '⊃', subseteq: '⊆', supseteq: '⊇', cup: '∪', cap: '∩',
+    emptyset: '∅', varnothing: '∅',
+    deg: '°', angle: '∠', perp: '⊥', parallel: '∥',
+    prime: '′', dagger: '†', star: '⋆', ast: '∗',
+    left: '', right: '', big: '', Big: '', bigg: '', Bigg: '',
+};
+const SUB_MAP = {
+    0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄', 5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉',
+    '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
+    a: 'ₐ', e: 'ₑ', h: 'ₕ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', l: 'ₗ',
+    m: 'ₘ', n: 'ₙ', o: 'ₒ', p: 'ₚ', r: 'ᵣ', s: 'ₛ', t: 'ₜ',
+    u: 'ᵤ', v: 'ᵥ', x: 'ₓ',
+};
+const SUP_MAP = {
+    0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹',
+    '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+    a: 'ᵃ', b: 'ᵇ', c: 'ᶜ', d: 'ᵈ', e: 'ᵉ', f: 'ᶠ', g: 'ᵍ',
+    h: 'ʰ', i: 'ⁱ', j: 'ʲ', k: 'ᵏ', l: 'ˡ', m: 'ᵐ', n: 'ⁿ',
+    o: 'ᵒ', p: 'ᵖ', r: 'ʳ', s: 'ˢ', t: 'ᵗ', u: 'ᵘ', v: 'ᵛ',
+    w: 'ʷ', x: 'ˣ', y: 'ʸ', z: 'ᶻ',
+};
+
+function convertSubSup(chars, map) {
+    let out = '';
+    for (const ch of chars) {
+        const mapped = map[ch];
+        if (!mapped) return null;
+        out += mapped;
+    }
+    return out;
+}
+
+function formatMathInner(raw) {
+    let s = String(raw || '');
+    // Strip comment-like %
+    s = s.replace(/(^|[^\\])%.*$/gm, '$1');
+    // Styling wrappers → keep content only
+    s = s.replace(/\\(?:text|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|boldsymbol|operatorname)\s*\{([^{}]*)\}/g, '$1');
+    // Accents → drop the accent, keep the base
+    s = s.replace(/\\(?:bar|hat|vec|tilde|dot|ddot|overline|underline|overrightarrow)\s*\{([^{}]*)\}/g, '$1');
+    s = s.replace(/\\(?:bar|hat|vec|tilde|dot|ddot)\s+([A-Za-z])/g, '$1');
+    // \frac{a}{b} → (a/b) — non-recursive, handles the common cases
+    for (let i = 0; i < 3; i++) {
+        const next = s.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1/$2)');
+        if (next === s) break;
+        s = next;
+    }
+    // \sqrt{x} → √(x); \sqrt[n]{x} → ⁿ√(x)
+    s = s.replace(/\\sqrt\s*\[([^\]]*)\]\s*\{([^{}]*)\}/g, (_, n, x) => `${convertSubSup(n, SUP_MAP) || `^${n}`}√(${x})`);
+    s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, '√($1)');
+    // Named commands → symbol / greek
+    s = s.replace(/\\([A-Za-z]+)\s*/g, (match, cmd) => {
+        if (GREEK_MAP[cmd]) return GREEK_MAP[cmd];
+        if (cmd in SYMBOL_MAP) return SYMBOL_MAP[cmd];
+        return match;
+    });
+    // Subscripts & superscripts with braces
+    s = s.replace(/_\{([^{}]*)\}/g, (_, inner) => convertSubSup(inner, SUB_MAP) ?? `_(${inner})`);
+    s = s.replace(/\^\{([^{}]*)\}/g, (_, inner) => convertSubSup(inner, SUP_MAP) ?? `^(${inner})`);
+    // Single-char _x / ^x
+    s = s.replace(/_([A-Za-z0-9+\-=()])/g, (_, c) => SUB_MAP[c] ?? `_${c}`);
+    s = s.replace(/\^([A-Za-z0-9+\-=()])/g, (_, c) => SUP_MAP[c] ?? `^${c}`);
+    // Cleanup: unescape \{ \} \$ \% \_ \# \&
+    s = s.replace(/\\([{}$%_#&])/g, '$1');
+    // Remove remaining stray backslashes in front of words (unrecognised cmds)
+    s = s.replace(/\\([A-Za-z]+)/g, '$1');
+    // Collapse any double spaces we introduced
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+}
+
+function convertLatexToUnicode(text) {
+    if (!text) return text;
+    let s = String(text);
+    // Display math \[ ... \]
+    s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => formatMathInner(inner));
+    // Inline math \( ... \)
+    s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => formatMathInner(inner));
+    // Block math $$ ... $$
+    s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => formatMathInner(inner));
+    // Inline math $ ... $  (kept conservative: no newline inside, so prose
+    // dollar signs in unrelated text don't get eaten)
+    s = s.replace(/\$([^\n$]+?)\$/g, (_, inner) => formatMathInner(inner));
+    return s;
+}
+
+/* ---------------- Lightweight Markdown renderer ----------------
+   Renders the small Markdown subset our agent produces: headings
+   (## / ###), bullet & numbered lists, fenced code blocks, inline
+   bold (**…**), italics (*…* / _…_), inline code (`…`), and links.
+   Done by hand so we don't pull in a 100KB dep just for chat. */
+
+function renderInline(text) {
+    const out = [];
+    let key = 0;
+    const re = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^)\n]+\))/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        if (m.index > last) out.push(text.slice(last, m.index));
+        const tok = m[0];
+        if (tok.startsWith('**')) {
+            out.push(<strong key={key++}>{tok.slice(2, -2)}</strong>);
+        } else if (tok.startsWith('`')) {
+            out.push(<code key={key++} className="ai-md-code">{tok.slice(1, -1)}</code>);
+        } else if (tok.startsWith('[')) {
+            const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok);
+            if (linkMatch) {
+                out.push(
+                    <a
+                        key={key++}
+                        className="ai-md-link"
+                        href={linkMatch[2]}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                    >
+                        {linkMatch[1]}
+                    </a>
+                );
+            } else {
+                out.push(tok);
+            }
+        } else {
+            // *italic* or _italic_
+            out.push(<em key={key++}>{tok.slice(1, -1)}</em>);
+        }
+        last = m.index + tok.length;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+}
+
+function MarkdownContent({ text }) {
+    const blocks = useMemo(() => {
+        /* Run the LaTeX → Unicode pass BEFORE block parsing so math
+           appears as readable symbols inside paragraphs, bullets,
+           and headings alike. Fenced code blocks are re-extracted
+           below and the transform inside them gets reverted. */
+        const src = convertLatexToUnicode(String(text || ''));
+        const lines = src.split('\n');
+        const out = [];
+        let para = [];
+        let list = null;        // { type: 'ul'|'ol', items: [] }
+        let code = null;        // { lang, lines: [] }
+
+        const flushPara = () => {
+            if (para.length) {
+                out.push({ type: 'p', text: para.join(' ') });
+                para = [];
+            }
+        };
+        const flushList = () => {
+            if (list) {
+                out.push({ type: list.type, items: list.items });
+                list = null;
+            }
+        };
+
+        for (const raw of lines) {
+            const line = raw.replace(/\s+$/, '');
+
+            // Fenced code block
+            const fence = /^```(\w+)?\s*$/.exec(line);
+            if (code) {
+                if (fence) {
+                    out.push({ type: 'code', lang: code.lang, text: code.lines.join('\n') });
+                    code = null;
+                } else {
+                    code.lines.push(raw);
+                }
+                continue;
+            }
+            if (fence) {
+                flushPara(); flushList();
+                code = { lang: fence[1] || '', lines: [] };
+                continue;
+            }
+
+            // Blank line — paragraph / list separator
+            if (!line.trim()) {
+                flushPara();
+                flushList();
+                continue;
+            }
+
+            // Headings
+            const h = /^(#{1,4})\s+(.+)$/.exec(line);
+            if (h) {
+                flushPara(); flushList();
+                out.push({ type: `h${h[1].length}`, text: h[2] });
+                continue;
+            }
+
+            // Horizontal rule
+            if (/^---+$/.test(line.trim())) {
+                flushPara(); flushList();
+                out.push({ type: 'hr' });
+                continue;
+            }
+
+            // Unordered list
+            const ul = /^[-•*]\s+(.+)$/.exec(line.trim());
+            if (ul) {
+                flushPara();
+                if (!list || list.type !== 'ul') { flushList(); list = { type: 'ul', items: [] }; }
+                list.items.push(ul[1]);
+                continue;
+            }
+
+            // Ordered list
+            const ol = /^(\d+)\.\s+(.+)$/.exec(line.trim());
+            if (ol) {
+                flushPara();
+                if (!list || list.type !== 'ol') { flushList(); list = { type: 'ol', items: [] }; }
+                list.items.push(ol[2]);
+                continue;
+            }
+
+            // Plain paragraph line
+            flushList();
+            para.push(line.trim());
+        }
+        if (code) out.push({ type: 'code', lang: code.lang, text: code.lines.join('\n') });
+        flushPara();
+        flushList();
+        return out;
+    }, [text]);
+
+    return (
+        <div className="ai-md">
+            {blocks.map((b, i) => {
+                switch (b.type) {
+                    case 'h1':
+                        return <h2 key={i} className="ai-md-h1">{renderInline(b.text)}</h2>;
+                    case 'h2':
+                        return <h3 key={i} className="ai-md-h2">{renderInline(b.text)}</h3>;
+                    case 'h3':
+                    case 'h4':
+                        return <h4 key={i} className="ai-md-h3">{renderInline(b.text)}</h4>;
+                    case 'p':
+                        return <p key={i} className="ai-md-p">{renderInline(b.text)}</p>;
+                    case 'ul':
+                        return (
+                            <ul key={i} className="ai-md-ul">
+                                {b.items.map((it, j) => (
+                                    <li key={j}>{renderInline(it)}</li>
+                                ))}
+                            </ul>
+                        );
+                    case 'ol':
+                        return (
+                            <ol key={i} className="ai-md-ol">
+                                {b.items.map((it, j) => (
+                                    <li key={j}>{renderInline(it)}</li>
+                                ))}
+                            </ol>
+                        );
+                    case 'code':
+                        return (
+                            <pre key={i} className="ai-md-pre">
+                                <code className={`ai-md-pre-code lang-${b.lang || 'text'}`}>
+                                    {b.text}
+                                </code>
+                            </pre>
+                        );
+                    case 'hr':
+                        return <hr key={i} className="ai-md-hr" />;
+                    default:
+                        return null;
+                }
+            })}
         </div>
     );
 }

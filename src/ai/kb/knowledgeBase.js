@@ -54,6 +54,14 @@ function helpSectionToChunk(section) {
 
 const HELP_CHUNKS = GUIDE_SECTIONS.map(helpSectionToChunk);
 
+/* Lookup so the grounded-answer engine can recover the original
+   structured fields (intro / fundamentals / implemented / steps) for
+   help-page sections, instead of working off the flattened text blob. */
+const HELP_SECTIONS_BY_ID = new Map();
+for (const section of GUIDE_SECTIONS) {
+    HELP_SECTIONS_BY_ID.set(`help:${section.id}`, section);
+}
+
 /* ---------- Markdown splitter ------------------------------------- */
 
 /**
@@ -198,6 +206,336 @@ export function retrieveContext(query, { k = 4 } = {}) {
     return INDEX.searchWithDiversity(expanded, k);
 }
 
+function sentenceize(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function pickQueryTerms(query) {
+    return String(query || '')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length >= 4)
+        .slice(0, 8);
+}
+
+function uniquePush(out, seen, value) {
+    const v = sentenceize(value);
+    if (!v) return;
+    const key = v.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(v);
+}
+
+/* Detect what *kind* of answer the user wants so we can pick the
+   right structural template — howto vs concept vs overview vs list.
+   Cheap regex-based intent classifier — sufficient for top-of-funnel
+   routing and avoids spinning up the model just to choose a layout. */
+function detectIntent(query) {
+    const q = String(query || '').toLowerCase();
+    if (/\b(how (do|to|can)|step by step|guide me|walk me through|where do i|use the|set up|configure)\b/.test(q)) return 'howto';
+    if (/\b(why|theory|principle|how does .* work|under the hood|fundamental|concept|background|what is the (idea|principle))\b/.test(q)) return 'concept';
+    if (/\b(list|all features|capabilities|what can|everything)\b/.test(q)) return 'capabilities';
+    return 'overview';
+}
+
+function fmtList(items) {
+    return items
+        .map((s) => stripBold(String(s || '')).trim())
+        .filter(Boolean)
+        .map((s) => `- ${s.replace(/[.!?]+$/, '')}.`)
+        .join('\n');
+}
+
+function fmtSteps(items) {
+    return items
+        .map((s) => stripBold(String(s || '')).trim())
+        .filter(Boolean)
+        .map((s, i) => `${i + 1}. ${s.replace(/[.!?]+$/, '')}.`)
+        .join('\n');
+}
+
+/* Render a structured Help section as Markdown using the original
+   schema fields (intro / fundamentals / implemented / steps) so the
+   answer reads like a properly authored doc page rather than a flat
+   bullet dump. The intent picks WHICH fields lead the response. */
+function renderStructuredHelpAnswer(section, intent) {
+    const lines = [];
+    const subtitle = section.subtitle ? ` — ${section.subtitle}` : '';
+    lines.push(`## ${section.title}${subtitle}`);
+    if (section.intro) {
+        lines.push('', stripBold(section.intro));
+    }
+
+    const hasSteps = Array.isArray(section.steps) && section.steps.length > 0;
+    const hasFeatures = Array.isArray(section.implemented) && section.implemented.length > 0;
+    const hasFundamentals = Array.isArray(section.fundamentals) && section.fundamentals.length > 0;
+
+    if (intent === 'howto') {
+        if (hasSteps) lines.push('', '### How to use it', fmtSteps(section.steps.slice(0, 8)));
+        else if (hasFeatures) lines.push('', '### What you can do here', fmtList(section.implemented.slice(0, 6)));
+        if (hasFeatures && hasSteps) lines.push('', '### Useful features', fmtList(section.implemented.slice(0, 4)));
+    } else if (intent === 'concept') {
+        if (hasFundamentals) lines.push('', '### Key concepts', fmtList(section.fundamentals.slice(0, 6)));
+        if (hasFeatures) lines.push('', '### How it shows up in NozePlot', fmtList(section.implemented.slice(0, 4)));
+    } else if (intent === 'capabilities') {
+        if (hasFeatures) lines.push('', '### Capabilities', fmtList(section.implemented.slice(0, 8)));
+        if (hasSteps) lines.push('', '### Typical workflow', fmtSteps(section.steps.slice(0, 6)));
+    } else {
+        // overview
+        if (hasFeatures) lines.push('', '### What it does', fmtList(section.implemented.slice(0, 5)));
+        if (hasSteps) lines.push('', '### How to use it', fmtSteps(section.steps.slice(0, 5)));
+        if (hasFundamentals) lines.push('', '### Background', fmtList(section.fundamentals.slice(0, 3)));
+    }
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/* Tidy a chunk title for display: drops leading "9.", "9.1", trailing
+   "(part 2)", etc. so a chunk like "9. Sensor probe methodology
+   (part 2)" surfaces as "Sensor probe methodology". */
+function cleanChunkTitle(title) {
+    const cleaned = String(title || '')
+        .replace(/^\d+(?:\.\d+)*\s*[\.\):\-]?\s*/, '')
+        .replace(/\s*\(part\s+\d+\)\s*$/i, '')
+        .trim();
+    return cleaned || String(title || 'this section').trim();
+}
+
+/* Aggressively scrub a single line from a markdown reference doc so
+   it can be presented as a clean bullet. Returns '' if the line is
+   noise (math, headings, table separators, code fences, citations,
+   too-short, mostly punctuation). */
+function cleanChunkLine(raw) {
+    let s = String(raw || '')
+        .replace(/^>\s*/, '')                  // blockquote
+        .replace(/^[-•*+]\s*/, '')             // bullet marker
+        .replace(/^\d+(?:\.\d+)*[\.\):]\s*/, '') // numbered list / "9.1"
+        .trim();
+
+    if (!s) return '';
+    if (/^#{1,6}\s/.test(s)) return '';        // markdown heading
+    if (/^[\|\-\:\s]+$/.test(s)) return '';    // table separator row
+    if (/^\|.*\|$/.test(s)) return '';         // table data row
+    if (/^```/.test(s)) return '';             // code fence
+    if (/^!\[/.test(s)) return '';             // image
+    if (/^figure\s*\d+/i.test(s)) return '';   // figure caption
+    if (/^equation\s*\(?\d+/i.test(s)) return '';
+
+    // Reject lines saturated with LaTeX math.
+    const dollars = (s.match(/\$/g) || []).length;
+    const backslashes = (s.match(/\\/g) || []).length;
+    if (dollars >= 4 || backslashes >= 4) return '';
+
+    // Strip inline math tokens for display.
+    s = s.replace(/\$\$[^$]+\$\$/g, '').replace(/\$[^$\n]+\$/g, '').trim();
+    // Strip leftover backslash macros.
+    s = s.replace(/\\[a-zA-Z]+\{[^}]*\}/g, '').replace(/\\[a-zA-Z]+/g, '').trim();
+    // Collapse whitespace.
+    s = s.replace(/\s+/g, ' ').trim();
+
+    if (s.length < 24 || s.length > 260) return '';
+
+    // Reject if mostly punctuation / symbols (after math removal).
+    const letters = (s.match(/[a-zA-Z]/g) || []).length;
+    if (letters < s.length * 0.55) return '';
+
+    // Reject lines that are obviously a sub-heading carried as text
+    // ("What is recorded", "Definitions", etc.) — too short and end
+    // with no terminal punctuation, often <= 4 words.
+    const wordCount = s.split(/\s+/).length;
+    if (wordCount <= 4 && !/[.!?]$/.test(s)) return '';
+
+    return s;
+}
+
+/* Reassemble hard-wrapped prose into proper sentences before we look
+   at it. Markdown reference docs in this codebase tend to wrap at
+   ~80 columns, so a single sentence ends up on 2-3 physical lines.
+   Naïvely bulleting each physical line is what produced the broken
+   "Flow Lab solves 2-D incompressible viscous flow (Navier–." output. */
+function joinWrappedProse(text) {
+    const lines = String(text || '').split('\n');
+    const merged = [];
+    let buf = '';
+    const flush = () => {
+        const t = buf.trim();
+        if (t) merged.push(t);
+        buf = '';
+    };
+    for (const raw of lines) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim()) { flush(); continue; }
+        // Block-level markers always start a fresh logical line.
+        if (/^(#{1,6}\s|[-•*+]\s|\d+\.\s|>\s|\||```)/.test(line)) {
+            flush();
+            merged.push(line);
+            continue;
+        }
+        buf = buf ? `${buf} ${line.trim()}` : line.trim();
+        // If the line clearly ends a sentence, flush so the next line
+        // becomes its own sentence rather than joining with this one.
+        if (/[.!?][\)"']?$/.test(line)) flush();
+    }
+    flush();
+    return merged;
+}
+
+/* Split a long prose blob into individual sentences (handling common
+   abbreviations crudely — "e.g.", "i.e.", "Dr.", "Fig.", "Eq."). */
+function splitSentences(s) {
+    return String(s || '')
+        .replace(/\b(e\.g|i\.e|cf|vs|fig|eq|dr|mr|mrs|ms|st|approx)\.\s/gi, '$1<DOT> ')
+        .split(/(?<=[.!?])\s+(?=[A-Z(])/)
+        .map((x) => x.replace(/<DOT>/g, '.').trim())
+        .filter(Boolean);
+}
+
+/* Fallback for chunks that came from a markdown reference document
+   (FlowLab.md, Telemetry.md, README.md). Pipeline:
+     1. Re-flow hard-wrapped prose so a paragraph is one logical unit.
+     2. Scrub each unit (drops math/headings/table noise).
+     3. If the chunk leads with a meaty paragraph, present that
+        paragraph verbatim and add a few supporting bullets afterwards.
+     4. Otherwise extract query-relevant sentences as bullets. */
+function renderTextChunkAnswer(top, query) {
+    const terms = pickQueryTerms(query);
+    const reflowed = joinWrappedProse(top.text);
+
+    // Pick the first non-trivial paragraph as the lead, if it survives
+    // scrubbing and contains at least one query term (or terms are empty).
+    let lead = '';
+    let leadIdx = -1;
+    for (let i = 0; i < Math.min(reflowed.length, 5); i++) {
+        const candidate = cleanChunkLine(reflowed[i]);
+        if (!candidate) continue;
+        const wordCount = candidate.split(/\s+/).length;
+        if (wordCount < 14) continue;
+        const lower = candidate.toLowerCase();
+        if (!terms.length || terms.some((t) => lower.includes(t))) {
+            // If the paragraph is long, trim it to its first 2 sentences
+            // for a tight, readable lead.
+            const sents = splitSentences(candidate);
+            lead = sents.slice(0, 2).join(' ').trim() || candidate;
+            leadIdx = i;
+            break;
+        }
+    }
+
+    // Build a bullet pool from everything *except* the lead paragraph.
+    const seen = new Set();
+    if (lead) seen.add(lead.toLowerCase());
+    const prioritized = [];
+    const general = [];
+
+    for (let i = 0; i < reflowed.length; i++) {
+        if (i === leadIdx) continue;
+        const unit = reflowed[i];
+        // A reflowed unit may itself be multiple sentences — split so
+        // each bullet is one digestible idea.
+        const sents = splitSentences(unit);
+        for (const sent of sents) {
+            const clean = cleanChunkLine(sent);
+            if (!clean) continue;
+            const key = clean.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const lower = key;
+            if (terms.some((t) => lower.includes(t))) prioritized.push(clean);
+            else general.push(clean);
+        }
+    }
+
+    const bullets = [...prioritized, ...general].slice(0, 5);
+    if (!lead && !bullets.length) return '';
+
+    const title = cleanChunkTitle(top.title);
+    const lines = [`## ${title}`];
+    if (lead) lines.push('', lead);
+    if (bullets.length) lines.push('', '### Key points', fmtList(bullets));
+    return lines.join('\n');
+}
+
+/**
+ * Deterministic grounded answer builder for NozePlot app questions.
+ *
+ * Pipeline:
+ *  1. BM25 retrieval (already MMR-diversified upstream).
+ *  2. Drop hits below `minScore` so we never speak with low confidence.
+ *  3. If the top hit is a Help-page section, render its STRUCTURED
+ *     fields (intro / steps / features / fundamentals) into clean
+ *     Markdown using the user's intent (howto / concept / etc.).
+ *  4. Otherwise fall back to a deduped highlights list extracted
+ *     from the chunk body.
+ *  5. Append a "Related sections" footer so users can pivot.
+ *
+ * Returns `{ text, intent, sources }` or null on weak retrieval.
+ */
+export function buildGroundedAppAnswer({
+    query,
+    k = 5,
+    minScore = 1.6,
+} = {}) {
+    const hits = retrieveContext(query, { k }).filter((h) => h.score >= minScore);
+    if (!hits.length) return null;
+
+    const intent = detectIntent(query);
+
+    /* Source preference:
+       Help-page sections are CURATED user-facing content (intro, steps,
+       implemented features, fundamentals) — they are exactly what we
+       want to surface for "explain X" / "what is X" / "how do I X"
+       questions. Markdown reference docs (FlowLab.md, Telemetry.md)
+       are deep technical write-ups; their intro paragraphs are
+       hard-wrapped prose that fragments badly when bulletised.
+
+       So: for overview / howto / capabilities intents, prefer a
+       Help-section hit even if a markdown ref scored slightly higher.
+       Only let the markdown ref win when the user is asking a
+       deep-dive concept question, OR when no Help section is in the
+       top-k retrieval at all. */
+    let top = hits[0];
+    if (intent !== 'concept') {
+        const helpHit = hits.find((h) => HELP_SECTIONS_BY_ID.has(h.id));
+        if (helpHit && helpHit !== top && helpHit.score >= top.score * 0.55) {
+            top = helpHit;
+        }
+    }
+
+    const structured = HELP_SECTIONS_BY_ID.get(top.id);
+    const text = structured
+        ? renderStructuredHelpAnswer(structured, intent)
+        : renderTextChunkAnswer(top, query);
+
+    if (!text) return null;
+
+    /* Reorder sources so the chosen lead source appears first in the
+       chip row too (otherwise the user sees `Flow Lab — Technical
+       Reference` chip first while the bubble talks about the Help
+       section, which is confusing). */
+    const orderedHits = [top, ...hits.filter((h) => h !== top)];
+    const related = orderedHits.slice(1, 3).map((h) => h.title).filter(Boolean);
+    const tail = related.length ? `\n\n_Related sections:_ ${related.join(' · ')}` : '';
+
+    return {
+        text: text + tail,
+        intent,
+        sources: orderedHits.map((h) => ({
+            id: h.id,
+            title: h.title,
+            source: h.source,
+            anchor: h.anchor,
+            score: h.score,
+        })),
+    };
+}
+
+/* uniquePush kept around in case we want to compose multi-section
+   answers later. Currently unused. */
+void uniquePush;
+
 /* ================================================================
  *  App Primer — always-on knowledge about NozePlot
  * ================================================================
@@ -270,7 +608,16 @@ export function buildAugmentedSystemPrompt({
     history = [],
     budgetChars = 2200,
     k = 4,
-    minScore = 0.4,
+    /* Absolute floor: below this, the top hit is so weak we'd just be
+       polluting the prompt with unrelated sections (e.g. the user
+       asks "what is ALAAC library?" — BM25 finds the word "library"
+       in three help pages and injects them). Tuned against our
+       hybrid scorer: real matches land ≥ 1.5, tangential noise < 1.0. */
+    minScore = 1.2,
+    /* Relative floor: once we have a real top hit, additional hits
+       must score within `relativeFloor` × top_score to qualify. Stops
+       one great hit from dragging along three irrelevant neighbours. */
+    relativeFloor = 0.45,
     /* `modelTier` lets the caller tell us how capable the currently
        loaded LLM is. Sub-500M-param 'experimental' models can't follow
        a multi-rule RAG prompt — they hallucinate jargon and drop
@@ -286,7 +633,19 @@ export function buildAugmentedSystemPrompt({
 
     const retrievalQuery = [query, ...history.slice(-2)].filter(Boolean).join(' \n ');
     const rawHits = retrieveContext(retrievalQuery, { k: effectiveK });
-    const hits = rawHits.filter((h) => h.score >= minScore);
+
+    /* Two-stage relevance gate:
+       1. Top hit must clear the absolute floor — otherwise the whole
+          corpus had basically zero overlap with the query and we
+          should inject NOTHING.
+       2. Remaining hits must clear a relative floor vs the top hit —
+          otherwise we'd drag one-keyword-overlap sections into the
+          prompt and display misleading source chips. */
+    let hits = [];
+    if (rawHits.length > 0 && rawHits[0].score >= minScore) {
+        const topScore = rawHits[0].score;
+        hits = rawHits.filter((h) => h.score >= Math.max(minScore, topScore * relativeFloor));
+    }
 
     const basePrompt = (userSystem || '').trim() || DEFAULT_PERSONA;
 
@@ -401,11 +760,24 @@ const RAG_POLICY_WITH_HITS = [
     '• Do NOT mention passage numbers or titles in your reply. The user sees linked source chips below the answer.',
     '• If the passages don\'t cover the question, say what you do know from the primer and offer a reasonable next step (e.g. open the Help page).',
     '• Stay specific, practical, and action-oriented — prefer "click X, then Y" over abstract description.',
+    '',
+    'FORMAT (Markdown — render cleanly in a chat bubble):',
+    '• Open with one short summary sentence (no heading).',
+    '• Then use a `### Heading` for each grouping (e.g. `### What it does`, `### How to use it`, `### Tips`).',
+    '• Under each heading use `- ` bullets, or `1.` numbered steps for sequential procedures.',
+    '• Use **bold** for UI labels, settings, and tab names. Use `inline code` for file paths or exact identifiers.',
+    '• Keep TIGHT: 3–7 bullets or 3–6 steps total. Stop as soon as the question is answered. No filler, no apologies, no recap.',
 ].join('\n');
 
 const RAG_POLICY_NO_HITS = [
     'No specific Help-guide passage strongly matched this question.',
     'If it\'s about NozePlot, answer from the primer above. If it\'s a general question, answer normally from your own knowledge.',
+    '',
+    'FORMAT (Markdown — render cleanly in a chat bubble):',
+    '• Lead with one direct sentence answering the question.',
+    '• Use `### Heading` sections only when the answer naturally has 2+ groupings.',
+    '• Use `- ` bullets for lists, `1.` for ordered steps, **bold** for key terms, and `inline code` for technical identifiers.',
+    '• Keep it concise — depth over length.',
 ].join('\n');
 
 /**
@@ -415,5 +787,15 @@ const RAG_POLICY_NO_HITS = [
  * user-supplied system prompt, since they apply regardless of whether
  * KB is injected.
  */
-const DEFAULT_PERSONA =
-    'You are NozeAssistant, a friendly, knowledgeable AI assistant. Answer the user accurately and helpfully — general knowledge, reasoning, coding, writing, chit-chat, anything they ask. Be concise, specific, and think step by step when a question is non-trivial.';
+const DEFAULT_PERSONA = [
+    'You are NozeAssistant, a friendly, knowledgeable AI assistant.',
+    'Answer the user accurately and helpfully — general knowledge, reasoning, coding, writing, chit-chat, anything they ask.',
+    'Be concise, specific, and think step by step when a question is non-trivial.',
+    '',
+    'Response style (Markdown — rendered live in the chat):',
+    '• Lead with the direct answer in 1 short sentence.',
+    '• Use `### Heading` sections only when the answer has 2+ natural groupings.',
+    '• Use `- ` bullets for lists, `1.` for ordered steps, **bold** for key terms, and `inline code` for code, paths, or identifiers.',
+    '• Use ```fenced code blocks``` for any multi-line code.',
+    '• No filler, no recap, no "I hope this helps". Stop as soon as the question is answered.',
+].join('\n');

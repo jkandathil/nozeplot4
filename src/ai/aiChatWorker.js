@@ -252,19 +252,30 @@ async function generate(messages, params) {
         });
 
         const {
-            max_new_tokens = 512,
-            temperature = 0.7,
-            top_p = 0.9,
+            max_new_tokens = 400,
+            temperature = 0.4,
+            top_p = 0.85,
             do_sample = true,
-            repetition_penalty = 1.1,
+            repetition_penalty = 1.15,
+            /* Hard cadence guard: 0 disables, 3–4 is typical. We
+               default to 0 here so the worker stays generic; the UI
+               layer is the one that decides per model tier whether to
+               enable it. */
+            no_repeat_ngram_size = 0,
+            /* Top-K sampling cutoff. 0 disables, 40 is a sane chat
+               default. Caps the rare-word tail that drives "lamb leg
+               lemon line linking logistics" thesaurus drift. */
+            top_k = 0,
         } = params || {};
 
         const output = await generator(messages, {
             max_new_tokens,
             temperature,
             top_p,
+            top_k,
             do_sample,
             repetition_penalty,
+            no_repeat_ngram_size,
             streamer,
             stopping_criteria: stoppingCriteria,
         });

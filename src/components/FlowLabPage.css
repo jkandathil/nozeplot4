@@ -387,13 +387,17 @@ html[data-theme="light"] .fl-edge-toggle.is-closed {
 
 .fl-entity-row {
     display: flex;
-    justify-content: space-between;
-    padding: 6px 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 5px 8px;
     border-radius: 5px;
     cursor: pointer;
     font-size: 0.78rem;
     margin-bottom: 3px;
     border: 1px solid transparent;
+    min-width: 0;
+    overflow: hidden;
 }
 .fl-entity-row:hover { background: rgba(255, 255, 255, 0.04); }
 .fl-entity-row.is-sel {
@@ -401,8 +405,20 @@ html[data-theme="light"] .fl-edge-toggle.is-closed {
     border-color: rgba(5, 192, 125, 0.3);
     color: var(--accent-primary);
 }
-.fl-entity-type { font-weight: 600; text-transform: capitalize; }
-.fl-entity-sub  { color: var(--text-muted); font-size: 0.72rem; }
+.fl-entity-type {
+    font-weight: 600;
+    text-transform: capitalize;
+    line-height: 1.15;
+}
+.fl-entity-sub {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    line-height: 1.15;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 .fl-entity-hint {
     font-size: 0.68rem;
@@ -657,6 +673,156 @@ html[data-theme="light"] .fl-origin-label {
     opacity: 0.85;
     pointer-events: none;
 }
+/* Bilinear/smooth rendering — hides LBM cell boundaries, eliminates
+ * the moiré stripes that appear when the pixelated canvas is CSS-
+ * scaled to a non-integer multiple of nx×ny. */
+.fl-heatmap.is-smooth {
+    image-rendering: auto;
+    image-rendering: smooth;
+    -ms-interpolation-mode: bicubic;
+}
+
+/* Mesh visualization overlay — sits directly on top of the
+ * velocity heatmap and mirrors its bbox. pointer-events: none so
+ * the geometry SVG beneath still gets all clicks. */
+.fl-mesh-overlay {
+    position: absolute;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0.9;
+}
+.fl-mesh-overlay--cells,
+.fl-mesh-overlay--boundary {
+    image-rendering: pixelated;
+}
+.fl-mesh-overlay--grid,
+.fl-mesh-overlay--stagger {
+    image-rendering: auto;
+}
+.fl-mesh-overlay--boundary { opacity: 0.95; }
+
+/* Mesh-viz UI — radio group + smoothing toggle in the side panel. */
+.fl-mesh-viz-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+}
+.fl-mesh-viz-btn {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    line-height: 1.25;
+    min-width: 0;
+    transition: background 0.12s, border-color 0.12s;
+}
+.fl-mesh-viz-btn:hover { background: var(--bg-hover, rgba(148, 163, 184, 0.12)); }
+.fl-mesh-viz-btn.is-active {
+    border-color: var(--accent-color, #3b82f6);
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 14%, transparent);
+    color: var(--text-primary);
+}
+.fl-mesh-viz-btn-label {
+    font-weight: 600;
+    font-size: 12px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.fl-mesh-viz-btn-hint  {
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fl-mesh-viz-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    user-select: none;
+}
+.fl-mesh-viz-row input[type="checkbox"] {
+    accent-color: var(--accent-color, #3b82f6);
+    width: 14px; height: 14px;
+}
+.fl-mesh-viz-note {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+/* Field-view selector (velocity / concentration / both) — vertical
+ * stack with label on the left and hint on the right, so long
+ * labels like "Concentration" never clip at narrow panel widths. */
+.fl-field-view-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 6px 0;
+}
+.fl-field-view-btn {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    line-height: 1.25;
+    min-width: 0;
+    transition: background 0.12s, border-color 0.12s;
+}
+.fl-field-view-btn:hover { background: var(--bg-hover, rgba(148, 163, 184, 0.12)); }
+.fl-field-view-btn.is-active {
+    border-color: var(--accent-color, #3b82f6);
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 14%, transparent);
+}
+.fl-field-view-btn-label {
+    font-weight: 600;
+    font-size: 12px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.fl-field-view-btn-hint {
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fl-field-view-note {
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.45;
+}
 
 .fl-grid-minor {
     stroke: rgba(255, 255, 255, 0.05);
@@ -697,6 +863,45 @@ html[data-theme="light"] .fl-origin-label {
 
 .fl-entity.is-preview .fl-edge { stroke-dasharray: 4 3; opacity: 0.7; }
 .fl-entity.is-preview .fl-entity-fill { fill: rgba(5, 192, 125, 0.04); }
+
+/* Obstacles — closed polygons the solver carves OUT of the fluid
+   domain (no-slip void). Hatched fill + amber wall outline flags
+   them clearly so the user knows they're solids, not fluid. */
+.fl-entity.is-obstacle .fl-entity-fill {
+    fill: url(#fl-obstacle-hatch);
+}
+.fl-entity.is-obstacle .fl-edge-wall {
+    stroke: #f59e0b;
+    stroke-width: 2.25;
+}
+.fl-entity.is-obstacle.is-sel .fl-entity-fill {
+    fill: url(#fl-obstacle-hatch-sel);
+}
+.fl-entity-cb--obstacle {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #f59e0b;
+    padding: 0 2px;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.fl-entity-cb--obstacle input[type="checkbox"] {
+    accent-color: #f59e0b;
+    width: 12px;
+    height: 12px;
+    cursor: pointer;
+    margin: 0;
+}
+.fl-entity-row.is-obstacle .fl-entity-type {
+    color: #f59e0b;
+}
 
 .fl-vertex {
     fill: rgba(255, 255, 255, 0.6);
@@ -2090,6 +2295,23 @@ html[data-theme="light"] .fl-fx-modal {
     font-size: 11px;
     line-height: 1.4;
 }
+/* Heavy-mesh warning — stronger visual weight than .fl-mesh-note to
+   signal "the solver may take minutes" rather than a procedural hint. */
+.fl-mesh-warn {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: rgba(248, 113, 113, 0.98);
+    font-size: 11px;
+    line-height: 1.45;
+}
+html[data-theme="light"] .fl-mesh-warn {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(220, 38, 38, 0.45);
+    color: rgba(153, 27, 27, 0.95);
+}
 html[data-theme="light"] .fl-mesh-preset {
     background: rgba(255, 255, 255, 0.8);
     border-color: rgba(15, 23, 42, 0.16);
@@ -2574,12 +2796,32 @@ html[data-theme="light"] .fl-bc-toggle button.is-active { background: #ffffff; }
 
 /* Species concentration overlay canvas — same box as the velocity
  * heatmap, sitting just on top of it. pointer-events: none so the
- * geometry canvas beneath stays clickable. */
+ * geometry canvas beneath stays clickable.
+ *
+ * Two modes, driven by the `fieldView` state:
+ *   • .fl-species-overlay--both         blended on top of velocity
+ *                                       (alpha is baked into the canvas
+ *                                       pixels, so use normal compositing
+ *                                       instead of screen — we now drive
+ *                                       brightness by LUT, not additive
+ *                                       white light)
+ *   • .fl-species-overlay--concentration solo, opaque, full-colour
+ */
 .fl-species-overlay {
+    position: absolute;
     pointer-events: none;
-    mix-blend-mode: screen;
+    z-index: 3;
     image-rendering: pixelated;
-    image-rendering: crisp-edges;
+}
+.fl-species-overlay.is-smooth {
+    image-rendering: auto;
+    image-rendering: smooth;
+}
+.fl-species-overlay--both {
+    opacity: 1;
+}
+.fl-species-overlay--concentration {
+    opacity: 1;
 }
 
 /* Sensor response panel — bundles the charts, per-sensor legend rows,
@@ -3028,5 +3270,280 @@ html[data-theme="light"] .fl-viz-chip.is-on {
 }
 html[data-theme="light"] .fl-viz-body {
     background: #f8fafc;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Flow Lab home page
+ *  Embedded inside the canvas area (NOT a modal / popup). Fills
+ *  the canvas-wrap, scrolls internally if needed, and sits between
+ *  the left and right panels so the regular Flow Lab chrome is
+ *  still visible around it.
+ * ═══════════════════════════════════════════════════════════════ */
+.fl-canvas-wrap.is-home {
+    overflow: auto;
+    background: var(--bg-primary);
+}
+/* Hide canvas-only decorations (XY axes gizmo, scale/zoom readouts,
+   streamline overlays, etc.) while the home page is showing — they
+   don't belong on a welcome screen. */
+.fl-canvas-wrap.is-home .fl-axes-gizmo,
+.fl-canvas-wrap.is-home .fl-scale-bar,
+.fl-canvas-wrap.is-home .fl-mini-readout,
+.fl-canvas-wrap.is-home .fl-edge-toggle {
+    display: none !important;
+}
+
+/* ── Home-mode chrome suppression ──
+   When the Flow Lab home page is showing we want a completely clean
+   welcome surface — no CAD ribbon, no Reynolds badge, no side panels,
+   no status bar. Those belong to the drawing workspace. The home page
+   overlay keeps all its interactivity inside its own card grid. */
+.fl-page.is-home-mode .fl-toolbar,
+.fl-page.is-home-mode .fl-re-badge,
+.fl-page.is-home-mode .fl-status,
+.fl-page.is-home-mode .fl-left,
+.fl-page.is-home-mode .fl-right {
+    display: none !important;
+}
+.fl-page.is-home-mode .fl-main {
+    grid-template-columns: 1fr !important;
+}
+
+.fl-home {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-primary);
+    overflow: auto;
+    z-index: 3;             /* above heatmap SVG, below tour overlays */
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+    animation: fl-fx-fade 0.14s ease-out;
+}
+
+.fl-home-inner {
+    width: min(980px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.fl-home-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 4px 18px 4px;
+    border-bottom: 1px solid var(--border-color);
+}
+.fl-home-title {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.fl-home-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    max-width: 620px;
+}
+.fl-landing-section {
+    padding: 20px 4px 8px 4px;
+}
+.fl-landing-section + .fl-landing-section { padding-top: 14px; }
+.fl-landing-section-hd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+.fl-landing-section-count {
+    margin-left: auto;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-secondary);
+    opacity: 0.75;
+}
+
+.fl-landing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+}
+.fl-landing-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-radius: 10px;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.12s, transform 0.12s, background 0.12s;
+}
+.fl-landing-card:hover {
+    border-color: var(--accent-color, #3b82f6);
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 8%, var(--bg-secondary));
+    transform: translateY(-1px);
+}
+.fl-landing-card:focus-visible {
+    outline: 2px solid var(--accent-color, #3b82f6);
+    outline-offset: 2px;
+}
+.fl-landing-card--featured {
+    border-color: color-mix(in srgb, var(--accent-color, #3b82f6) 55%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 12%, var(--bg-secondary));
+}
+.fl-landing-card--primary {
+    border-color: color-mix(in srgb, var(--accent-color, #3b82f6) 35%, var(--border-color));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color, #3b82f6) 22%, transparent) inset;
+}
+.fl-landing-card--primary .fl-landing-card-icon {
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 24%, transparent);
+}
+.fl-landing-card-icon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 18%, transparent);
+    color: var(--accent-color, #3b82f6);
+}
+.fl-landing-card-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fl-landing-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.fl-landing-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+.fl-landing-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+.fl-landing-card-tags span {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+    color: var(--text-secondary);
+    text-transform: lowercase;
+}
+
+.fl-landing-recents {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+}
+.fl-landing-recent {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+}
+.fl-landing-recent:hover {
+    border-color: var(--accent-color, #3b82f6);
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 8%, var(--bg-secondary));
+}
+.fl-landing-recent:focus-visible {
+    outline: 2px solid var(--accent-color, #3b82f6);
+    outline-offset: 2px;
+}
+.fl-landing-recent-icon {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+    color: var(--text-secondary);
+}
+.fl-landing-recent-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fl-landing-recent-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fl-landing-recent-path {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+.fl-landing-recent-meta {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-secondary);
+    opacity: 0.8;
+}
+
+.fl-landing-empty {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.fl-landing-empty svg {
+    flex: 0 0 auto;
+    opacity: 0.6;
+}
+
+html[data-theme="light"] .fl-home {
+    background: var(--bg-primary);
+}
+html[data-theme="light"] .fl-landing-card-icon {
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 15%, #ffffff);
+}
+html[data-theme="light"] .fl-landing-card-tags span {
+    background: #eef2f7;
+    color: #475569;
+}
+html[data-theme="light"] .fl-landing-recent-icon {
+    background: #f1f5f9;
 }
 

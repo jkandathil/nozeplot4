@@ -39,6 +39,74 @@ import {
 import { COLORMAPS, COLORMAP_NAMES } from '../flowlab/colormap.js';
 import './FlowLabPage.css';
 
+/* ------------------------------------------------------------------
+ * ChartErrorBoundary
+ * ------------------------------------------------------------------
+ * Recharts occasionally throws from deep inside its own render tree
+ * (e.g. "Cannot read properties of null (reading '29700')") when the
+ * underlying dataset shrinks while the user is mid-hover or mid-
+ * animation — typically on Pause / Reset of a long-running simulation.
+ * This boundary contains that crash so the rest of Flow Lab and the
+ * whole app stay alive; the user just sees a friendly notice and a
+ * "Close" button that returns them to the canvas.
+ * ------------------------------------------------------------------ */
+class ChartErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { err: null };
+    }
+    static getDerivedStateFromError(err) {
+        return { err };
+    }
+    componentDidCatch(err, info) {
+        try {
+            // eslint-disable-next-line no-console
+            console.warn('[FlowLab] chart crash caught by boundary:', err, info);
+        } catch { /* ignore */ }
+    }
+    reset = () => this.setState({ err: null });
+    render() {
+        if (this.state.err) {
+            return (
+                <div className="fl-fx-backdrop" role="alertdialog" aria-modal="true">
+                    <div className="fl-fx-modal" style={{ maxWidth: 460 }}>
+                        <div className="fl-fx-hd">
+                            <div className="fl-fx-title">Chart hit an error</div>
+                            <button
+                                className="fl-fx-close"
+                                onClick={() => { this.reset(); this.props.onClose?.(); }}
+                                aria-label="Close"
+                            >
+                                <CloseIcon size={16} />
+                            </button>
+                        </div>
+                        <div style={{ padding: '14px 18px', lineHeight: 1.5 }}>
+                            The data visualizer hit an internal error — usually caused by
+                            resetting or pausing right as a large dataset was being
+                            rendered. Your simulation state is fine.
+                            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                                <button
+                                    className="fl-toolbtn"
+                                    onClick={() => { this.reset(); this.props.onClose?.(); }}
+                                >
+                                    Close visualizer
+                                </button>
+                                <button
+                                    className="fl-toolbtn fl-toolbtn-primary"
+                                    onClick={this.reset}
+                                >
+                                    Try again
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
 /**
  * Flow Lab — 2D gas-path designer + LBM flow solver.
  *
@@ -345,6 +413,37 @@ const AROMA_CHAMBER_DOMAIN = () => {
     return ent;
 };
 
+/** Two pre-placed point probes for the aroma demo. They sit on the
+ *  centreline of the gas path so the Sensor response panel gets two
+ *  high-signal bulk-flow traces the moment Run is pressed.
+ *
+ *  Geometry reference (see AROMA_CHAMBER_DOMAIN):
+ *    • Inlet channel:  x ∈ [0, 10],  y ∈ [4, 6]  (2 mm wide)
+ *    • Chamber:        x ∈ [10, 20], y ∈ [0, 10] (10 × 10 mm square)
+ *    • Outlet channel: x ∈ [20, 30], y ∈ [4, 6]  (2 mm wide)
+ *
+ *  Probe A sits at (5, 5) — midway between the inlet and the chamber
+ *  entrance. Probe B sits at (25, 5) — midway between the chamber
+ *  exit and the outlet. Both are on the y = 5 mm centreline where
+ *  velocity peaks and c(t) arrives earliest, giving a clean upstream
+ *  vs. downstream comparison. */
+const AROMA_CHAMBER_PROBES = () => ([
+    {
+        id: 'p_aroma_in',
+        label: 'P_in (pre-chamber)',
+        x_mm: 5,
+        y_mm: 5,
+        color: PROBE_COLORS[0],
+    },
+    {
+        id: 'p_aroma_out',
+        label: 'P_out (post-chamber)',
+        x_mm: 25,
+        y_mm: 5,
+        color: PROBE_COLORS[1],
+    },
+]);
+
 /** Vertical section across the chamber centre (x = 15 mm) used by the
  *  aroma demo so the Profile chart has data the instant Run finishes. */
 const AROMA_CHAMBER_SECTION = () => ({
@@ -505,16 +604,92 @@ const BC_TYPES = [
 /* Mesh resolution presets — longest-axis lattice cells. Finer meshes
    resolve thin features and wall gradients better but scale O(N²) in
    memory and O(N³) in wall-clock to reach steady state. The custom
-   option lets power users push further if they're willing to wait. */
+   option lets power users push further if they're willing to wait.
+   Ultrafine / Extreme are opt-in — they use hundreds of MB of memory
+   and can take minutes to reach steady state in a browser worker. */
 const MESH_PRESETS = [
-    { id: 'coarse',     label: 'Coarse',     n: 150, hint: 'fast preview (≤ a few s)' },
-    { id: 'medium',     label: 'Medium',     n: 300, hint: 'default balance' },
-    { id: 'fine',       label: 'Fine',       n: 450, hint: 'resolves thin walls' },
-    { id: 'very-fine',  label: 'Very fine',  n: 600, hint: 'slow but smooth' },
+    { id: 'coarse',     label: 'Coarse',     n: 150,  hint: 'fast preview (≤ a few s)' },
+    { id: 'medium',     label: 'Medium',     n: 300,  hint: 'default balance' },
+    { id: 'fine',       label: 'Fine',       n: 450,  hint: 'resolves thin walls' },
+    { id: 'very-fine',  label: 'Very fine',  n: 600,  hint: 'slow but smooth' },
+    { id: 'ultrafine',  label: 'Ultrafine',  n: 900,  hint: 'sharp boundary layers — seconds per frame, ~hundreds of MB RAM' },
+    { id: 'extreme',    label: 'Extreme',    n: 1400, hint: 'research-grade — minutes to reach steady state; may tax low-RAM browsers' },
 ];
 const DEFAULT_MESH_LONG_AXIS = 300;
 const MIN_MESH_LONG_AXIS = 40;
-const MAX_MESH_LONG_AXIS = 1000;
+const MAX_MESH_LONG_AXIS = 2000;
+/* Threshold above which we surface a yellow warning in the Solver
+ * mesh panel so users know the cost they're signing up for. */
+const HEAVY_MESH_WARN_N = 900;
+
+/* ──────────────────────────────────────────────────────────────────
+ * Concentration display units
+ * ──────────────────────────────────────────────────────────────────
+ * The LBM species solver is dimensionless — c is a normalised scalar
+ * in [0, 1] where 1 == whatever amplitude the user commanded at the
+ * inlet. For publication / sensor-datasheet-style reading, users want
+ * ppm / ppb, which are just a linear rescaling of the same c.
+ *
+ * `CONC_UNITS` defines the set, their suffix, and a formatter that
+ * picks a sensible number of decimals for the magnitude of the value.
+ * Nothing in the solver ever sees these — they live only in UI code.
+ *
+ * Unit meanings (by volume, the gas-phase convention):
+ *   frac – normalised, no unit suffix (c / c₀ ∈ [0,1])
+ *   pct  – percent by volume            (× 100)
+ *   ppm  – parts per million by volume  (× 1e6)
+ *   ppb  – parts per billion by volume  (× 1e9)
+ *   ppt  – parts per trillion by volume (× 1e12)
+ */
+const CONC_UNITS = {
+    frac: { suffix: '',    conv: 1      },
+    pct:  { suffix: '%',   conv: 1e2    },
+    ppm:  { suffix: 'ppm', conv: 1e6    },
+    ppb:  { suffix: 'ppb', conv: 1e9    },
+    ppt:  { suffix: 'ppt', conv: 1e12   },
+};
+const CONC_UNIT_IDS = Object.keys(CONC_UNITS);
+
+/* Pick decimals based on magnitude so "42.0 ppm" doesn't render as
+ * "42.000" and "0.003 ppm" doesn't render as "0". */
+function fmtConcNumber(v) {
+    if (!Number.isFinite(v)) return '—';
+    const abs = Math.abs(v);
+    if (abs === 0)    return '0';
+    if (abs >= 1000)  return v.toFixed(0);
+    if (abs >= 100)   return v.toFixed(1);
+    if (abs >= 10)    return v.toFixed(2);
+    if (abs >= 1)     return v.toFixed(3);
+    if (abs >= 0.1)   return v.toFixed(3);
+    if (abs >= 0.001) return v.toFixed(4);
+    return v.toExponential(2);
+}
+
+/* Physical value from a normalised c ∈ [0, 1].
+ *   cNorm    – 0..1 from the solver / sensor history
+ *   unit     – key of CONC_UNITS
+ *   amp      – inlet amplitude in the chosen unit (e.g. 100 for "100 ppm")
+ *              only used when unit !== 'frac'. */
+function scaleConc(cNorm, unit, amp) {
+    if (!Number.isFinite(cNorm)) return NaN;
+    if (unit === 'frac') return cNorm;
+    return cNorm * (Number.isFinite(amp) ? amp : 1);
+}
+
+function formatConc(cNorm, unit, amp, { withSuffix = true } = {}) {
+    if (!Number.isFinite(cNorm)) return '—';
+    const v = scaleConc(cNorm, unit, amp);
+    const spec = CONC_UNITS[unit] || CONC_UNITS.frac;
+    const num = unit === 'frac' ? cNorm.toFixed(3) : fmtConcNumber(v);
+    return withSuffix && spec.suffix ? `${num} ${spec.suffix}` : num;
+}
+
+/* Axis label for concentration traces: "c (ppm)" / "c (ppb)" /
+ * plain "c" for the normalised case. */
+function concAxisLabel(unit) {
+    const spec = CONC_UNITS[unit] || CONC_UNITS.frac;
+    return spec.suffix ? `c (${spec.suffix})` : 'c';
+}
 
 /* Minor-division-per-major grid options for the drawing grid. */
 const MINOR_DIV_OPTIONS = [1, 2, 4, 5, 10];
@@ -872,7 +1047,44 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      * local concentration, so the velocity colours still bleed through
      * at low c and the pulse front lights up visibly at high c. */
     const speciesCanvasRef = useRef(null);
-    const [showSpeciesOverlay, setShowSpeciesOverlay] = useState(false);
+    /* Which scalar field(s) render on the canvas:
+     *   • 'velocity'      – |u| heatmap only (classic flow view)
+     *   • 'concentration' – c(x,y,t) only (aroma transport focus)
+     *   • 'both'          – velocity underneath, c overlaid with
+     *                       alpha ∝ √(c/cmax) so low-c regions let
+     *                       velocity colours through.
+     * Default stays on velocity to match old behaviour; concentration
+     * modes auto-require Species transport (they no-op if disabled). */
+    const [fieldView, setFieldView] = useState('velocity');
+    /* Dedicated colormap for the concentration overlay — separate
+     * from the velocity colormap so users can pair e.g. viridis (u)
+     * with inferno (c) for clear visual separation. */
+    const [speciesColormap, setSpeciesColormap] = useState('inferno');
+    /* Concentration display unit + inlet amplitude.
+     *   cUnit      – 'frac' (default, normalised 0–1) | 'pct' | 'ppm' | 'ppb' | 'ppt'
+     *   cAmplitude – value of the normalised c = 1 peak in the chosen unit
+     *                (e.g. 100 when unit='ppm' means "pulse amplitude = 100 ppm").
+     * Solver stays normalised; scaling is purely a display/report transform
+     * so users can switch units live without resetting the run. */
+    const [cUnit, setCUnit] = useState('frac');
+    const [cAmplitude, setCAmplitude] = useState(100);
+    /* Small helpers bound to the current unit/amplitude — every
+     * sensor card, pulse banner, chart tooltip and legend reads
+     * concentration through these so units stay consistent. */
+    const fmtC = useCallback(
+        (cNorm, opts) => formatConc(cNorm, cUnit, cAmplitude, opts),
+        [cUnit, cAmplitude]
+    );
+    const scaleC = useCallback(
+        (cNorm) => scaleConc(cNorm, cUnit, cAmplitude),
+        [cUnit, cAmplitude]
+    );
+    const cAxisLabel = useMemo(() => concAxisLabel(cUnit), [cUnit]);
+    const cSuffix = CONC_UNITS[cUnit]?.suffix || '';
+    /* Derived shorthand for the old two-state overlay check. All
+     * existing call-sites (canvas mount, effect guards, CSS class
+     * toggles) read this — the single source of truth is fieldView. */
+    const showSpeciesOverlay = fieldView !== 'velocity';
     /* The fluid/wall mask is needed on the main thread for (a) rendering
        wall cells as transparent on the heatmap, and (b) skipping walls
        when integrating streamlines. We keep it in a ref (it never needs
@@ -880,6 +1092,24 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const maskRef = useRef(null);
     /* Streamlines overlay — recomputed from each field snapshot. */
     const [showStreamlines, setShowStreamlines] = useState(true);
+
+    /* ── Mesh visualization ──────────────────────────────────────
+     * LBM uses a fixed uniform Cartesian lattice — you can't really
+     * pick "tri vs quad" like in FEM. What you *can* change is how
+     * the lattice is visualised, which is directly relevant to
+     * understanding common artefacts:
+     *   • Vertical/horizontal "stripes" in the field come from
+     *     non-integer upscaling of the nx × ny canvas to display px
+     *     (some cells land on 5 px, some on 6 → moiré banding).
+     *   • Staircase along curved walls comes from rasterising a
+     *     circle onto axis-aligned cells.
+     *
+     * `meshOverlay` toggles overlays that expose these effects, and
+     * `fieldSmooth` switches the heatmap from pixelated (faithful
+     * cells, but stripy) to bilinear (smooth, but hides cells). */
+    const meshCanvasRef = useRef(null);
+    const [meshOverlay, setMeshOverlay] = useState('off');
+    const [fieldSmooth, setFieldSmooth] = useState(false);
 
     /* ── Undo / Redo plumbing ────────────────────────────────────
        Pattern: whenever `entities` or `sections` change we push a
@@ -1217,6 +1447,10 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         pulseId,
         pulseParams,
         colormap,
+        speciesColormap,
+        fieldView,
+        cUnit,
+        cAmplitude,
         showStreamlines,
         meshLongAxis,
         simDurationS,
@@ -1228,7 +1462,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         pointProbes: JSON.parse(JSON.stringify(pointProbes)),
     }), [projectName, unit, gasId, inletU_m_s, inletMode, inletQ_sccm, channelDepthMm,
          speciesEnabled, analyteId, customD_m2s, analyteT_C, analyteRH_pct, pulseId, pulseParams,
-         colormap, showStreamlines,
+         colormap, speciesColormap, fieldView, cUnit, cAmplitude, showStreamlines,
          meshLongAxis, simDurationS, gridStepOverrideMm, gridStepMinMm, minorDivisions, entities, sections,
          pointProbes]);
 
@@ -1378,6 +1612,17 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         if (typeof json.pulseId === 'string') setPulseId(json.pulseId);
         if (json.pulseParams && typeof json.pulseParams === 'object') setPulseParams({ ...json.pulseParams });
         if (json.colormap) setColormap(json.colormap);
+        if (json.speciesColormap) setSpeciesColormap(json.speciesColormap);
+        if (typeof json.fieldView === 'string' &&
+            ['velocity', 'concentration', 'both'].includes(json.fieldView)) {
+            setFieldView(json.fieldView);
+        }
+        if (typeof json.cUnit === 'string' && CONC_UNIT_IDS.includes(json.cUnit)) {
+            setCUnit(json.cUnit);
+        }
+        if (typeof json.cAmplitude === 'number' && Number.isFinite(json.cAmplitude) && json.cAmplitude > 0) {
+            setCAmplitude(json.cAmplitude);
+        }
         if (typeof json.showStreamlines === 'boolean') setShowStreamlines(json.showStreamlines);
         if (typeof json.meshLongAxis === 'number' && Number.isFinite(json.meshLongAxis)) {
             setMeshLongAxis(Math.max(MIN_MESH_LONG_AXIS, Math.min(MAX_MESH_LONG_AXIS, Math.round(json.meshLongAxis))));
@@ -1403,9 +1648,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setCurrentProjectFileName(file.name);
         setIsDirty(false);
         setSelection(null);
+        // Fit the newly-loaded geometry to the viewport so users
+        // don't land on a zoomed-in or off-screen canvas after
+        // opening a saved project.
+        scheduleFitToContent();
         setSaveStatus(`Loaded ${file.name}`);
         setTimeout(() => setSaveStatus(''), 3500);
-    }, [projectFiles]);
+    }, [projectFiles, scheduleFitToContent]);
 
     /* ── File manager: results, folders, rename, delete ─────────── */
 
@@ -1583,6 +1832,17 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         if (typeof p.pulseId === 'string') setPulseId(p.pulseId);
         if (p.pulseParams && typeof p.pulseParams === 'object') setPulseParams({ ...p.pulseParams });
         if (p.colormap) setColormap(p.colormap);
+        if (p.speciesColormap) setSpeciesColormap(p.speciesColormap);
+        if (typeof p.fieldView === 'string' &&
+            ['velocity', 'concentration', 'both'].includes(p.fieldView)) {
+            setFieldView(p.fieldView);
+        }
+        if (typeof p.cUnit === 'string' && CONC_UNIT_IDS.includes(p.cUnit)) {
+            setCUnit(p.cUnit);
+        }
+        if (typeof p.cAmplitude === 'number' && Number.isFinite(p.cAmplitude) && p.cAmplitude > 0) {
+            setCAmplitude(p.cAmplitude);
+        }
         if (typeof p.showStreamlines === 'boolean') setShowStreamlines(p.showStreamlines);
         if (typeof p.meshLongAxis === 'number' && Number.isFinite(p.meshLongAxis)) {
             setMeshLongAxis(Math.max(MIN_MESH_LONG_AXIS, Math.min(MAX_MESH_LONG_AXIS, Math.round(p.meshLongAxis))));
@@ -1639,9 +1899,12 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setCurrentProjectFileName(null);
         setIsDirty(false);
         setSelection(null);
+        // Fit the restored geometry to the viewport — saved result
+        // files can come from a very different canvas size/zoom.
+        scheduleFitToContent();
         setSaveStatus(`Opened result ${file.name}`);
         setTimeout(() => setSaveStatus(''), 3500);
-    }, [flowLabFiles]);
+    }, [flowLabFiles, scheduleFitToContent]);
 
     /* Unified "open from explorer" — routes to the right loader based
        on file suffix. Used by the double-click-to-open gesture. */
@@ -1882,16 +2145,28 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         return best ? { x: best.x, y: best.y } : snapped;
     }, [snapOn, gridStepMm, entities, pendingLinePoints, viewport.pxPerMm]);
 
-    /* ── Fit viewport to content ────────────────────────────────── */
-    const fitToContent = useCallback(() => {
-        const bb = entitiesBBox(entities);
+    /* ── Fit viewport to content ──────────────────────────────────
+     *  `fitToContent()` uses the CURRENT `entities` state from the
+     *  closure, so calling it immediately after `setEntities([...])`
+     *  would fit to the previous geometry (stale closure). Loaders
+     *  that replace the scene should therefore call
+     *  `scheduleFitToContent()` instead — it sets a ref flag that the
+     *  effect below honours on the next render, once the new
+     *  `entities` array has committed. It also waits for the canvas
+     *  to have a real size (landing page → canvas reveal can leave
+     *  canvasSize.w at 0 for one frame). */
+    const pendingFitRef = useRef(false);
+
+    const fitToContent = useCallback((entsArg) => {
+        const bb = entitiesBBox(entsArg || entities);
         if (!bb) return;
+        if (!canvasSize.w || !canvasSize.h) return;
         const margin = 60; // px
         const bw = bb.xmax - bb.xmin;
         const bh = bb.ymax - bb.ymin;
         const sx = (canvasSize.w - 2 * margin) / (bw || 1);
         const sy = (canvasSize.h - 2 * margin) / (bh || 1);
-        const s = Math.min(sx, sy);
+        const s = Math.max(0.5, Math.min(5000, Math.min(sx, sy)));
         const cxw = 0.5 * (bb.xmin + bb.xmax);
         const cyw = 0.5 * (bb.ymin + bb.ymax);
         setViewport({
@@ -1900,6 +2175,22 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             ty: canvasSize.h / 2 + cyw * s,
         });
     }, [entities, canvasSize]);
+
+    const scheduleFitToContent = useCallback(() => {
+        pendingFitRef.current = true;
+    }, []);
+
+    /* Consume any pending fit request once both the new entities
+     *  and a real canvas size are available. We also clear the
+     *  pending flag on no-op runs where bbox can't be computed
+     *  (e.g. startBlankCanvas with no entities) so it doesn't fire
+     *  stale later. */
+    useEffect(() => {
+        if (!pendingFitRef.current) return;
+        if (!canvasSize.w || !canvasSize.h) return;
+        pendingFitRef.current = false;
+        fitToContent(entities);
+    }, [entities, canvasSize, fitToContent]);
 
     // Fit once on first mount after canvas sized.
     useEffect(() => {
@@ -2898,8 +3189,60 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             setSolverWarning('No outlet — one edge must be Outlet for mass to leave.');
             return;
         }
-        if (closedList.length > 1) {
-            setSolverWarning(`Multiple closed polygons on canvas — running on "${domain.id.slice(0, 8)}" (it has inlet + outlet). Use Union/Subtract to combine bodies into one solver domain.`);
+        /* Collect obstacle polygons — any OTHER closed polygon on the
+           canvas that the solver should treat as a no-slip void inside
+           the fluid domain. Two paths qualify:
+             1. Explicitly tagged `obstacle: true` (from boolean Subtract
+                which now preserves holes as obstacle entities).
+             2. A bare closed polygon that has no inlet/outlet of its
+                own AND sits inside the domain's bounding box — the
+                natural "draw a circle inside the rect" workflow.
+           Anything with its own inlet/outlet is assumed to be a
+           second solver domain (user drew it on purpose) and is
+           skipped with the existing multi-domain warning. */
+        const domainBB = entitiesBBox([domain]);
+        const obstacleEntities = [];
+        const skippedDomains = [];
+        for (const ent of closedList) {
+            if (ent === domain) continue;
+            let hasOwnIO = false;
+            if (ent.edgeBC) {
+                for (let i = 0; i < ent.points.length; i++) {
+                    const t = ent.edgeBC[i]?.type;
+                    if (t === 'inlet' || t === 'outlet') { hasOwnIO = true; break; }
+                }
+            }
+            if (ent.obstacle === true) {
+                obstacleEntities.push(ent);
+                continue;
+            }
+            if (hasOwnIO) {
+                skippedDomains.push(ent);
+                continue;
+            }
+            // Bbox-inside-domain check — cheap and good enough for the
+            // common "obstacle inside the fluid region" case.
+            const bb = entitiesBBox([ent]);
+            if (
+                bb && domainBB
+                && bb.xmin >= domainBB.xmin && bb.xmax <= domainBB.xmax
+                && bb.ymin >= domainBB.ymin && bb.ymax <= domainBB.ymax
+            ) {
+                obstacleEntities.push(ent);
+            } else {
+                skippedDomains.push(ent);
+            }
+        }
+        if (skippedDomains.length > 0) {
+            setSolverWarning(`Multiple closed polygons on canvas — running on "${domain.id.slice(0, 8)}" (it has inlet + outlet). Other closed polygons outside it are ignored; use Union if you meant to merge them.`);
+        } else if (obstacleEntities.length > 0) {
+            setSolverWarning(
+                `Running with ${obstacleEntities.length} obstacle${obstacleEntities.length === 1 ? '' : 's'} carved from the fluid domain.`
+            );
+            // Treat this as informational, not an error — auto-clear after a short while.
+            setTimeout(() => setSolverWarning((w) =>
+                w && w.startsWith('Running with') ? null : w
+            ), 4000);
         } else {
             setSolverWarning(null);
         }
@@ -2908,7 +3251,9 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         // stray value in the custom input box can't blow up memory.
         const nLong = Math.max(MIN_MESH_LONG_AXIS,
             Math.min(MAX_MESH_LONG_AXIS, Math.round(meshLongAxis) || DEFAULT_MESH_LONG_AXIS));
-        const raster = rasterizeDomain(domain, nLong);
+        const raster = rasterizeDomain(domain, nLong, {
+            obstacles: obstacleEntities.map((e) => ({ points: e.points })),
+        });
         if (!raster) { setSolverWarning('Could not rasterize geometry.'); return; }
         const { nx, ny } = raster;
 
@@ -3301,6 +3646,97 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         durationPausedOnceRef.current = false;
     }, []);
 
+    /* ──────────────────────────────────────────────────────────────
+     *  Canonical "demo / blank / recent" loaders
+     * ──────────────────────────────────────────────────────────────
+     *  These are the single source of truth for populating the canvas
+     *  from a predefined template. Both the Home page (FlowLabLanding)
+     *  and the legacy in-canvas "Reload example" / "Load aroma demo"
+     *  buttons call them, so the behaviour is identical no matter the
+     *  entry point. Each loader:
+     *    1. Tears down any running solver so a stale mask doesn't
+     *       leak into the new geometry.
+     *    2. Resets the project-file binding (so Save creates a new
+     *       file instead of overwriting the previously-loaded one).
+     *    3. Seeds entities/sections + any demo-specific simulation
+     *       knobs.
+     */
+    const hardResetSolverAndProject = useCallback(() => {
+        resetSolver();
+        setCurrentProjectFileId(null);
+        setCurrentProjectFileName(null);
+        setIsDirty(false);
+        setSelection(null);
+    }, [resetSolver]);
+
+    const loadSimpleChannelDemo = useCallback(() => {
+        hardResetSolverAndProject();
+        skipNextHistoryRef.current = true;
+        setEntities([DEFAULT_DOMAIN()]);
+        setSections([DEFAULT_SECTION()]);
+        setSelectedSectionId(null);
+        setProjectName('untitled');
+        scheduleFitToContent();
+        setTourIdx(null);
+    }, [hardResetSolverAndProject, scheduleFitToContent]);
+
+    const loadAromaDemo = useCallback(({ startTour = true } = {}) => {
+        hardResetSolverAndProject();
+        skipNextHistoryRef.current = true;
+        setEntities([AROMA_CHAMBER_DOMAIN()]);
+        setSections([AROMA_CHAMBER_SECTION()]);
+        setPointProbes(AROMA_CHAMBER_PROBES());
+        setSelectedSectionId('s_aroma_mid');
+        setInletMode('sccm');
+        setInletQ_sccm(20);
+        setChannelDepthMm(1);
+        setSpeciesEnabled(true);
+        /* Start with velocity-only on the canvas; the user can flip to
+         * 'both' or 'concentration' from the Species transport panel.
+         * (This used to call setShowSpeciesOverlay(false), but that
+         * setter was removed when the boolean overlay toggle was
+         * replaced with the fieldView enum — hitting the old name
+         * threw a ReferenceError and aborted the rest of the demo
+         * loader, leaving the home page frozen.) */
+        setFieldView('velocity');
+        setAnalyteId('no2');
+        setAnalyteT_C(25);
+        setAnalyteRH_pct(40);
+        setPulseId('rect');
+        setPulseParams({ t_start: 0.2, t_dur: 1.0 });
+        setProjectName('Aroma demo');
+        scheduleFitToContent();
+        if (startTour) setTourIdx(0);
+        else setTourIdx(null);
+    }, [hardResetSolverAndProject, scheduleFitToContent]);
+
+    const startBlankCanvas = useCallback(({ name = 'untitled' } = {}) => {
+        hardResetSolverAndProject();
+        skipNextHistoryRef.current = true;
+        setEntities([]);
+        setSections([]);
+        setSelectedSectionId(null);
+        setProjectName(name || 'untitled');
+        setTourIdx(null);
+    }, [hardResetSolverAndProject]);
+
+    /* ──────────────────────────────────────────────────────────────
+     *  Home page ("landing")
+     * ──────────────────────────────────────────────────────────────
+     *  Shown on the user's FIRST entry to Flow Lab in a given session
+     *  so they pick a starting point — demo, blank canvas, or a
+     *  recent file — instead of being dropped straight into a pre-
+     *  populated aroma demo. Once they pick (or dismiss), the home
+     *  page stays closed for the rest of the session. Because Flow
+     *  Lab is kept persistently mounted by App.jsx (see
+     *  everOpenedPages + persistent mount), navigating away and back
+     *  preserves both the showLanding state AND any ongoing
+     *  simulation — so a user who left Flow Lab to check another
+     *  tool comes right back to their in-progress canvas, not the
+     *  home page. To return to home deliberately, click the Home
+     *  button in the right-side panel. */
+    const [showLanding, setShowLanding] = useState(true);
+
     /* Auto-pause + geometry-invalidation effects live AFTER the
        `steadyReached` useMemo (see below) — their dep arrays would hit a
        TDZ otherwise. The `autoPausedOnceRef` ref, however, can safely be
@@ -3392,16 +3828,24 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     }, [field, solverInfo, colormap, displayStats]);
 
     /* ── Species concentration overlay ──
-     * Separate canvas layered on top of the velocity heatmap. Renders
-     * c(x,y) as a white-hot/magenta ramp with alpha ∝ c so the velocity
-     * colours still show through in dilute areas. Scale is auto — we
-     * normalise to the current max of the c field (but never less than
-     * the current inlet-BC value, so a plateau pulse renders consistently). */
+     * Separate canvas layered on top of the velocity heatmap.
+     * Rendering strategy depends on `fieldView`:
+     *
+     *   • 'concentration' — pure c(x,y). Uses a full opaque LUT so
+     *     the overlay IS the whole picture. Low-c fades to black so
+     *     empty regions are visually quiet.
+     *   • 'both'          — c on top of |u|, with alpha ∝ √(c/cmax)
+     *     so dilute regions let the velocity colours through while
+     *     the pulse front still lights up.
+     *
+     * Normalisation clamps cmax to max(currentMax, cInletValue) so a
+     * plateau pulse renders consistently frame-to-frame. Live updates
+     * flow automatically because the effect depends on `field`, which
+     * the worker refreshes every tick. */
     useEffect(() => {
         const canvas = speciesCanvasRef.current;
         if (!canvas) return;
         if (!speciesEnabled || !showSpeciesOverlay || !field?.c || !solverInfo) {
-            // Clear any stale overlay.
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width || 1, canvas.height || 1);
             return;
@@ -3412,9 +3856,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         canvas.width = nx; canvas.height = ny;
         const ctx = canvas.getContext('2d');
         const img = ctx.createImageData(nx, ny);
+        const lut = COLORMAPS[speciesColormap] || COLORMAPS.inferno;
         let cMax = field.cInletValue || 0;
         for (let k = 0; k < c.length; k++) if (c[k] > cMax) cMax = c[k];
         if (cMax < 1e-6) cMax = 1;
+        const isBoth = fieldView === 'both';
         for (let j = 0; j < ny; j++) {
             const src = (ny - 1 - j) * nx;
             const dst = j * nx;
@@ -3422,20 +3868,186 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                 const o = (dst + i) * 4;
                 if (mask[src + i] === 1) { img.data[o + 3] = 0; continue; }
                 const v = Math.min(1, Math.max(0, c[src + i] / cMax));
-                // White → yellow → magenta ramp (readable on both viridis
-                // and turbo underlays). Alpha picks up with √(v) so the
-                // front edge is visible without hiding the flow field.
-                const r = Math.round(255);
-                const g = Math.round(255 * (1 - v * 0.9));
-                const b = Math.round(255 * (1 - v));
-                img.data[o] = r;
-                img.data[o + 1] = g;
-                img.data[o + 2] = b;
-                img.data[o + 3] = Math.round(220 * Math.sqrt(v));
+                // Mild √ stretch so the leading front of a pulse gets
+                // visible colour even while bulk c is still low.
+                const t = Math.sqrt(v);
+                const idx = Math.max(0, Math.min(255, Math.round(t * 255)));
+                img.data[o]     = lut[3 * idx];
+                img.data[o + 1] = lut[3 * idx + 1];
+                img.data[o + 2] = lut[3 * idx + 2];
+                // Opaque in pure-concentration mode; progressive alpha
+                // in combined mode so velocity stays readable beneath.
+                img.data[o + 3] = isBoth
+                    ? Math.round(235 * Math.sqrt(v))
+                    : 245;
             }
         }
         ctx.putImageData(img, 0, 0);
-    }, [field, solverInfo, speciesEnabled, showSpeciesOverlay]);
+    }, [field, solverInfo, speciesEnabled, showSpeciesOverlay, speciesColormap, fieldView]);
+
+    /* ── Mesh viz: pre-solver preview mask ──────────────────────
+     * When the solver hasn't run yet (no maskRef / solverInfo),
+     * compute a fresh preview rasterisation so the overlay still
+     * reflects what the solver WOULD produce on the next Run. Only
+     * runs when mesh overlay is active to keep the UI snappy while
+     * the user edits geometry. */
+    const meshPreviewMask = useMemo(() => {
+        if (meshOverlay === 'off') return null;
+        if (solverInfo && maskRef.current) return null; // use live mask
+        const domain = entities.find((e) =>
+            e.closed !== false && (e.type !== 'obstacle' && e.obstacle !== true)
+        );
+        if (!domain) return null;
+        const obstacles = entities.filter((e) =>
+            e !== domain && e.closed !== false &&
+            (e.type === 'obstacle' || e.obstacle === true)
+        );
+        try {
+            const nLong = Math.max(MIN_MESH_LONG_AXIS,
+                Math.min(MAX_MESH_LONG_AXIS, Math.round(meshLongAxis) || DEFAULT_MESH_LONG_AXIS));
+            const r = rasterizeDomain(domain, nLong, {
+                obstacles: obstacles.map((e) => ({ points: e.points })),
+            });
+            if (!r) return null;
+            return { nx: r.nx, ny: r.ny, mask: r.mask, bbox: r.bbox };
+        } catch { return null; }
+    }, [meshOverlay, solverInfo, entities, meshLongAxis]);
+
+    /* Bbox for positioning the mesh overlay canvas. Uses the live
+     * solver bbox when available (so overlay tracks the solver's
+     * padded domain exactly), else the preview bbox. */
+    const meshBoxStyle = useMemo(() => {
+        if (meshOverlay === 'off') return null;
+        const bbox = solverInfo?.bbox || meshPreviewMask?.bbox;
+        if (!bbox) return null;
+        const tl = toScreen({ x: bbox.xmin, y: bbox.ymax });
+        const br = toScreen({ x: bbox.xmax, y: bbox.ymin });
+        return {
+            left: tl.x,
+            top: tl.y,
+            width: br.x - tl.x,
+            height: br.y - tl.y,
+        };
+    }, [meshOverlay, solverInfo, meshPreviewMask, toScreen]);
+
+    /* ── Mesh viz: draw the overlay canvas ──────────────────────
+     * Modes:
+     *   • grid     – crisp cell boundary lines (high-res canvas)
+     *   • cells    – fill every cell by type (fluid / wall / BC)
+     *   • boundary – highlight ONLY fluid cells adjacent to a wall
+     *                (exposes the staircase around curves)
+     *   • stagger  – dots at cell centres (the D2Q9 node lattice)
+     */
+    useEffect(() => {
+        const canvas = meshCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (meshOverlay === 'off') {
+            canvas.width = 1; canvas.height = 1;
+            ctx.clearRect(0, 0, 1, 1);
+            return;
+        }
+        const src = (solverInfo && maskRef.current)
+            ? { nx: solverInfo.nx, ny: solverInfo.ny, mask: maskRef.current }
+            : meshPreviewMask;
+        if (!src) { canvas.width = 1; canvas.height = 1; return; }
+        const { nx, ny, mask } = src;
+
+        if (meshOverlay === 'cells' || meshOverlay === 'boundary') {
+            canvas.width = nx; canvas.height = ny;
+            const img = ctx.createImageData(nx, ny);
+            const set = (o, r, g, b, a) => {
+                img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = a;
+            };
+            for (let j = 0; j < ny; j++) {
+                const sj = (ny - 1 - j) * nx; // flip Y for canvas
+                const dj = j * nx;
+                for (let i = 0; i < nx; i++) {
+                    const o = (dj + i) * 4;
+                    const m = mask[sj + i];
+                    if (meshOverlay === 'cells') {
+                        if (m === 0) set(o, 120, 200, 255, 40);        // fluid – pale cyan
+                        else if (m === 2) set(o, 52, 211, 153, 180);    // inlet – green
+                        else if (m === 3) set(o, 248, 113, 113, 180);   // outlet – red
+                        else set(o, 15, 23, 42, 150);                   // wall – dark slate
+                    } else {
+                        if (m !== 0) { set(o, 0, 0, 0, 0); continue; }
+                        // fluid: flag only if any 4-neighbour is a wall
+                        let edge = false;
+                        const N = sj + i;
+                        if (j < ny - 1 && mask[N - nx] === 1) edge = true;
+                        else if (j > 0 && mask[N + nx] === 1) edge = true;
+                        else if (i > 0 && mask[N - 1] === 1) edge = true;
+                        else if (i < nx - 1 && mask[N + 1] === 1) edge = true;
+                        if (edge) set(o, 245, 158, 11, 220);            // amber staircase
+                        else set(o, 0, 0, 0, 0);
+                    }
+                }
+            }
+            ctx.putImageData(img, 0, 0);
+            return;
+        }
+
+        /* Grid / stagger need line or dot rendering — a higher-res
+         * internal canvas (≈3 px/cell) keeps boundaries crisp when
+         * CSS-scaled up. Cap total pixels so very fine meshes don't
+         * hog memory. */
+        const pxPerCell = Math.max(2, Math.min(6, Math.floor(900_000 / Math.max(1, nx * ny * 3))));
+        const W = nx * pxPerCell;
+        const H = ny * pxPerCell;
+        canvas.width = W; canvas.height = H;
+        ctx.clearRect(0, 0, W, H);
+
+        if (meshOverlay === 'grid') {
+            // Light gridlines everywhere; slightly bolder on walls.
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+            ctx.beginPath();
+            for (let i = 0; i <= nx; i++) {
+                const x = i * pxPerCell + 0.5;
+                ctx.moveTo(x, 0); ctx.lineTo(x, H);
+            }
+            for (let j = 0; j <= ny; j++) {
+                const y = j * pxPerCell + 0.5;
+                ctx.moveTo(0, y); ctx.lineTo(W, y);
+            }
+            ctx.stroke();
+            // Overlay wall cells with a translucent dark fill so
+            // the fluid region is unambiguous.
+            for (let j = 0; j < ny; j++) {
+                const sj = (ny - 1 - j) * nx;
+                for (let i = 0; i < nx; i++) {
+                    const m = mask[sj + i];
+                    if (m === 1) {
+                        ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+                    } else if (m === 2) {
+                        ctx.fillStyle = 'rgba(52, 211, 153, 0.30)';
+                    } else if (m === 3) {
+                        ctx.fillStyle = 'rgba(248, 113, 113, 0.30)';
+                    } else { continue; }
+                    ctx.fillRect(i * pxPerCell, j * pxPerCell, pxPerCell, pxPerCell);
+                }
+            }
+        } else if (meshOverlay === 'stagger') {
+            // Small dot at each cell centre (only fluid cells).
+            const r = Math.max(0.6, pxPerCell * 0.22);
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.9)';
+            for (let j = 0; j < ny; j++) {
+                const sj = (ny - 1 - j) * nx;
+                for (let i = 0; i < nx; i++) {
+                    if (mask[sj + i] !== 0) continue;
+                    const cx = i * pxPerCell + pxPerCell / 2;
+                    const cy = j * pxPerCell + pxPerCell / 2;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+        // NOTE: intentionally NOT depending on `field` — mask only
+        // changes on solver start / reset, so binding to solverInfo
+        // (stable across ticks) keeps the overlay off the hot path.
+    }, [meshOverlay, solverInfo, meshPreviewMask]);
 
     /* Derived physical stats. */
     const domainForStats = entities.find((e) => e.closed !== false) || entities[0];
@@ -3914,10 +4526,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         const masterKey = keys.reduce((a, b) =>
             store[a].t_s.length >= store[b].t_s.length ? a : b);
         const master = store[masterKey];
+        const cSuffix_csv = CONC_UNITS[cUnit]?.suffix || '';
+        const cScale_csv = cUnit === 'frac' ? 1 : (Number.isFinite(cAmplitude) ? cAmplitude : 1);
+        const cColSuffix = cUnit === 'frac' ? '' : `_${cSuffix_csv}`;
         const cols = [];
         for (const k of keys) {
             const lab = (store[k].label || `S${k}`).replace(/[^\w\-]+/g, '_');
-            cols.push(`c__${lab}`);
+            cols.push(`c${cColSuffix}__${lab}`);
             cols.push(`u_mps__${lab}`);
         }
         const header = [
@@ -3926,6 +4541,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             `# analyte: ${analyte.label}, D: ${D_m2s.toExponential(3)} m²/s, Sc: ${Sc.toFixed(2)}, Pe: ${Pe.toExponential(3)}`,
             `# sample conditions: T = ${Number(analyteT_C).toFixed(1)} °C, RH = ${Number(analyteRH_pct).toFixed(0)} %`,
             `# pulse: ${pulseId} (${JSON.stringify(pulseParams)})`,
+            `# concentration unit: ${cUnit === 'frac' ? 'normalised c/c₀ ∈ [0,1]' : `${cSuffix_csv} (inlet amplitude = ${cAmplitude} ${cSuffix_csv})`}`,
             `# samples: ${master.t_s.length}`,
             `# sensors: ${keys.map((k) => store[k].label).join(' | ')}`,
             '',
@@ -3936,8 +4552,9 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             for (const k of keys) {
                 const s = store[k];
                 const idx = Math.min(i, s.t_s.length - 1);
+                const cVal = Number.isFinite(s.c[idx]) ? s.c[idx] * cScale_csv : NaN;
                 parts.push(
-                    Number.isFinite(s.c[idx]) ? s.c[idx].toFixed(8) : '',
+                    Number.isFinite(cVal) ? cVal.toExponential(6) : '',
                     Number.isFinite(s.u[idx]) ? s.u[idx].toFixed(8) : '',
                 );
             }
@@ -3954,7 +4571,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     }, [gas, gasId, effectiveInletU_m_s, channelDepthMm, analyte, D_m2s, Sc, Pe,
-        analyteT_C, analyteRH_pct, pulseId, pulseParams, projectName]);
+        analyteT_C, analyteRH_pct, pulseId, pulseParams, projectName, cUnit, cAmplitude]);
 
     /* Streamlines — integrate a set of seed points forward through the
        velocity field and render as thin translucent polylines over the
@@ -4250,8 +4867,71 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         return () => el.removeAttribute('data-tour-highlight');
     }, [tourIdx]);
 
+    /* Recent projects for the Home page — newest first, capped at 8.
+       The `displayName` strips the `.flowlab.json` suffix so the card
+       doesn't look like a raw filename; `folderPath` surfaces the
+       virtual sub-folder (if any) as secondary text. */
+    const recentProjects = useMemo(() => {
+        return projectFiles
+            .slice()
+            .sort((a, b) =>
+                (Number(b.updatedAt) || Number(b.createdAt) || 0)
+                - (Number(a.updatedAt) || Number(a.createdAt) || 0)
+            )
+            .slice(0, 8)
+            .map((f) => {
+                const { parts, base } = splitPath(f.name);
+                const displayName = base.replace(PROJECT_FILE_SUFFIX, '') || base;
+                return {
+                    id: f.id,
+                    name: f.name,
+                    displayName,
+                    folderPath: parts.join('/'),
+                    updatedAt: f.updatedAt,
+                    createdAt: f.createdAt,
+                };
+            });
+    }, [projectFiles]);
+
+    const handleLandingOpenRecent = useCallback((fileId) => {
+        handleLoadProject(fileId);
+        setShowLanding(false);
+    }, [handleLoadProject]);
+
+    const handleLandingAroma = useCallback(() => {
+        loadAromaDemo({ startTour: true });
+        setShowLanding(false);
+    }, [loadAromaDemo]);
+
+    const handleLandingSimple = useCallback(() => {
+        loadSimpleChannelDemo();
+        setShowLanding(false);
+    }, [loadSimpleChannelDemo]);
+
+    /* "Create new project" — prompts for a name (cancel falls back to
+       "untitled"), wipes the canvas, clears the file binding. The
+       actual persisted file is created on the first Save; the prompt
+       just seeds the project name so the user doesn't have to rename
+       later. */
+    const handleLandingCreateNew = useCallback(() => {
+        let name = 'untitled';
+        try {
+            if (typeof window !== 'undefined') {
+                const input = window.prompt(
+                    'Name your new Flow Lab project (you can rename it later):',
+                    'untitled'
+                );
+                if (input === null) return; // user hit Cancel — keep landing open
+                const trimmed = input.trim();
+                if (trimmed) name = trimmed;
+            }
+        } catch { /* ignore */ }
+        startBlankCanvas({ name });
+        setShowLanding(false);
+    }, [startBlankCanvas]);
+
     return (
-        <div className="fl-page">
+        <div className={`fl-page${showLanding ? ' is-home-mode' : ''}`}>
             {/* ─── Guided-tour overlay (opt-in; only active when the
                  "Load aroma demo" button was clicked) ─── */}
             {tourIdx !== null && createPortal(
@@ -4488,7 +5168,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                         <button className="fl-toolbtn"
                             onClick={runSubtract}
                             disabled={closedSelectedEntities.length < 2}
-                            title="Subtract — first selected polygon minus the rest. Shift-click the operands in order (primary = minuend).">
+                            title="Subtract — first selected polygon minus the rest. If a subtractor is fully inside the subject, it's kept as an OBSTACLE (hatched fill) so the solver carves a void in the fluid domain.">
                             <SubtractIcon size={14} /> Subtract
                         </button>
                         <button className="fl-toolbtn"
@@ -4709,12 +5389,34 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                     />
                                 </label>
                                 <div
-                                    className={`fl-entity-row ${selection?.entityId === e.id ? 'is-sel' : ''}${multiSelection.has(e.id) ? ' is-multi' : ''}`}
+                                    className={`fl-entity-row ${selection?.entityId === e.id ? 'is-sel' : ''}${multiSelection.has(e.id) ? ' is-multi' : ''}${e.obstacle ? ' is-obstacle' : ''}`}
                                     onClick={() => setSelection({ entityId: e.id, edgeIdx: null, vertexIdx: null })}
                                 >
-                                    <span className="fl-entity-type">{e.closed === false ? 'Open' : 'Region'}</span>
+                                    <span className="fl-entity-type">
+                                        {e.closed === false ? 'Open' : (e.obstacle ? 'Obstacle' : 'Region')}
+                                    </span>
                                     <span className="fl-entity-sub">{e.points.length} pts{e.id.length > 14 ? ` · ${e.id.slice(0, 12)}…` : ''}</span>
                                 </div>
+                                {e.closed !== false && (
+                                    <label
+                                        className="fl-entity-cb fl-entity-cb--obstacle"
+                                        title="Treat this closed polygon as a solid obstacle (no-slip void carved from the fluid domain)."
+                                        onClick={(ev) => ev.stopPropagation()}
+                                        onMouseDown={(ev) => ev.stopPropagation()}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={!!e.obstacle}
+                                            onChange={(ev) => {
+                                                const on = ev.target.checked;
+                                                setEntities((prev) => prev.map((en) =>
+                                                    en.id === e.id ? { ...en, obstacle: on, type: on ? 'obstacle' : (en.type === 'obstacle' ? 'region' : en.type) } : en
+                                                ));
+                                            }}
+                                        />
+                                        <span>obs.</span>
+                                    </label>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -4754,20 +5456,33 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     </div>
                 </div>
 
-                {/* Centre: drawing canvas with heatmap underlay */}
+                {/* Centre: drawing canvas with heatmap underlay. When the
+                    home page is showing, the canvas input handlers are
+                    stripped so clicks on tiles don't accidentally also
+                    land on the underlying SVG. */}
                 <div
                     ref={canvasWrapRef}
-                    className={`fl-canvas-wrap${marqueeDrag ? ' is-marquee' : ''}`}
+                    className={`fl-canvas-wrap${marqueeDrag ? ' is-marquee' : ''}${showLanding ? ' is-home' : ''}`}
                     data-tour-id="canvas"
-                    onWheel={handleWheel}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseUp}
+                    onWheel={showLanding ? undefined : handleWheel}
+                    onMouseDown={showLanding ? undefined : handleMouseDown}
+                    onMouseMove={showLanding ? undefined : handleMouseMove}
+                    onMouseUp={showLanding ? undefined : handleMouseUp}
+                    onMouseLeave={showLanding ? undefined : handleMouseUp}
                     onContextMenu={(ev) => ev.preventDefault()}
-                    onDoubleClick={handleDoubleClick}
-                    style={{ cursor: marqueeDrag ? 'crosshair' : (tool === TOOLS.SELECT ? 'default' : 'crosshair') }}
+                    onDoubleClick={showLanding ? undefined : handleDoubleClick}
+                    style={{ cursor: showLanding ? 'default' : (marqueeDrag ? 'crosshair' : (tool === TOOLS.SELECT ? 'default' : 'crosshair')) }}
                 >
+                    {showLanding && (
+                        <FlowLabLanding
+                            recents={recentProjects}
+                            onOpenRecent={handleLandingOpenRecent}
+                            onLoadAromaDemo={handleLandingAroma}
+                            onLoadSimpleChannel={handleLandingSimple}
+                    onCreateNewProject={handleLandingCreateNew}
+                    onClose={() => setShowLanding(false)}
+                />
+                    )}
                     {/* Edge toggles — always visible on the canvas so the side
                      *  panels can be collapsed / restored without touching the
                      *  toolbar. Tooltip changes to match current state. */}
@@ -4807,7 +5522,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                     <span className="fl-pulse-banner-dot" />
                                     <span className="fl-pulse-banner-ttl">Aroma pulse in progress</span>
                                     <span className="fl-pulse-banner-sub">
-                                        started t = {pulseBanner.t_s.toFixed(3)} s · c<sub>in</sub> = {pulseBanner.value?.toFixed(2)}
+                                        started t = {pulseBanner.t_s.toFixed(3)} s · c<sub>in</sub> = {fmtC(pulseBanner.value)}
                                     </span>
                                 </>
                             ) : (
@@ -4833,22 +5548,30 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             aria-hidden
                         />
                     )}
-                    {heatmapBoxStyle && (
+                    {heatmapBoxStyle && fieldView !== 'concentration' && (
                         <canvas
                             ref={heatmapCanvasRef}
-                            className="fl-heatmap"
+                            className={`fl-heatmap${fieldSmooth ? ' is-smooth' : ''}`}
                             style={heatmapBoxStyle}
+                        />
+                    )}
+                    {meshBoxStyle && meshOverlay !== 'off' && (
+                        <canvas
+                            ref={meshCanvasRef}
+                            className={`fl-mesh-overlay fl-mesh-overlay--${meshOverlay}`}
+                            style={meshBoxStyle}
+                            aria-hidden
                         />
                     )}
                     {heatmapBoxStyle && speciesEnabled && showSpeciesOverlay && (
                         <canvas
                             ref={speciesCanvasRef}
-                            className="fl-species-overlay"
+                            className={`fl-species-overlay fl-species-overlay--${fieldView}${fieldSmooth ? ' is-smooth' : ''}`}
                             style={heatmapBoxStyle}
                             aria-hidden
                         />
                     )}
-                    {displayStats && (
+                    {displayStats && fieldView !== 'concentration' && (
                         <ColorLegend
                             lut={COLORMAPS[colormap] || COLORMAPS.viridis}
                             vmin={0}
@@ -4856,9 +5579,54 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             label="|u| (m/s)"
                         />
                     )}
+                    {speciesEnabled && showSpeciesOverlay && field?.c && (() => {
+                        /* The overlay canvas auto-normalises to the running
+                         * c_max in the current frame so colours always span
+                         * the full LUT. For the legend to match what the
+                         * user actually sees, its top value must reflect
+                         * that same running max:
+                         *   cMaxN = max(inlet-command, field max)   (in normalised c∈[0,1])
+                         * Physical display = cMaxN × cAmplitude.
+                         * In 'frac' mode we keep the classic scale-free
+                         * "c / c_max" legend — vmax = 1 always. */
+                        const cMaxN = Math.max(
+                            field.cInletValue || 0,
+                            field.cMaxFluid   || 0,
+                            1e-6
+                        );
+                        const isFrac = cUnit === 'frac';
+                        const vmax = isFrac ? 1 : cMaxN * cAmplitude;
+                        return (
+                            <ColorLegend
+                                lut={COLORMAPS[speciesColormap] || COLORMAPS.inferno}
+                                vmin={0}
+                                vmax={vmax}
+                                label={isFrac ? 'c / c_max' : cAxisLabel}
+                                offsetIndex={fieldView === 'concentration' ? 0 : 1}
+                                fixedDigits={!isFrac}
+                            />
+                        );
+                    })()}
                     <AxesGizmo unit={unit} />
                     <OriginLabel toScreen={toScreen} canvasSize={canvasSize} unit={unit} />
                     <svg className="fl-svg" width={canvasSize.w} height={canvasSize.h}>
+                        {/* Diagonal hatch pattern used to fill obstacles
+                            (closed polygons carved from the fluid domain
+                            as no-slip voids). Declared once at the canvas
+                            level so any EntitySvg can reference it via
+                            url(#fl-obstacle-hatch). */}
+                        <defs>
+                            <pattern id="fl-obstacle-hatch" patternUnits="userSpaceOnUse"
+                                width="6" height="6" patternTransform="rotate(45)">
+                                <rect width="6" height="6" fill="rgba(245, 158, 11, 0.10)" />
+                                <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(245, 158, 11, 0.55)" strokeWidth="1.5" />
+                            </pattern>
+                            <pattern id="fl-obstacle-hatch-sel" patternUnits="userSpaceOnUse"
+                                width="6" height="6" patternTransform="rotate(45)">
+                                <rect width="6" height="6" fill="rgba(245, 158, 11, 0.18)" />
+                                <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(245, 158, 11, 0.85)" strokeWidth="1.7" />
+                            </pattern>
+                        </defs>
                         {gridLines}
                         {displayedEntities.map((e) => (
                             <EntitySvg
@@ -5207,14 +5975,78 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             />
                         </label>
                         {speciesEnabled && (
-                            <label className="fl-field fl-toggle-field" title="Overlay the concentration field on the canvas — bright / magenta where aroma is high, faded where it's empty.">
-                                <span>Show overlay</span>
-                                <input
-                                    type="checkbox"
-                                    checked={showSpeciesOverlay}
-                                    onChange={(e) => setShowSpeciesOverlay(e.target.checked)}
-                                />
-                            </label>
+                            <>
+                                <div className="fl-subhd" style={{ marginTop: 6 }}>Field view</div>
+                                <div className="fl-field-view-grid">
+                                    {[
+                                        { id: 'velocity',      label: 'Velocity',      hint: '|u| only' },
+                                        { id: 'concentration', label: 'Concentration', hint: 'c(x,y,t) only' },
+                                        { id: 'both',          label: 'Both',          hint: 'u + c combined' },
+                                    ].map((o) => (
+                                        <button
+                                            key={o.id}
+                                            type="button"
+                                            className={`fl-field-view-btn${fieldView === o.id ? ' is-active' : ''}`}
+                                            onClick={() => setFieldView(o.id)}
+                                            title={o.hint}
+                                        >
+                                            <span className="fl-field-view-btn-label">{o.label}</span>
+                                            <span className="fl-field-view-btn-hint">{o.hint}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                                <label className="fl-field" title="Colormap used for the concentration field. Inferno / magma fade low-c regions to black so they don't fight with the velocity underneath in 'Both' mode.">
+                                    <span>c colormap</span>
+                                    <select
+                                        value={speciesColormap}
+                                        onChange={(e) => setSpeciesColormap(e.target.value)}
+                                    >
+                                        {COLORMAP_NAMES.map((n) => (
+                                            <option key={n} value={n}>{n}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label
+                                    className="fl-field"
+                                    title="Display unit for concentration — normalised c∈[0,1] (default), % by volume, ppm, ppb, or ppt. The solver always runs in normalised space; this setting only rescales what you SEE on sensors, the overlay legend and plots, so you can switch units live without restarting."
+                                >
+                                    <span>c unit</span>
+                                    <select
+                                        value={cUnit}
+                                        onChange={(e) => setCUnit(e.target.value)}
+                                    >
+                                        <option value="frac">normalised (0–1)</option>
+                                        <option value="pct">% by volume</option>
+                                        <option value="ppm">ppm</option>
+                                        <option value="ppb">ppb</option>
+                                        <option value="ppt">ppt</option>
+                                    </select>
+                                </label>
+                                {cUnit !== 'frac' && (
+                                    <label
+                                        className="fl-field"
+                                        title={`Peak inlet concentration in ${cSuffix}. The pulse profile (step / rectangular / gaussian / …) multiplies this amplitude to give the commanded inlet c(t). Everything you see — sensor c(t), peak c, AUC, overlay legend — is rescaled accordingly.`}
+                                    >
+                                        <span>Inlet c₀</span>
+                                        <div className="fl-inline">
+                                            <input
+                                                type="number"
+                                                value={cAmplitude}
+                                                onChange={(e) => {
+                                                    const v = Number(e.target.value);
+                                                    if (Number.isFinite(v) && v > 0) setCAmplitude(v);
+                                                }}
+                                                step={cUnit === 'ppt' ? 0.1 : (cUnit === 'pct' ? 0.1 : 1)}
+                                                min={1e-6}
+                                            />
+                                            <span>{cSuffix}</span>
+                                        </div>
+                                    </label>
+                                )}
+                                <div className="fl-muted fl-field-view-note">
+                                    Updates live during simulation. Velocity &amp; concentration can be toggled independently — switch between them or change the unit at any time without restarting.
+                                </div>
+                            </>
                         )}
                         <label className="fl-field">
                             <span>Analyte</span>
@@ -5387,7 +6219,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                     type="number"
                                     min={MIN_MESH_LONG_AXIS}
                                     max={MAX_MESH_LONG_AXIS}
-                                    step={10}
+                                    step={meshLongAxis >= 1000 ? 50 : (meshLongAxis >= 500 ? 25 : 10)}
                                     value={meshLongAxis}
                                     onChange={(e) => {
                                         const v = Math.round(Number(e.target.value));
@@ -5418,11 +6250,53 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                         ) : (
                             <div className="fl-muted">Close a region (rectangle / circle / polygon) to preview cell size.</div>
                         )}
+                        {meshLongAxis >= HEAVY_MESH_WARN_N && (
+                            <div className="fl-mesh-warn" role="status" title="Heavy mesh — memory and CPU scale as N² × steps-to-steady-state (roughly N³).">
+                                <b>Heavy mesh.</b>{' '}
+                                {meshLongAxis >= 1200
+                                    ? <>At {meshLongAxis} cells per long axis, each run can use hundreds of MB of RAM and take several minutes to reach steady state. If the page becomes unresponsive, step down to <b>Ultrafine (900)</b> or <b>Very fine (600)</b>.</>
+                                    : <>At {meshLongAxis} cells per long axis, memory is a few ×10 MB and each time-step is noticeably slower. Great for final figures; for iteration, switch back to <b>Fine (450)</b>.</>}
+                            </div>
+                        )}
                         {running && (
                             <div className="fl-muted fl-mesh-note">
                                 Pause / Reset the solver to change mesh resolution — it rebuilds the lattice on the next <b>Run</b>.
                             </div>
                         )}
+
+                        <div className="fl-subhd" style={{ marginTop: 10 }}>Mesh visualization</div>
+                        <div className="fl-mesh-viz-grid">
+                            {[
+                                { id: 'off',      label: 'Off',        hint: 'Hide overlay' },
+                                { id: 'grid',     label: 'Grid lines', hint: 'Every cell boundary' },
+                                { id: 'cells',    label: 'Cell type',  hint: 'Fluid / wall / BC fill' },
+                                { id: 'boundary', label: 'Boundary',   hint: 'Staircase on curves' },
+                                { id: 'stagger',  label: 'Lattice dots', hint: 'D2Q9 node centres' },
+                            ].map((o) => (
+                                <button
+                                    key={o.id}
+                                    type="button"
+                                    className={`fl-mesh-viz-btn${meshOverlay === o.id ? ' is-active' : ''}`}
+                                    onClick={() => setMeshOverlay(o.id)}
+                                    title={o.hint}
+                                >
+                                    <span className="fl-mesh-viz-btn-label">{o.label}</span>
+                                    <span className="fl-mesh-viz-btn-hint">{o.hint}</span>
+                                </button>
+                            ))}
+                        </div>
+                        <label className="fl-mesh-viz-row" title="Switch the velocity heatmap between pixelated (truthful cell rendering, but shows moiré stripes when upscaled) and bilinear smoothing (stripes gone, cells no longer visible).">
+                            <input
+                                type="checkbox"
+                                checked={fieldSmooth}
+                                onChange={(e) => setFieldSmooth(e.target.checked)}
+                            />
+                            <span>Smooth field rendering (hide stripes)</span>
+                        </label>
+                        <div className="fl-mesh-viz-note">
+                            LBM runs on a <b>uniform Cartesian lattice</b>; curved walls are approximated by a staircase of square cells, which is why you can see faint vertical/horizontal banding in the velocity field. Use <b>Boundary</b> to highlight the staircase, <b>Grid lines</b> to inspect cell density, or <b>Smooth field rendering</b> to erase the upscaling stripes.
+                        </div>
+
                         <div className="fl-subhd" style={{ marginTop: 10 }}>Run duration</div>
                         <label
                             className="fl-field fl-field-inset"
@@ -5726,6 +6600,10 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             tauFlow_s={tauFlow_s}
                             cInletNow={field?.cInletValue}
                             cMaxFluid={field?.cMaxFluid}
+                            fmtC={fmtC}
+                            scaleC={scaleC}
+                            cAxisLabel={cAxisLabel}
+                            cUnit={cUnit}
                             onRemoveProbe={(id) => {
                                 setPointProbes((list) => list.filter((pp) => pp.id !== id));
                                 const k = `P:${id}`;
@@ -5788,41 +6666,19 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             </>
                         )}
                         <button className="fl-toolbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
-                            onClick={() => { setEntities([DEFAULT_DOMAIN()]); setSections([DEFAULT_SECTION()]); fitToContent(); }}
+                            onClick={loadSimpleChannelDemo}
                             title="Restore the default 20 × 5 mm example channel">
                             Reload example
                         </button>
                         <button className="fl-toolbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
-                            onClick={() => {
-                                /* One-click aroma demo: dog-bone geometry with
-                                   filleted corners, two sensor strips, mid-
-                                   chamber probe line, physical units in sccm,
-                                   species ON with a rectangular NO₂ pulse at
-                                   25 °C / 40 % RH. Pulse timings match the
-                                   app-wide defaults (0.2 s pre-roll + 1 s
-                                   exposure ≈ one residence time).
-                                   Press Run immediately after clicking. */
-                                setEntities([AROMA_CHAMBER_DOMAIN()]);
-                                setSections([AROMA_CHAMBER_SECTION()]);
-                                setSelectedSectionId('s_aroma_mid');
-                                setInletMode('sccm');
-                                setInletQ_sccm(20);
-                                setChannelDepthMm(1);
-                                setSpeciesEnabled(true);
-                                setShowSpeciesOverlay(false);
-                                setAnalyteId('no2');
-                                setAnalyteT_C(25);
-                                setAnalyteRH_pct(40);
-                                setPulseId('rect');
-                                setPulseParams({ t_start: 0.2, t_dur: 1.0 });
-                                fitToContent();
-                                // Kick off the guided tour — only this
-                                // one entry point starts it, so normal
-                                // use of the app is never interrupted.
-                                setTourIdx(0);
-                            }}
+                            onClick={() => loadAromaDemo({ startTour: true })}
                             title="Dog-bone aroma chamber (1 cm × 1 cm chamber, 1 cm × 0.2 cm channels) with filleted corners, two sensors, rectangular NO₂ pulse at 25 °C / 40 % RH — ready to Run.">
                             Load aroma demo
+                        </button>
+                        <button className="fl-toolbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 6 }}
+                            onClick={() => setShowLanding(true)}
+                            title="Open the Flow Lab home page (demos + recent files)">
+                            Home
                         </button>
                     </div>
                 </div>
@@ -5940,11 +6796,16 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             </FloatingPropertyDialog>
 
             {visualizerOpen && (
-                <DataVisualizerModal
-                    sensorHistory={sensorHistory}
-                    speciesEnabled={speciesEnabled}
-                    onClose={() => setVisualizerOpen(false)}
-                />
+                <ChartErrorBoundary onClose={() => setVisualizerOpen(false)}>
+                    <DataVisualizerModal
+                        cUnit={cUnit}
+                        cAmplitude={cAmplitude}
+                        cAxisLabel={cAxisLabel}
+                        sensorHistory={sensorHistory}
+                        speciesEnabled={speciesEnabled}
+                        onClose={() => setVisualizerOpen(false)}
+                    />
+                </ChartErrorBoundary>
             )}
 
             {/* ─── Flow Lab file manager modal ─── */}
@@ -6005,8 +6866,10 @@ const EntitySvg = ({ entity, toScreen, selected, selectedEdgeIdx, selectedVertex
     // no fill — purely stroke construction geometry.
     const nEdges = isClosed ? pts.length : Math.max(0, pts.length - 1);
 
+    const isObstacle = entity.obstacle === true || entity.type === 'obstacle';
+
     return (
-        <g className={`fl-entity ${selected ? 'is-sel' : ''} ${multiSelected ? 'is-multi-sel' : ''} ${isPreview ? 'is-preview' : ''} ${isClosed ? '' : 'is-open'}`}>
+        <g className={`fl-entity ${selected ? 'is-sel' : ''} ${multiSelected ? 'is-multi-sel' : ''} ${isPreview ? 'is-preview' : ''} ${isClosed ? '' : 'is-open'} ${isObstacle ? 'is-obstacle' : ''}`}>
             {isClosed && <path d={pathD} className="fl-entity-fill" />}
             {Array.from({ length: nEdges }).map((_, i) => {
                 if (isPreview && isClosed === false && i === nEdges - 1) {
@@ -6125,6 +6988,10 @@ const SensorResponsePanel = ({
     sensorMetrics, pointProbes, onRemoveProbe,
     onExportCsv, onClearHistory, onVisualize, onSaveToWorkspace,
     running, effectiveInletU, tauFlow_s, cInletNow, cMaxFluid,
+    fmtC = (v) => Number.isFinite(v) ? v.toFixed(3) : '—',
+    scaleC = (v) => v,
+    cAxisLabel = 'c',
+    cUnit = 'frac',
 }) => {
     /* Time-axis view window. "Full" spans every sample currently in
        the store (NOT from t=0 — the store is capped, so if the first
@@ -6425,14 +7292,14 @@ const SensorResponsePanel = ({
                         cycles 0 → 1 → 0 on schedule but the sensor c(t)
                         stays flat, the issue is purely physical (flow is
                         too slow, sensor too far from inlet). */}
-                    <div className="fl-kv" title="Live inlet concentration the solver is currently driving. Cycles 0 → 1 → 0 with the aroma pulse.">
+                    <div className="fl-kv" title="Live inlet concentration the solver is currently driving. Cycles 0 → (inlet c₀) → 0 with the aroma pulse.">
                         <span>c inlet now</span>
                         <span style={{
                             fontWeight: 700,
                             color: Number.isFinite(cInletNow) && cInletNow > 1e-4
                                 ? '#22c55e' : 'inherit',
                         }}>
-                            {Number.isFinite(cInletNow) ? cInletNow.toFixed(3) : '—'}
+                            {fmtC(cInletNow)}
                         </span>
                     </div>
                     {/* Max concentration anywhere in the fluid (excluding
@@ -6448,7 +7315,7 @@ const SensorResponsePanel = ({
                             color: Number.isFinite(cMaxFluid) && cMaxFluid > 1e-4
                                 ? '#22c55e' : '#ef4444',
                         }}>
-                            {Number.isFinite(cMaxFluid) ? cMaxFluid.toFixed(3) : '—'}
+                            {fmtC(cMaxFluid)}
                         </span>
                     </div>
                     <div className="fl-kv" title="Pulse profile and parameters captured at Run time. If these don't match what you set in the solver panel, press Reset and Run again.">
@@ -6491,9 +7358,9 @@ const SensorResponsePanel = ({
             </div>
             {speciesEnabled
                 ? renderChart(
-                    (arr) => arr.c,
-                    'c(t) — near-wall analyte',
-                    (v) => v.toFixed(2),
+                    (arr) => (cUnit === 'frac' ? arr.c : arr.c.map(scaleC)),
+                    `${cAxisLabel} — near-wall analyte`,
+                    (v) => cUnit === 'frac' ? v.toFixed(2) : fmtConcNumber(v),
                 )
                 : (
                     <div className="fl-muted" style={{ marginBottom: 8 }}>
@@ -6521,9 +7388,11 @@ const SensorResponsePanel = ({
                 return (
                     <div key={k} style={{ marginTop: 4 }}>
                         {renderChart(
-                            (a) => a.c,
-                            `c(t) — ${arr.label || pp.label}`,
-                            (v) => (Math.abs(v) < 0.01 ? v.toExponential(1) : v.toFixed(2)),
+                            (a) => (cUnit === 'frac' ? a.c : a.c.map(scaleC)),
+                            `${cAxisLabel} — ${arr.label || pp.label}`,
+                            (v) => cUnit === 'frac'
+                                ? (Math.abs(v) < 0.01 ? v.toExponential(1) : v.toFixed(2))
+                                : fmtConcNumber(v),
                             { onlyKeys: [k] },
                         )}
                     </div>
@@ -6557,22 +7426,25 @@ const SensorResponsePanel = ({
                                 <div className="fl-sensor-metrics">
                                     <div className="fl-kv" title="The concentration the worker is driving the inlet cell to, as a function of simulation time. Not a measurement.">
                                         <span>reference</span>
-                                        <span>{arr.c.length ? arr.c[arr.c.length - 1].toFixed(2) : '—'}</span>
+                                        <span>{arr.c.length ? fmtC(arr.c[arr.c.length - 1]) : '—'}</span>
                                     </div>
                                 </div>
                             ) : mx ? (
                                 <div className="fl-sensor-metrics">
                                     <div className="fl-kv" title="Current concentration at this sensor / probe (latest sample). Compare to the 'peak c' below to see if the signal is still decaying.">
                                         <span>c now</span>
-                                        <span>{arr.c.length ? arr.c[arr.c.length - 1].toFixed(3) : '—'}</span>
+                                        <span>{arr.c.length ? fmtC(arr.c[arr.c.length - 1]) : '—'}</span>
                                     </div>
-                                    <div className="fl-kv"><span>peak c</span><span>{mx.peak.toFixed(3)} @ {mx.tPeak.toFixed(3)} s</span></div>
+                                    <div className="fl-kv"><span>peak c</span><span>{fmtC(mx.peak)} @ {mx.tPeak.toFixed(3)} s</span></div>
                                     <div className="fl-kv" title="Time to reach 10 % of peak on the rising edge."><span>t₁₀</span><span>{Number.isFinite(mx.t10) ? mx.t10.toFixed(3) + ' s' : '—'}</span></div>
                                     <div className="fl-kv" title="Time to reach 50 % of peak on the rising edge."><span>t₅₀</span><span>{Number.isFinite(mx.t50) ? mx.t50.toFixed(3) + ' s' : '—'}</span></div>
                                     <div className="fl-kv" title="Time to reach 90 % of peak on the rising edge."><span>t₉₀</span><span>{Number.isFinite(mx.t90) ? mx.t90.toFixed(3) + ' s' : '—'}</span></div>
                                     <div className="fl-kv" title="Rise time t₁₀→t₉₀."><span>rise</span><span>{Number.isFinite(mx.riseTime) ? mx.riseTime.toFixed(3) + ' s' : '—'}</span></div>
                                     <div className="fl-kv" title="Full Width at Half Maximum — width (in s) of the peak at c = peak/2."><span>FWHM</span><span>{Number.isFinite(mx.fwhm) ? mx.fwhm.toFixed(3) + ' s' : '—'}</span></div>
-                                    <div className="fl-kv" title="∫ (c(t) − c₀) dt — total dose delivered to the sensor (c·s)."><span>AUC</span><span>{mx.auc.toExponential(2)} c·s</span></div>
+                                    <div className="fl-kv" title="∫ (c(t) − c₀) dt — total dose delivered to the sensor (unit·s).">
+                                        <span>AUC</span>
+                                        <span>{fmtConcNumber(scaleC(mx.auc))} {(CONC_UNITS[cUnit]?.suffix || '') + '·s'}</span>
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="fl-sensor-metrics">
@@ -6874,21 +7746,219 @@ const SectionRow = ({ section, stats, selected, onSelect, onToggleVisible, onRen
     );
 };
 
+/* ──────────────────────────────────────────────────────────────
+ *  FlowLabLanding — home page shown on Flow Lab entry
+ * ──────────────────────────────────────────────────────────────
+ *  A clean welcome surface with two main sections:
+ *    • Demos      — curated templates (Aroma chamber, Simple
+ *                   channel, Blank canvas) that seed the editor
+ *                   with matching geometry + solver settings.
+ *    • Recent     — the user's last-edited project files, sorted
+ *                   by `updatedAt` desc, capped at 8.
+ *
+ *  Picking any tile loads the corresponding content and dismisses
+ *  the overlay. The "Show this page on open" checkbox at the
+ *  bottom lets power users skip straight into the editor next time;
+ *  the "Home" toolbar button always brings it back.
+ *
+ *  Rendered via portal so it visually covers the whole canvas +
+ *  side panels without needing z-index gymnastics. */
+const FlowLabLanding = ({
+    recents,
+    onOpenRecent,
+    onLoadAromaDemo,
+    onLoadSimpleChannel,
+    onCreateNewProject,
+    onClose,
+}) => {
+    /* Format a file's "last edited" as human-friendly relative time. */
+    const relTime = (ms) => {
+        if (!ms) return '—';
+        const dt = Date.now() - ms;
+        if (dt < 0) return 'just now';
+        const s = Math.floor(dt / 1000);
+        if (s < 45) return 'just now';
+        const m = Math.floor(s / 60);
+        if (m < 60) return `${m} min ago`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return `${h} h ago`;
+        const d = Math.floor(h / 24);
+        if (d < 7) return `${d} d ago`;
+        const w = Math.floor(d / 7);
+        if (w < 5) return `${w} wk ago`;
+        try { return new Date(ms).toLocaleDateString(); } catch { return `${d} d ago`; }
+    };
+
+    return (
+        <div
+            className="fl-home"
+            role="region"
+            aria-label="Flow Lab home"
+        >
+            <div className="fl-home-inner">
+                <header className="fl-home-head">
+                    <div>
+                        <div className="fl-home-title">Welcome to Flow Lab</div>
+                        <div className="fl-home-sub">
+                            2D gas-path CAD with live viscous-flow simulation.
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="fl-toolbtn"
+                        onClick={onClose}
+                        title="Continue with the current canvas"
+                    >
+                        Continue to canvas
+                    </button>
+                </header>
+
+                <section className="fl-landing-section">
+                    <div className="fl-landing-section-hd">
+                        <Waves size={14} /> Start
+                    </div>
+                    <div className="fl-landing-grid">
+                        <button
+                            type="button"
+                            className="fl-landing-card fl-landing-card--primary"
+                            onClick={onCreateNewProject}
+                        >
+                            <div className="fl-landing-card-icon"><FilePlus size={22} /></div>
+                            <div className="fl-landing-card-body">
+                                <div className="fl-landing-card-title">Create new project</div>
+                                <div className="fl-landing-card-desc">
+                                    Start with an empty canvas. Draw your own geometry with the
+                                    Rect, Circle, Line, and Polygon tools, then save it as a new
+                                    project when you're ready.
+                                </div>
+                                <div className="fl-landing-card-tags">
+                                    <span>new</span>
+                                    <span>empty</span>
+                                    <span>custom</span>
+                                </div>
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            className="fl-landing-card fl-landing-card--featured"
+                            onClick={onLoadAromaDemo}
+                        >
+                            <div className="fl-landing-card-icon"><Wind size={22} /></div>
+                            <div className="fl-landing-card-body">
+                                <div className="fl-landing-card-title">Aroma chamber demo</div>
+                                <div className="fl-landing-card-desc">
+                                    Dog-bone chamber with two sensor strips, species ON,
+                                    rectangular NO₂ pulse at 25 °C / 40 % RH. Ready to Run.
+                                </div>
+                                <div className="fl-landing-card-tags">
+                                    <span>species</span>
+                                    <span>pulse</span>
+                                    <span>guided tour</span>
+                                </div>
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            className="fl-landing-card"
+                            onClick={onLoadSimpleChannel}
+                        >
+                            <div className="fl-landing-card-icon"><Activity size={22} /></div>
+                            <div className="fl-landing-card-body">
+                                <div className="fl-landing-card-title">Simple channel</div>
+                                <div className="fl-landing-card-desc">
+                                    Plain 20 × 5 mm rectangular channel — a minimal starting
+                                    point for exploring inlets, outlets, and mesh choices.
+                                </div>
+                                <div className="fl-landing-card-tags">
+                                    <span>minimal</span>
+                                    <span>baseline</span>
+                                </div>
+                            </div>
+                        </button>
+                    </div>
+                </section>
+
+                <section className="fl-landing-section">
+                    <div className="fl-landing-section-hd">
+                        <Archive size={14} /> Recent projects
+                        {recents.length > 0 && (
+                            <span className="fl-landing-section-count">
+                                {recents.length} saved
+                            </span>
+                        )}
+                    </div>
+                    {recents.length === 0 ? (
+                        <div className="fl-landing-empty">
+                            <FileText size={20} />
+                            <div>No saved projects yet. Pick a demo or the blank canvas to get started — your work will appear here after you save.</div>
+                        </div>
+                    ) : (
+                        <div className="fl-landing-recents">
+                            {recents.map((f) => (
+                                <button
+                                    type="button"
+                                    key={f.id}
+                                    className="fl-landing-recent"
+                                    onClick={() => onOpenRecent(f.id)}
+                                    title={`Open ${f.name}`}
+                                >
+                                    <div className="fl-landing-recent-icon">
+                                        <FileText size={14} />
+                                    </div>
+                                    <div className="fl-landing-recent-body">
+                                        <div className="fl-landing-recent-name">
+                                            {f.displayName}
+                                        </div>
+                                        {f.folderPath && (
+                                            <div className="fl-landing-recent-path">
+                                                Flow Lab / {f.folderPath}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="fl-landing-recent-meta">
+                                        {relTime(f.updatedAt || f.createdAt)}
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
+            </div>
+        </div>
+    );
+};
+
 /* Tiny residual(iter) chart, log-y. A dashed threshold line at 1e-4 marks
    the convergence target. Great for spotting stalled sims at a glance. */
 const ResidualChart = ({ history, threshold }) => {
     const W = 240, H = 100;
     const padL = 34, padR = 6, padT = 6, padB = 18;
-    const its = history.map((h) => h.iter);
-    const res = history.map((h) => Math.max(1e-12, h.residual));
+    /* Defensive: history can be null / undefined briefly during a
+       Reset commit if a parent effect reads stale props. */
+    const safeHistory = Array.isArray(history) ? history.filter((h) => h && Number.isFinite(h.iter)) : [];
+    if (safeHistory.length === 0) {
+        return (
+            <svg className="fl-profile-chart" viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
+                <rect x={padL} y={padT} width={W - padL - padR} height={H - padT - padB} className="fl-chart-plot" />
+                <text x={W / 2} y={H / 2} className="fl-chart-label" textAnchor="middle" dominantBaseline="middle">
+                    no residual data yet
+                </text>
+            </svg>
+        );
+    }
+    const its = safeHistory.map((h) => h.iter);
+    const res = safeHistory.map((h) => Math.max(1e-12, Number(h.residual) || 1e-12));
     const imax = its[its.length - 1] || 1;
     const imin = its[0] || 0;
     const logMin = Math.log10(Math.min(threshold * 0.1, ...res));
     const logMax = Math.log10(Math.max(1, ...res));
     const xPx = (i) => padL + ((i - imin) / Math.max(1, imax - imin)) * (W - padL - padR);
     const yPx = (r) => padT + (1 - (Math.log10(r) - logMin) / (logMax - logMin)) * (H - padT - padB);
-    const path = history.map((h, idx) =>
-        `${idx === 0 ? 'M' : 'L'}${xPx(h.iter).toFixed(1)},${yPx(Math.max(1e-12, h.residual)).toFixed(1)}`
+    const path = safeHistory.map((h, idx) =>
+        `${idx === 0 ? 'M' : 'L'}${xPx(h.iter).toFixed(1)},${yPx(Math.max(1e-12, Number(h.residual) || 1e-12)).toFixed(1)}`
     ).join(' ');
     return (
         <svg className="fl-profile-chart" viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
@@ -7194,7 +8264,7 @@ const OriginLabel = ({ toScreen, canvasSize, unit = 'mm' }) => {
 /* Floating color-scale legend, bottom-right of the canvas. Renders a
    vertical gradient strip with numeric ticks at 0 / ½ / max — the same
    affordance COMSOL / Star-CCM+ / Paraview put on every contour plot. */
-const ColorLegend = ({ lut, vmin, vmax, label }) => {
+const ColorLegend = ({ lut, vmin, vmax, label, offsetIndex = 0, fixedDigits = false }) => {
     const W = 54, H = 160;
     const barW = 14;
     const x0 = 6;
@@ -7223,7 +8293,13 @@ const ColorLegend = ({ lut, vmin, vmax, label }) => {
         { t: 0, v: vmin },
     ];
     return (
-        <svg className="fl-legend" viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
+        <svg
+            className="fl-legend"
+            viewBox={`0 0 ${W} ${H}`}
+            width={W}
+            height={H}
+            style={offsetIndex > 0 ? { right: 10 + offsetIndex * (W + 8) } : undefined}
+        >
             <rect x={0} y={0} width={W} height={H} className="fl-legend-bg" rx={4} />
             {rects}
             {ticks.map((tk, i) => {
@@ -7232,7 +8308,7 @@ const ColorLegend = ({ lut, vmin, vmax, label }) => {
                     <g key={i}>
                         <line x1={x0 + barW} x2={x0 + barW + 4} y1={y} y2={y} className="fl-legend-tick" />
                         <text x={x0 + barW + 6} y={y + 3} className="fl-legend-label">
-                            {tk.v.toExponential(1)}
+                            {fixedDigits ? fmtConcNumber(tk.v) : tk.v.toExponential(1)}
                         </text>
                     </g>
                 );
@@ -7860,8 +8936,30 @@ const makeVizPlot = (metric, keys) => {
     };
 };
 
-const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
-    const keys = Object.keys(sensorHistory || {});
+const DataVisualizerModal = ({
+    sensorHistory, speciesEnabled, onClose,
+    cUnit = 'frac', cAmplitude = 1, cAxisLabel = 'c',
+}) => {
+    /* Scale factor from normalised c (stored in sensorHistory) to the
+     * chosen display unit. Used for chartData, axis labels and the
+     * tooltip formatter so every plot stays unit-consistent. */
+    const cScale = cUnit === 'frac' ? 1 : (Number.isFinite(cAmplitude) ? cAmplitude : 1);
+    const cSuffix = CONC_UNITS[cUnit]?.suffix || '';
+    const metricLabels = {
+        c:  { title: `Concentration ${cAxisLabel}`, yLabel: cAxisLabel },
+        u:  { title: 'Velocity |u|(t)',              yLabel: '|u| (m/s)' },
+        cu: { title: `Flux ${cAxisLabel.replace('c', 'c')}·|u|(t)`, yLabel: cSuffix ? `c·|u| (${cSuffix}·m/s)` : 'c·|u|' },
+    };
+    /* Only surface keys whose entries are FULLY populated — i.e. the
+       object exists and has a t_s array. During a solver reset the
+       parent briefly batches updates (`setSensorHistory({})`,
+       `setField(null)`, `setRunning(false)`), and for one render
+       Recharts can see a stale entry whose arrays were replaced
+       while keys still list them. Filtering here ensures we never
+       pass a half-defined entry to the chart layer. */
+    const keys = Object.keys(sensorHistory || {}).filter(
+        (k) => sensorHistory[k] && Array.isArray(sensorHistory[k].t_s)
+    );
 
     /* Master time array — longest history wins so all sensors fit. */
     const masterKey = keys.length
@@ -7869,6 +8967,28 @@ const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
         : null;
     const timeArray = masterKey ? sensorHistory[masterKey].t_s : [];
     const tMaxAll = timeArray.length ? timeArray[timeArray.length - 1] : 0;
+
+    /* When the dataset identity changes (reset, geometry rebuild), we
+       bump `chartEpoch` to force every Recharts <LineChart> to remount
+       with fresh internal state. Recharts keeps `activeTooltipIndex`
+       / `activePayload` in component state; if the user was hovering
+       near the end of a 30k-point series (tooltip index ~29700) when
+       reset fires, Recharts tries to read `data[29700]` from a now-
+       cleared internal buffer and crashes deep in its render tree. */
+    const chartEpochRef = useRef({ prevKey: '', epoch: 0 });
+    const signature = `${keys.length}:${tMaxAll.toFixed(4)}`;
+    if (chartEpochRef.current.prevKey !== signature) {
+        chartEpochRef.current = {
+            prevKey: signature,
+            /* Bump epoch on ANY shrink (reset clears all points). Grow
+               events don't need a remount — Recharts handles data
+               growth fine. */
+            epoch: tMaxAll === 0
+                ? chartEpochRef.current.epoch + 1
+                : chartEpochRef.current.epoch,
+        };
+    }
+    const chartEpoch = chartEpochRef.current.epoch;
 
     const colorFor = useCallback((k) => {
         if (k === 'INLET') return '#94a3b8';
@@ -7951,14 +9071,14 @@ const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
                 const idx = Math.min(i, arr.t_s.length - 1);
                 const c = arr.c?.[idx];
                 const u = arr.u?.[idx];
-                if (Number.isFinite(c)) row[`${k}_c`] = c;
+                if (Number.isFinite(c)) row[`${k}_c`] = c * cScale;
                 if (Number.isFinite(u)) row[`${k}_u`] = u;
-                if (Number.isFinite(c) && Number.isFinite(u)) row[`${k}_cu`] = c * u;
+                if (Number.isFinite(c) && Number.isFinite(u)) row[`${k}_cu`] = c * cScale * u;
             }
             out.push(row);
         }
         return out;
-    }, [timeArray, keys, sensorHistory, tCutoff]);
+    }, [timeArray, keys, sensorHistory, tCutoff, cScale]);
 
     if (keys.length === 0) return null;
 
@@ -8050,7 +9170,7 @@ const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
                             <div className="fl-viz-empty-sub">Use the buttons above to add a concentration, velocity, or flux chart.</div>
                         </div>
                     ) : plots.map((p, pi) => {
-                        const metricLabel = VIZ_METRIC_LABELS[p.metric] || { yLabel: p.metric };
+                        const metricLabel = metricLabels[p.metric] || VIZ_METRIC_LABELS[p.metric] || { yLabel: p.metric };
                         const visibleKeys = keys.filter((k) => p.series[k] !== false);
                         return (
                             <div key={p.id} className="fl-viz-card">
@@ -8133,9 +9253,24 @@ const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
                                 <div className="fl-viz-card-chart" style={{ height: cardHeightCss }}>
                                     {visibleKeys.length === 0 ? (
                                         <div className="fl-viz-chart-empty">No series selected — click a chip above to show a sensor.</div>
+                                    ) : chartData.length === 0 ? (
+                                        <div className="fl-viz-chart-empty">
+                                            Waiting for simulation data…
+                                        </div>
                                     ) : (
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={chartData} margin={{ top: 8, right: 24, left: 8, bottom: 28 }}>
+                                            <LineChart
+                                                /* `chartEpoch` bumps on dataset reset so
+                                                   Recharts remounts with a clean internal
+                                                   state (activeTooltipIndex etc.) —
+                                                   prevents a stale-index crash at
+                                                   deep-Recharts code when the user
+                                                   hovers near the end of a long series
+                                                   right before Reset/Pause. */
+                                                key={`${p.id}_${chartEpoch}`}
+                                                data={chartData}
+                                                margin={{ top: 8, right: 24, left: 8, bottom: 28 }}
+                                            >
                                                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #334155)" />
                                                 <XAxis
                                                     dataKey="t"
@@ -8160,24 +9295,52 @@ const DataVisualizerModal = ({ sensorHistory, speciesEnabled, onClose }) => {
                                                         fontSize: 12,
                                                     }}
                                                     labelFormatter={(t) => `t = ${Number(t).toFixed(4)} s`}
-                                                    formatter={(value, name) => [Number(value).toExponential(3), name]}
+                                                    formatter={(value, name, item) => {
+                                                        const v = Number(value);
+                                                        if (!Number.isFinite(v)) return ['—', name];
+                                                        /* The Line's dataKey encodes `${sensorKey}_${metric}`.
+                                                         * Grab the metric suffix so we can show the right
+                                                         * unit in the tooltip (concentration in ppm/ppb,
+                                                         * flux in ppm·m/s etc.). */
+                                                        const metric = (item?.dataKey || '').split('_').pop();
+                                                        if (metric === 'c') {
+                                                            return [`${fmtConcNumber(v)}${cSuffix ? ' ' + cSuffix : ''}`, name];
+                                                        }
+                                                        if (metric === 'u') {
+                                                            return [`${v.toFixed(4)} m/s`, name];
+                                                        }
+                                                        if (metric === 'cu') {
+                                                            return [`${fmtConcNumber(v)}${cSuffix ? ' ' + cSuffix : ''}·m/s`, name];
+                                                        }
+                                                        return [v.toExponential(3), name];
+                                                    }}
                                                 />
                                                 <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
-                                                {visibleKeys.map((k) => (
-                                                    <Line
-                                                        key={`${k}_${p.metric}`}
-                                                        type={smooth ? 'monotone' : 'linear'}
-                                                        dataKey={`${k}_${p.metric}`}
-                                                        name={sensorHistory[k].label || k}
-                                                        stroke={colorFor(k)}
-                                                        strokeWidth={k === 'INLET' ? 1.5 : 2}
-                                                        strokeDasharray={k === 'INLET' ? '5 5' : ''}
-                                                        dot={showMarkers ? { r: 2 } : false}
-                                                        activeDot={{ r: 4 }}
-                                                        isAnimationActive={false}
-                                                        connectNulls={false}
-                                                    />
-                                                ))}
+                                                {visibleKeys.map((k) => {
+                                                    /* Defensive: if a series was removed
+                                                       after the plot was created (e.g.
+                                                       reset), just skip it for this
+                                                       render. The lazy-fill effect on
+                                                       key change reconciles state on the
+                                                       following commit. */
+                                                    const entry = sensorHistory[k];
+                                                    if (!entry) return null;
+                                                    return (
+                                                        <Line
+                                                            key={`${k}_${p.metric}`}
+                                                            type={smooth ? 'monotone' : 'linear'}
+                                                            dataKey={`${k}_${p.metric}`}
+                                                            name={entry.label || k}
+                                                            stroke={colorFor(k)}
+                                                            strokeWidth={k === 'INLET' ? 1.5 : 2}
+                                                            strokeDasharray={k === 'INLET' ? '5 5' : ''}
+                                                            dot={showMarkers ? { r: 2 } : false}
+                                                            activeDot={{ r: 4 }}
+                                                            isAnimationActive={false}
+                                                            connectNulls={false}
+                                                        />
+                                                    );
+                                                })}
                                             </LineChart>
                                         </ResponsiveContainer>
                                     )}
