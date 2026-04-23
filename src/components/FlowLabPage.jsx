@@ -4080,9 +4080,12 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             : (result.sourceUnit === 'viewBox'
                 ? ' · units: viewBox units treated as mm (adjust scale if needed)'
                 : '');
+        const fallbackMsg = result.usedFallback
+            ? ' · fallback reader used (ELLIPSE / SPLINE skipped)'
+            : '';
         setImportBanner({
-            level: 'ok',
-            text: `Imported ${result.entities.length} entities from ${file.name}${unitsMsg}.`,
+            level: result.usedFallback ? 'warn' : 'ok',
+            text: `Imported ${result.entities.length} entities from ${file.name}${unitsMsg}${fallbackMsg}.`,
         });
     }, [scheduleFitToContent]);
 

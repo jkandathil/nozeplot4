@@ -222,18 +222,173 @@ function dxfToEntities(dxf, scale) {
     return collected;
 }
 
+/* Normalise DXF text before handing it to the parser. Handles three
+ * real-world pathologies we've seen in the wild:
+ *   1. UTF-8 / UTF-16 BOM at the start (some CAD apps emit both).
+ *   2. CR-only or mixed CRLF line endings — dxf-parser's split() is
+ *      strict about \n boundaries.
+ *   3. Missing `0\nEOF` group at the end (truncated files, minimal
+ *      hand-written DXFs). Without it the parser throws "EOF group
+ *      not read before end of file. Ended on code undefined".
+ */
+function normaliseDxf(text) {
+    if (typeof text !== 'string') text = String(text ?? '');
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    text = text.replace(/\r\n?/g, '\n');
+    while (text.endsWith('\n')) text = text.slice(0, -1);
+    /* Peek at the last non-whitespace group pair; if it's not
+     * `0 / EOF`, append one. Walk backward because trailing comments /
+     * whitespace are uncommon but legal in DXF. */
+    const lines = text.split('\n').map((l) => l.trim());
+    let sawEof = false;
+    for (let i = lines.length - 1; i >= 1; i--) {
+        if (!lines[i]) continue;
+        if (lines[i] === 'EOF' && lines[i - 1] === '0') { sawEof = true; break; }
+        if (lines[i] === 'EOF') { sawEof = true; break; }
+        break;
+    }
+    if (!sawEof) text += '\n0\nEOF\n';
+    else text += '\n';
+    return text;
+}
+
+/* Last-resort minimal DXF reader for files that dxf-parser can't
+ * consume even after normalisation. Walks the (group-code, value)
+ * pair stream and extracts the handful of primitive entities Flow
+ * Lab cares about (LINE, LWPOLYLINE, POLYLINE, CIRCLE, ARC). ELLIPSE
+ * / SPLINE are skipped here — if those matter for a particular file
+ * the user can export it from the source CAD with the "standard DXF"
+ * option so dxf-parser's full pipeline works.
+ *
+ * Returns a shape compatible with what `dxf-parser` would produce so
+ * the downstream `dxfToEntities` routine is unchanged.
+ */
+function fallbackParseDxf(text) {
+    const lines = text.split('\n').map((l) => l.trim());
+    const pairs = [];
+    for (let i = 0; i + 1 < lines.length; i += 2) {
+        const code = Number(lines[i]);
+        if (!Number.isFinite(code)) { i -= 1; continue; }
+        pairs.push([code, lines[i + 1]]);
+    }
+    const header = {};
+    const entities = [];
+    let inEntities = false;
+    let inHeader = false;
+    let pendingVar = null;
+    let cur = null;
+    const flush = () => { if (cur) { entities.push(cur); cur = null; } };
+    for (let i = 0; i < pairs.length; i++) {
+        const [code, rawVal] = pairs[i];
+        const val = rawVal;
+        if (code === 0) {
+            if (val === 'SECTION') {
+                const next = pairs[i + 1];
+                if (next && next[0] === 2) {
+                    if (next[1] === 'HEADER') { inHeader = true; inEntities = false; }
+                    else if (next[1] === 'ENTITIES') { inEntities = true; inHeader = false; }
+                    else { inHeader = false; inEntities = false; }
+                    i++;
+                }
+                flush();
+                continue;
+            }
+            if (val === 'ENDSEC' || val === 'EOF') {
+                flush();
+                inEntities = false;
+                inHeader = false;
+                continue;
+            }
+            if (inEntities) {
+                flush();
+                cur = { type: val, vertices: [] };
+            }
+            continue;
+        }
+        if (inHeader) {
+            if (code === 9) pendingVar = val;
+            else if (pendingVar != null && code === 70) {
+                const n = Number(val);
+                if (Number.isFinite(n)) header[pendingVar] = n;
+                pendingVar = null;
+            }
+            continue;
+        }
+        if (!cur) continue;
+        if (cur.type === 'LINE') {
+            if (code === 10) cur._x0 = Number(val);
+            else if (code === 20) cur._y0 = Number(val);
+            else if (code === 11) cur._x1 = Number(val);
+            else if (code === 21) {
+                cur._y1 = Number(val);
+                cur.vertices = [
+                    { x: cur._x0 || 0, y: cur._y0 || 0 },
+                    { x: cur._x1 || 0, y: cur._y1 || 0 },
+                ];
+            }
+        } else if (cur.type === 'LWPOLYLINE') {
+            if (code === 70) cur.shape = !!(Number(val) & 1);
+            else if (code === 10) cur._px = Number(val);
+            else if (code === 20) {
+                cur.vertices.push({ x: cur._px || 0, y: Number(val) });
+            }
+        } else if (cur.type === 'POLYLINE') {
+            if (code === 70) cur.closed = !!(Number(val) & 1);
+        } else if (cur.type === 'VERTEX') {
+            if (code === 10) cur._px = Number(val);
+            else if (code === 20) {
+                const parent = entities[entities.length - 2];
+                if (parent && parent.type === 'POLYLINE') {
+                    parent.vertices.push({ x: cur._px || 0, y: Number(val) });
+                }
+            }
+        } else if (cur.type === 'CIRCLE') {
+            if (code === 10) cur._cx = Number(val);
+            else if (code === 20) cur._cy = Number(val);
+            else if (code === 40) {
+                cur.radius = Number(val);
+                cur.center = { x: cur._cx || 0, y: cur._cy || 0 };
+            }
+        } else if (cur.type === 'ARC') {
+            if (code === 10) cur._cx = Number(val);
+            else if (code === 20) cur._cy = Number(val);
+            else if (code === 40) cur.radius = Number(val);
+            else if (code === 50) cur.startAngle = Number(val);
+            else if (code === 51) {
+                cur.endAngle = Number(val);
+                cur.center = { x: cur._cx || 0, y: cur._cy || 0 };
+            }
+        }
+    }
+    flush();
+    /* Drop VERTEX scaffolding (already merged into the parent POLYLINE). */
+    const filtered = entities.filter((e) => e.type !== 'VERTEX' && e.type !== 'SEQEND');
+    return { header, entities: filtered };
+}
+
 /**
  * Parse a DXF text string and return Flow Lab entity objects.
  *
  * `scaleOverride` (optional) replaces the auto-detected mm scale.
  */
 export function parseDxfToEntities(dxfText, { scaleOverride = null } = {}) {
+    const cleaned = normaliseDxf(dxfText);
     const parser = new DxfParser();
     let dxf;
+    let usedFallback = false;
     try {
-        dxf = parser.parseSync(dxfText);
+        dxf = parser.parseSync(cleaned);
     } catch (err) {
-        throw new Error('Failed to parse DXF: ' + (err?.message || err));
+        /* Try the minimal built-in fallback before giving up — covers
+         * hand-written DXFs that dxf-parser's strict state machine
+         * rejects. */
+        console.warn('dxf-parser failed, falling back to minimal reader:', err?.message || err);
+        try {
+            dxf = fallbackParseDxf(cleaned);
+            usedFallback = true;
+        } catch (err2) {
+            throw new Error('Failed to parse DXF: ' + (err?.message || err));
+        }
     }
     if (!dxf) throw new Error('DXF parsed to null');
     const unitsCode = dxf.header?.$INSUNITS ?? 0;
@@ -260,6 +415,7 @@ export function parseDxfToEntities(dxfText, { scaleOverride = null } = {}) {
         sourceUnit: unitsCode,
         detectedScale: autoScale,
         unitsName: unitsCode === 0 ? 'unit-less (treated as mm)' : dxfUnitName(unitsCode),
+        usedFallback,
     };
 }
 
