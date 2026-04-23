@@ -166,11 +166,14 @@
 .cs-topbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
+    row-gap: 6px;
     padding: 8px 14px;
     background: rgba(15, 23, 42, 0.7);
     border-bottom: 1px solid rgba(148, 163, 184, 0.18);
     flex: 0 0 auto;
+    min-width: 0;
 }
 
 .cs-topbtn {
@@ -266,11 +269,12 @@
 /* Body layout */
 .cs-body {
     display: grid;
-    grid-template-columns: minmax(260px, 380px) 1fr auto;
+    grid-template-columns: minmax(240px, 340px) minmax(0, 1fr) auto;
     gap: 10px;
     padding: 10px;
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
 }
 
@@ -281,11 +285,13 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
 }
 
 .cs-pane-editor {
-    min-width: 260px;
+    /* column width handled by the grid track */
+    min-width: 0;
 }
 
 .cs-pane-viz {
@@ -293,6 +299,7 @@
     flex-direction: column;
     gap: 0;
     min-height: 0;
+    min-width: 0;
 }
 
 .cs-pane-tour {
@@ -359,10 +366,10 @@
 
 .cs-viz-top {
     flex: 0 0 52%;
-    min-height: 200px;
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    min-height: 200px;
+    min-width: 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.15);
 }
 
@@ -371,11 +378,13 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
 }
 
 .cs-schematic-wrap {
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
     overflow: auto;
     background-color: var(--sch-paper);
     background-image:
@@ -387,12 +396,14 @@
 
 .cs-schematic-scroller {
     padding: 16px;
-    min-width: max-content;
+    display: inline-block;
+    /* Let the inline-block size to the SVG's intrinsic width; the
+       parent .cs-schematic-wrap takes care of scrolling without
+       pushing the grid column wider than its allotted space. */
 }
 
 .cs-schematic-svg {
     display: block;
-    margin: 0 auto;
 }
 
 .cs-comp text {
@@ -440,6 +451,7 @@
     gap: 6px;
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
 }
 
 .cs-bode-wrap {
