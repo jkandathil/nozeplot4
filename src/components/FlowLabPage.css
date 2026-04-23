@@ -3120,7 +3120,29 @@ html[data-theme="light"] .fl-sensor-row {
     left: 50%;
     bottom: 24px;
     transform: translateX(-50%);
-    z-index: 2000;
+    /* z-index 9500 places the card above every other overlay in the
+       app EXCEPT the file-explorer backdrop (9000) — wait, the file
+       explorer is 9000 so we need to sit above it too, but the file
+       explorer is a modal the user explicitly opened, so ranking
+       tour below it is correct. Using 5000 sits above all ambient
+       chrome (sidebar z:50, top-bar z:20, main-content z:1, edge
+       toggles z:45, pulse/import banners z:6–10, grid popover
+       z:4000) without fighting explicit modals. */
+    z-index: 5000;
+    /* `isolation: isolate` forces a fresh stacking context rooted at
+       this element so the card's z-index isn't reshuffled by
+       container-type or containment on ancestors — the tour card is
+       portalled to document.body but defensive code here keeps it
+       on top even if React ever reparents it. */
+    isolation: isolate;
+    /* Clicks/touches must reach the Skip / Previous / Next buttons.
+       The card itself can be dismissed with the buttons inside it,
+       so nothing above it in the paint order should be swallowing
+       pointer events from the card. Declaring `auto` explicitly
+       prevents a parent `pointer-events: none` (from portalled
+       overlays or prop-dialog leader lines that live in the same
+       portal subtree) from being inherited into the card. */
+    pointer-events: auto;
     width: min(520px, calc(100vw - 32px));
     padding: 14px 16px 12px 16px;
     background: rgba(15, 23, 42, 0.92);
@@ -3133,8 +3155,12 @@ html[data-theme="light"] .fl-sensor-row {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    animation: fl-tour-pop 220ms ease-out;
+    /* `both` fill-mode keeps the final keyframe (opacity 1, no offset)
+       applied once the animation ends — avoids a subpixel reflow
+       that briefly hid the card on some engines. */
+    animation: fl-tour-pop 220ms ease-out both;
 }
+.fl-tour-card * { pointer-events: auto; }
 @keyframes fl-tour-pop {
     from { opacity: 0; transform: translate(-50%, 12px); }
     to   { opacity: 1; transform: translate(-50%, 0);    }
