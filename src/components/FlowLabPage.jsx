@@ -7743,26 +7743,17 @@ const EntitySvg = ({ entity, toScreen, selected, selectedEdgeIdx, selectedVertex
                     <line key={i} x1={sa.x} y1={sa.y} x2={sb.x} y2={sb.y} className={cls} />
                 );
             })}
-            {/* Vertex dots — corner-aware rendering.
-             *
-             * Two flavours of clutter we're suppressing:
-             *   1. Parametric curved shapes (circle / ellipse / arc)
-             *      never show per-sample dots (those vertices are just
-             *      rendering samples, not editable handles).
-             *   2. Free polygons — typically produced by booleans,
-             *      offsets, or imports — very often *mostly* lie on a
-             *      smooth curve (e.g. a unioned circle + rect still
-             *      has ~48 samples around the arc). We hide dots on
-             *      every vertex whose turn angle is below a corner
-             *      threshold so the outline reads cleanly, and only
-             *      keep dots where the geometry actually has a corner
-             *      the user can meaningfully grab.
-             *
-             * Always-visible exceptions: the endpoints of an open
-             * polyline (users need to see where to grab them to
-             * extend / trim), the currently selected vertex, and
-             * vertices on a short polyline where every point is a
-             * legitimate handle (n ≤ 8). */
+            {/*
+              Vertex dots are corner-aware. Two flavours of clutter are
+              suppressed: sampled parametric shapes (circle, ellipse,
+              arc) never show per-sample dots; and free polygons from
+              booleans / offsets / imports that happen to sit on a
+              smooth curve skip dots on vertices where the turn angle
+              is below a corner threshold. Always-visible exceptions:
+              open-polyline endpoints (needed for extend / trim), the
+              currently selected vertex, and every vertex on short
+              polylines (n of 8 or fewer).
+             */}
             {entity.shape === 'circle' || entity.shape === 'ellipse' || entity.shape === 'arc'
                 ? null
                 : (() => {
