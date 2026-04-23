@@ -6048,8 +6048,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                             <div className="fl-hover-tip-row">
                                                 <span className="fl-hover-tip-k">c</span>
                                                 <span className="fl-hover-tip-v">
+                                                    {/* fmtC already appends the unit suffix
+                                                         (ppm / ppb / %, …) so DON'T add
+                                                         cSuffix here or the tooltip reads
+                                                         "11.64 ppb ppb". */}
                                                     {fmtC(hoverSample.c)}
-                                                    {cSuffix ? ' ' + cSuffix : ''}
                                                 </span>
                                             </div>
                                         )}
