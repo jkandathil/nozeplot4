@@ -1125,6 +1125,21 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const [meshOverlay, setMeshOverlay] = useState('off');
     const [fieldSmooth, setFieldSmooth] = useState(false);
 
+    /* "Inspect" mode — when on, hovering the canvas shows a small
+     *  transparent tooltip with the live cell values at the cursor
+     *  (|u|, ux, uy, and concentration when species is enabled)
+     *  plus the current simulated time. Toggled from the Analysis
+     *  toolbar group. Persisted so users who rely on it during
+     *  simulations don't have to re-enable it every session. */
+    const [inspectOn, setInspectOn] = useState(() => {
+        try { return localStorage.getItem('flowlab.inspectOn') === '1'; }
+        catch (_) { return false; }
+    });
+    useEffect(() => {
+        try { localStorage.setItem('flowlab.inspectOn', inspectOn ? '1' : '0'); }
+        catch (_) { /* ignore */ }
+    }, [inspectOn]);
+
     /* ── Undo / Redo plumbing ────────────────────────────────────
        Pattern: whenever `entities` or `sections` change we push a
        fresh snapshot to the history stack — unless the change came
@@ -4690,6 +4705,76 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         return lines;
     }, [field, solverInfo, showStreamlines]);
 
+    /* Hover inspect — live cell sample at the cursor.
+     *  When `inspectOn` is true and the solver has produced at least
+     *  one field, this memo bilinearly interpolates |u|, ux, uy and
+     *  (when species is enabled) c at the cursor's world position.
+     *  It returns null for points outside the domain or inside a
+     *  wall cell so the tooltip can distinguish "empty" vs "inside
+     *  fluid". Runs only on field / cursor / toggle changes — cost
+     *  is O(1) per frame. */
+    const hoverSample = useMemo(() => {
+        if (!inspectOn) return null;
+        if (!cursorWorld) return null;
+        if (!field || !solverInfo) return null;
+        const mask = maskRef.current;
+        const { nx, ny, ux, uy, c } = field;
+        const { bbox, dt_s } = solverInfo;
+        const dx_mm = (bbox.xmax - bbox.xmin) / nx;
+        const dy_mm = (bbox.ymax - bbox.ymin) / ny;
+        const xi = (cursorWorld.x - bbox.xmin) / dx_mm - 0.5;
+        const yj = (cursorWorld.y - bbox.ymin) / dy_mm - 0.5;
+        const i0 = Math.floor(xi);
+        const j0 = Math.floor(yj);
+        // Out of the solver's padded domain → tooltip says so.
+        if (i0 < 0 || i0 >= nx - 1 || j0 < 0 || j0 >= ny - 1) {
+            return { x_mm: cursorWorld.x, y_mm: cursorWorld.y, inDomain: false };
+        }
+        const k00 = j0 * nx + i0;
+        const k10 = k00 + 1;
+        const k01 = k00 + nx;
+        const k11 = k01 + 1;
+        // Worker codes: FLUID=0, WALL=1, INLET=2, OUTLET=3.
+        const WALL = 1;
+        const anyWall = mask
+            ? (mask[k00] === WALL || mask[k10] === WALL
+                || mask[k01] === WALL || mask[k11] === WALL)
+            : false;
+        // Bilinear interp. If any of the 4 corners is a wall we
+        // still report |u|=0 / c=0 there — but we tag isWall so the
+        // tooltip can show "inside wall / obstacle" instead.
+        const fx = xi - i0;
+        const fy = yj - j0;
+        const lerp4 = (arr) => (
+            (1 - fx) * (1 - fy) * arr[k00]
+            + fx * (1 - fy) * arr[k10]
+            + (1 - fx) * fy * arr[k01]
+            + fx * fy * arr[k11]
+        );
+        const ux_s = lerp4(ux);
+        const uy_s = lerp4(uy);
+        const u_s = Math.hypot(ux_s, uy_s);
+        const c_s = c ? lerp4(c) : null;
+        const t_s = Number.isFinite(field.t_s)
+            ? field.t_s
+            : (Number.isFinite(field.iter) ? field.iter * dt_s : 0);
+        return {
+            x_mm: cursorWorld.x,
+            y_mm: cursorWorld.y,
+            inDomain: true,
+            isWall: anyWall,
+            u_mps: u_s,
+            ux_mps: ux_s,
+            uy_mps: uy_s,
+            c: c_s,
+            t_s,
+            iter: field.iter || 0,
+            cellSize_mm: dx_mm,
+            i: i0,
+            j: j0,
+        };
+    }, [inspectOn, cursorWorld, field, solverInfo]);
+
     /* Steady-state detection: last STEADY_WINDOW residuals all below threshold. */
     const steadyReached = useMemo(() => {
         if (residualHistory.length < STEADY_WINDOW) return false;
@@ -5238,6 +5323,10 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             onClick={() => { setTool(TOOLS.MEASURE); setMeasurePending(null); }}
                             title="Measure — click two points to show coordinates, Δx, Δy, length and angle. Snap works if enabled. Escape clears."
                             icon={<Ruler size={14} />} label="Measure" />
+                        <ToolButton active={inspectOn}
+                            onClick={() => setInspectOn((v) => !v)}
+                            title="Inspect — hover the canvas during (or after) a simulation to see a live tooltip with the cell's velocity, concentration and elapsed time. Toggle off to hide."
+                            icon={<Info size={14} />} label="Inspect" />
                         {measurement && (
                             <button className="fl-toolbtn"
                                 title="Clear the current measurement"
@@ -5877,6 +5966,105 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             </g>
                         )}
                     </svg>
+
+                    {/* Hover-inspect hint — shown when Inspect is on
+                         but the solver hasn't produced a field yet, so
+                         the user isn't left wondering why the tooltip
+                         isn't appearing. */}
+                    {inspectOn && cursorWorld && !field && !showLanding && (() => {
+                        const scr = toScreen(cursorWorld);
+                        let tx = scr.x + 14;
+                        let ty = scr.y + 14;
+                        if (tx + 220 > canvasSize.w - 4) tx = scr.x - 220 - 14;
+                        if (tx < 4) tx = 4;
+                        return (
+                            <div
+                                className="fl-hover-tip fl-hover-tip-hint"
+                                style={{ left: tx, top: ty, width: 200 }}
+                            >
+                                <div className="fl-hover-tip-row fl-muted">
+                                    Press Run to see live field values at the cursor.
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {/* Hover inspect tooltip — shows the live cell
+                         values (|u|, ux, uy, c, t) under the cursor
+                         when Inspect mode is on. Offset so it doesn't
+                         sit under the cursor itself, clamped inside
+                         the canvas so it never spills off-screen. */}
+                    {inspectOn && cursorWorld && hoverSample && (() => {
+                        const scr = toScreen(cursorWorld);
+                        const TW = 210;
+                        const TH = 150;
+                        let tx = scr.x + 14;
+                        let ty = scr.y + 14;
+                        if (tx + TW > canvasSize.w - 4) tx = scr.x - TW - 14;
+                        if (tx < 4) tx = 4;
+                        if (ty + TH > canvasSize.h - 4) ty = scr.y - TH - 14;
+                        if (ty < 4) ty = 4;
+                        return (
+                            <div
+                                className="fl-hover-tip"
+                                style={{ left: tx, top: ty, width: TW }}
+                            >
+                                <div className="fl-hover-tip-head">
+                                    <span className="fl-hover-tip-pos">
+                                        ({formatLength(hoverSample.x_mm, unit)},{' '}
+                                        {formatLength(hoverSample.y_mm, unit)})
+                                    </span>
+                                    <span className="fl-hover-tip-t">
+                                        t = {(hoverSample.t_s * 1000).toFixed(2)} ms
+                                    </span>
+                                </div>
+                                {!hoverSample.inDomain ? (
+                                    <div className="fl-hover-tip-row fl-muted">
+                                        outside solver domain
+                                    </div>
+                                ) : hoverSample.isWall ? (
+                                    <div className="fl-hover-tip-row fl-muted">
+                                        inside wall / obstacle
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="fl-hover-tip-row">
+                                            <span className="fl-hover-tip-k">|u|</span>
+                                            <span className="fl-hover-tip-v">
+                                                {hoverSample.u_mps.toExponential(3)} m/s
+                                            </span>
+                                        </div>
+                                        <div className="fl-hover-tip-row fl-hover-tip-sub">
+                                            <span className="fl-hover-tip-k">uₓ</span>
+                                            <span className="fl-hover-tip-v">
+                                                {hoverSample.ux_mps.toExponential(2)}
+                                            </span>
+                                            <span className="fl-hover-tip-k">u_y</span>
+                                            <span className="fl-hover-tip-v">
+                                                {hoverSample.uy_mps.toExponential(2)}
+                                            </span>
+                                        </div>
+                                        {speciesEnabled && hoverSample.c != null && (
+                                            <div className="fl-hover-tip-row">
+                                                <span className="fl-hover-tip-k">c</span>
+                                                <span className="fl-hover-tip-v">
+                                                    {fmtC(hoverSample.c)}
+                                                    {cSuffix ? ' ' + cSuffix : ''}
+                                                </span>
+                                            </div>
+                                        )}
+                                        <div className="fl-hover-tip-row fl-hover-tip-sub">
+                                            <span className="fl-hover-tip-k">cell</span>
+                                            <span className="fl-hover-tip-v">
+                                                {hoverSample.cellSize_mm.toFixed(3)} mm
+                                                {' · '}iter {hoverSample.iter}
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* Right column: inspector */}
