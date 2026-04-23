@@ -35,6 +35,7 @@ import TSNEPage from './components/TSNEPage';
 import HelpPage from './components/HelpPage';
 import HomePage from './components/HomePage';
 import FlowLabPage from './components/FlowLabPage';
+import CircuitStudioPage from './components/CircuitStudioPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
@@ -1839,6 +1840,9 @@ function App() {
                         onDeleteFile={deleteFile}
                       />
                     );
+                    break;
+                  case 'circuitStudio':
+                    content = <CircuitStudioPage />;
                     break;
                   case 'spreadsheet':
                     content = (

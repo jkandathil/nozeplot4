@@ -5,7 +5,7 @@ import {
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
-    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot
+    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -331,6 +331,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'csvPlotter', title: 'SE Analysis — plot CSV columns', Icon: FileSpreadsheet },
                         { page: 'codeStudio', title: 'Code Studio — Python & text in Codes folder', Icon: Code2 },
                         { page: 'flowLab', title: 'Flow Lab — 2D gas-path designer & CFD', Icon: Wind },
+                        { page: 'circuitStudio', title: 'Circuit Studio — SPICE-style analog simulator', Icon: Cpu },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
@@ -531,6 +532,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         </button>
                     );
                 })()}
+                <button
+                    onClick={() => onPageChange?.('circuitStudio')}
+                    {...toolBtnProps(activePage === 'circuitStudio', 'rgba(168, 85, 247, 0.18)', '#a855f7')}
+                    title="Circuit Studio — SPICE-style analog circuit simulator (DC, AC, transient)"
+                >
+                    <Cpu size={13} /> Circuit Studio
+                </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}
                     {...toolBtnProps(activePage === 'normalize', 'rgba(251,191,36,0.15)', '#fbbf24')}
