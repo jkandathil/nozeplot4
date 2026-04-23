@@ -943,6 +943,124 @@ html[data-theme="light"] .fl-origin-label {
     stroke-width: 1;
     opacity: 0.6;
 }
+/* Per-snap-kind tints — make it obvious at a glance which feature the
+ * cursor is locking to. Endpoint = accent (default), midpoint = teal,
+ * intersection = amber, perpendicular = violet, close = bright accent. */
+.fl-snap-endpoint      { stroke: var(--accent-primary, #60a5fa); opacity: 0.9; stroke-width: 1.5; }
+.fl-snap-midpoint      { stroke: #2dd4bf; opacity: 0.9; stroke-width: 1.5; fill: none; }
+.fl-snap-intersection  { stroke: #f59e0b; opacity: 0.95; stroke-width: 1.5; }
+.fl-snap-perpendicular { stroke: #a78bfa; opacity: 0.9;  stroke-width: 1.25; }
+.fl-snap-close         { stroke: #22c55e; fill: #22c55e; opacity: 0.8; stroke-width: 1.5; }
+
+/* ── Import toast banner ──
+ *  Slim status strip that appears at the top-centre after a CAD import.
+ *  Colour-coded by level (ok / warn / error). Auto-dismisses after a
+ *  few seconds or can be closed manually. */
+.fl-import-banner {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px 8px 14px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.92);
+    color: #e2e8f0;
+    border: 1px solid rgba(96, 165, 250, 0.5);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    font-size: 12px;
+    line-height: 1.3;
+    font-weight: 500;
+    max-width: min(85%, 720px);
+}
+.fl-import-banner--ok     { border-color: rgba(34, 197, 94, 0.65); }
+.fl-import-banner--warn   { border-color: rgba(245, 158, 11, 0.7); }
+.fl-import-banner--error  { border-color: rgba(239, 68, 68, 0.7); }
+.fl-import-banner-text {
+    flex: 1;
+}
+.fl-import-banner-close {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0.75;
+}
+.fl-import-banner-close:hover { opacity: 1; background: rgba(148, 163, 184, 0.16); }
+html[data-theme="light"] .fl-import-banner {
+    background: rgba(248, 250, 252, 0.96);
+    color: #0f172a;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+}
+
+/* ── Drag-and-drop visual cue ──
+ *  When the user drags a supported file over the canvas, soften the
+ *  background and outline the whole wrap so it's clear the drop target
+ *  is ready to accept. */
+.fl-canvas-wrap.fl-dnd-over {
+    outline: 2px dashed rgba(96, 165, 250, 0.75);
+    outline-offset: -4px;
+}
+.fl-canvas-wrap.fl-dnd-over::after {
+    content: 'Drop SVG or DXF to import';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(15, 23, 42, 0.88);
+    color: #e2e8f0;
+    border: 1px solid rgba(96, 165, 250, 0.6);
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 10;
+}
+
+/* ── Sketch-tool hint banner ──
+ *  Contextual instructions shown at the top-centre of the canvas while
+ *  a multi-click CAD tool is active. Communicates "what to click next"
+ *  so users aren't left wondering why nothing happens after the first
+ *  click. Pointer-events off so canvas gestures pass through. */
+.fl-sketch-hint {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 7;
+    pointer-events: none;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.82);
+    color: #e2e8f0;
+    border: 1px solid rgba(96, 165, 250, 0.55);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-size: 12px;
+    line-height: 1.2;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    max-width: min(85%, 640px);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+html[data-theme="light"] .fl-sketch-hint {
+    background: rgba(248, 250, 252, 0.94);
+    color: #0f172a;
+    border-color: rgba(37, 99, 235, 0.5);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
+}
 
 /* ── Hover-inspect tooltip ──
  *  Transparent pill anchored near the cursor while the Inspect tool

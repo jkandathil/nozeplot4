@@ -11,17 +11,17 @@ import {
     Combine, Minus as SubtractIcon, SquareAsterisk, Shuffle, Shapes,
     MoveHorizontal, FlipHorizontal, RotateCw, ArrowUpRight, Link2,
     Activity, Gauge, Droplets, Waves, Crosshair, BarChart2,
-    Plus, ChevronUp, LayoutGrid,
+    Plus, ChevronUp, LayoutGrid, Upload,
 } from 'lucide-react';
 import {
     LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip,
     ResponsiveContainer, CartesianGrid, Legend, ReferenceArea, ReferenceLine
 } from 'recharts';
 import {
-    createRectEntity, createCircleEntity, createPolylineEntity,
+    createRectEntity, createCircleEntity, createEllipseEntity, createPolylineEntity,
     pointInPolygon, distToSegment, entitiesBBox, rasterizeDomain,
     edgeOutwardNormal, characteristicLength_mm, removeVertexAt, removeEdgeAt,
-    filletVertex,
+    filletVertex, sampleArc3Point,
     collectCuttingEdges, trimSection, trimOpenPolylineEdge, trimLineAtPoint,
     projectPointOnSegment,
     booleanUnion, booleanSubtract, booleanIntersect, booleanXor,
@@ -29,6 +29,8 @@ import {
     translateEntity, rotateEntity, mirrorEntity,
     polygonCentroid, entitiesCentroid,
 } from '../flowlab/geometry.js';
+import { parseSvgToEntities } from '../flowlab/importers/svg.js';
+import { parseDxfToEntities } from '../flowlab/importers/dxf.js';
 import { mmToUnit, unitToMm, formatLength, pickGridStepMm, UNIT_LABEL } from '../flowlab/units.js';
 import { GAS_PRESETS, gasById, nu, reynolds } from '../flowlab/gases.js';
 import {
@@ -136,6 +138,8 @@ const TOOLS = {
     POLY: 'poly',
     LINE: 'line',
     CIRCLE: 'circle',
+    ELLIPSE: 'ellipse',
+    ARC: 'arc',
     SECTION: 'section',
     FILLET: 'fillet',
     TRIM: 'trim',
@@ -184,6 +188,22 @@ function splitPath(fullName) {
     return { parts: pieces, base, dir: pieces.join('/') };
 }
 const joinPath = (...parts) => parts.filter((p) => p && String(p).length).join('/');
+
+/* Intersection of two 2-D line segments a→b and c→d. Returns the
+ * intersection point only if it lies strictly inside both segments
+ * (0 < t < 1 on each). Parallel / coincident segments return null so
+ * the snap system doesn't snap to an entire edge. Used by the
+ * intersection-snap path in `snapWorldPoint`. */
+function segIntersect(a, b, c, d) {
+    const r1x = b.x - a.x, r1y = b.y - a.y;
+    const r2x = d.x - c.x, r2y = d.y - c.y;
+    const denom = r1x * r2y - r1y * r2x;
+    if (Math.abs(denom) < 1e-12) return null;
+    const t = ((c.x - a.x) * r2y - (c.y - a.y) * r2x) / denom;
+    const u = ((c.x - a.x) * r1y - (c.y - a.y) * r1x) / denom;
+    if (t <= 1e-6 || t >= 1 - 1e-6 || u <= 1e-6 || u >= 1 - 1e-6) return null;
+    return { x: a.x + t * r1x, y: a.y + t * r1y };
+}
 
 /**
  * Default example geometry: a 20 mm × 5 mm chamber with a 1 mm inlet on
@@ -753,6 +773,13 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const [cadMode, setCadMode] = useState(false);
     const [rectDrag, setRectDrag] = useState(null); // {x0,y0,x1,y1}
     const [circleDrag, setCircleDrag] = useState(null); // {cx,cy,r}
+    const [ellipseDrag, setEllipseDrag] = useState(null); // {x0,y0,x1,y1}
+    /* 3-point arc: clicks accumulated so far.
+     *   .length === 0 → waiting for start click
+     *   .length === 1 → waiting for through-point click (preview = straight chord)
+     *   .length === 2 → waiting for end click (preview = live arc through cursor)
+     *   .length === 3 → arc committed on the same click */
+    const [pendingArcPoints, setPendingArcPoints] = useState([]);
     const [sectionDrag, setSectionDrag] = useState(null); // {x0,y0,x1,y1} during drag
     const [sections, setSections] = useState(() =>
         JSON.parse(JSON.stringify(FLOWLAB_INITIAL_SNAPSHOT.sections)));
@@ -896,6 +923,11 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
     const scheduleFitToContent = useCallback(() => {
         pendingFitRef.current = true;
     }, []);
+    /* Hidden file input used by the "Import CAD…" toolbar button. Keeping a
+     * ref lets the toolbar button trigger the native file picker without
+     * rendering a real <input> in the flow. */
+    const cadFileInputRef = useRef(null);
+    const [importBanner, setImportBanner] = useState(null); // { level, text, timeoutId? }
     const [cursorWorld, setCursorWorld] = useState(null);
     const [unit, setUnit] = useState('mm');
     const [gridOn, setGridOn] = useState(true);
@@ -965,6 +997,8 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setPendingLineExtendId(null);
         setRectDrag(null);
         setCircleDrag(null);
+        setEllipseDrag(null);
+        setPendingArcPoints([]);
         setMirrorDrag(null);
         setMovePending(null);
         setExtendPending(null);
@@ -976,7 +1010,8 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
      *  of the way while the canvas is in use. */
     const modellingInProgress = (
         tool !== TOOLS.SELECT ||
-        !!rectDrag || !!circleDrag ||
+        !!rectDrag || !!circleDrag || !!ellipseDrag ||
+        (pendingArcPoints && pendingArcPoints.length > 0) ||
         (pendingPolyPoints && pendingPolyPoints.length > 0) ||
         (pendingLinePoints && pendingLinePoints.length > 0) ||
         !!mirrorDrag || !!movePending || !!extendPending ||
@@ -1368,6 +1403,8 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         setPendingLinePoints([]);
         setRectDrag(null);
         setCircleDrag(null);
+        setEllipseDrag(null);
+        setPendingArcPoints([]);
         setSectionDrag(null);
         setSelection(null);
 
@@ -2147,31 +2184,107 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         return auto;
     }, [viewport.pxPerMm, gridStepOverrideMm, gridStepMinMm]);
 
-    /* Snap a world point to the grid or nearest endpoint. Also snaps to
-       the first vertex of the in-progress Line chain so the close
-       gesture feels firm. */
+    /* Snap a world point to the nearest construction feature.
+     *
+     *  Snap kinds, in priority order (strongest → weakest):
+     *    1. 'close'         — the start of the in-progress Line chain
+     *                         (so the closing click is rock-solid).
+     *    2. 'endpoint'      — any existing vertex.
+     *    3. 'intersection'  — two edges that cross near the cursor.
+     *    4. 'midpoint'      — the midpoint of an edge.
+     *    5. 'perpendicular' — the foot of the perpendicular from the
+     *                         cursor to the nearest edge.
+     *    6. 'grid'          — snapped to the current grid step.
+     *
+     *  Returns `{ x, y, kind }`. Existing callers that only read `x`/`y`
+     *  are unaffected; renderers can key off `kind` to show a glyph. */
     const snapWorldPoint = useCallback((p) => {
-        if (!snapOn) return p;
+        if (!snapOn) return { x: p.x, y: p.y, kind: null };
         const g = gridStepMm;
-        const snapped = {
+        const gridSnap = {
             x: Math.round(p.x / g) * g,
             y: Math.round(p.y / g) * g,
         };
         const r_mm = 8 / viewport.pxPerMm;
-        let best = null, bestD = r_mm;
+
+        // Start with the closing snap (highest priority once line chain exists).
+        if (pendingLinePoints.length >= 2) {
+            const v0 = pendingLinePoints[0];
+            if (Math.hypot(v0.x - p.x, v0.y - p.y) < r_mm) {
+                return { x: v0.x, y: v0.y, kind: 'close' };
+            }
+        }
+
+        // Endpoint (vertex) snap — any entity, any vertex.
+        let bestV = null, bestVd = r_mm;
         for (const e of entities) {
             for (const v of e.points) {
                 const d = Math.hypot(v.x - p.x, v.y - p.y);
-                if (d < bestD) { bestD = d; best = v; }
+                if (d < bestVd) { bestVd = d; bestV = v; }
             }
         }
-        // Snap to the first vertex of the current Line chain (for closing).
-        if (pendingLinePoints.length >= 2) {
-            const v = pendingLinePoints[0];
-            const d = Math.hypot(v.x - p.x, v.y - p.y);
-            if (d < bestD) { bestD = d; best = v; }
+        if (bestV) return { x: bestV.x, y: bestV.y, kind: 'endpoint' };
+
+        // Collect candidate edges whose midpoint is within a loose window.
+        // Each edge = { a, b, entId, edgeIdx }. This list feeds the
+        // intersection / midpoint / perpendicular snaps.
+        const window = r_mm * 6;
+        const edges = [];
+        for (const e of entities) {
+            const pts = e.points;
+            if (!pts || pts.length < 2) continue;
+            const nEdges = e.closed === false ? pts.length - 1 : pts.length;
+            for (let i = 0; i < nEdges; i++) {
+                const a = pts[i];
+                const b = pts[(i + 1) % pts.length];
+                const midx = (a.x + b.x) / 2;
+                const midy = (a.y + b.y) / 2;
+                if (Math.hypot(midx - p.x, midy - p.y) > window + Math.hypot(b.x - a.x, b.y - a.y) / 2) continue;
+                edges.push({ a, b });
+            }
         }
-        return best ? { x: best.x, y: best.y } : snapped;
+
+        // Intersection snap — pairwise segment intersections within range.
+        let bestI = null, bestId = r_mm;
+        for (let i = 0; i < edges.length; i++) {
+            for (let j = i + 1; j < edges.length; j++) {
+                const ip = segIntersect(edges[i].a, edges[i].b, edges[j].a, edges[j].b);
+                if (!ip) continue;
+                const d = Math.hypot(ip.x - p.x, ip.y - p.y);
+                if (d < bestId) { bestId = d; bestI = ip; }
+            }
+        }
+        if (bestI) return { x: bestI.x, y: bestI.y, kind: 'intersection' };
+
+        // Midpoint snap.
+        let bestM = null, bestMd = r_mm;
+        for (const ed of edges) {
+            const mx = (ed.a.x + ed.b.x) / 2;
+            const my = (ed.a.y + ed.b.y) / 2;
+            const d = Math.hypot(mx - p.x, my - p.y);
+            if (d < bestMd) { bestMd = d; bestM = { x: mx, y: my }; }
+        }
+        if (bestM) return { x: bestM.x, y: bestM.y, kind: 'midpoint' };
+
+        // Perpendicular snap — foot of perpendicular from p to the
+        // nearest edge. The foot must lie within the segment (0 ≤ t ≤ 1).
+        let bestP = null, bestPd = r_mm;
+        for (const ed of edges) {
+            const dx = ed.b.x - ed.a.x;
+            const dy = ed.b.y - ed.a.y;
+            const L2 = dx * dx + dy * dy;
+            if (L2 < 1e-12) continue;
+            const t = ((p.x - ed.a.x) * dx + (p.y - ed.a.y) * dy) / L2;
+            if (t < 0 || t > 1) continue;
+            const fx = ed.a.x + t * dx;
+            const fy = ed.a.y + t * dy;
+            const d = Math.hypot(fx - p.x, fy - p.y);
+            if (d < bestPd) { bestPd = d; bestP = { x: fx, y: fy }; }
+        }
+        if (bestP) return { x: bestP.x, y: bestP.y, kind: 'perpendicular' };
+
+        // Fallback: grid snap.
+        return { x: gridSnap.x, y: gridSnap.y, kind: 'grid' };
     }, [snapOn, gridStepMm, entities, pendingLinePoints, viewport.pxPerMm]);
 
     /* ── Fit viewport to content ──────────────────────────────────
@@ -2287,6 +2400,26 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             setRectDrag({ x0: wp.x, y0: wp.y, x1: wp.x, y1: wp.y });
         } else if (tool === TOOLS.CIRCLE) {
             setCircleDrag({ cx: wp.x, cy: wp.y, r: 0 });
+        } else if (tool === TOOLS.ELLIPSE) {
+            setEllipseDrag({ x0: wp.x, y0: wp.y, x1: wp.x, y1: wp.y });
+        } else if (tool === TOOLS.ARC) {
+            // 3-point arc. Commit on the THIRD click so the user can
+            // preview the live arc while moving between clicks.
+            setPendingArcPoints((pts) => {
+                if (pts.length >= 2) {
+                    const three = [...pts, wp];
+                    const samples = sampleArc3Point(three[0], three[1], three[2]);
+                    if (samples && samples.length >= 2) {
+                        const ent = createPolylineEntity(samples, { closed: false });
+                        setEntities((es) => [...es, ent]);
+                        setSelection({ entityId: ent.id, edgeIdx: null, vertexIdx: null });
+                        setMultiSelection(new Set([ent.id]));
+                    }
+                    setTool(TOOLS.SELECT);
+                    return [];
+                }
+                return [...pts, wp];
+            });
         } else if (tool === TOOLS.POLY) {
             setPendingPolyPoints((pts) => [...pts, wp]);
         } else if (tool === TOOLS.LINE) {
@@ -2773,6 +2906,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             ...cd,
             r: Math.hypot(wp.x - cd.cx, wp.y - cd.cy),
         }));
+        if (ellipseDrag) setEllipseDrag((ed) => ({ ...ed, x1: wp.x, y1: wp.y }));
         if (sectionDrag) setSectionDrag((sd) => ({ ...sd, x1: wp.x, y1: wp.y }));
         if (mirrorDrag) setMirrorDrag((md) => ({ ...md, x1: wp.x, y1: wp.y }));
     };
@@ -2845,6 +2979,18 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                 setMultiSelection(new Set([ent.id]));
             }
             setCircleDrag(null);
+        }
+        if (ellipseDrag) {
+            const { x0, y0, x1, y1 } = ellipseDrag;
+            if (Math.abs(x1 - x0) > 1e-6 && Math.abs(y1 - y0) > 1e-6) {
+                const ent = createEllipseEntity(x0, y0, x1, y1);
+                if (ent) {
+                    setEntities((es) => [...es, ent]);
+                    setSelection({ entityId: ent.id, edgeIdx: null, vertexIdx: null });
+                    setMultiSelection(new Set([ent.id]));
+                }
+            }
+            setEllipseDrag(null);
         }
         if (mirrorDrag) {
             const { x0, y0, x1, y1 } = mirrorDrag;
@@ -2965,6 +3111,8 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                 setPendingLinePoints([]);
                 setPendingLineExtendId(null);
                 setRectDrag(null); setCircleDrag(null);
+                setEllipseDrag(null);
+                setPendingArcPoints([]);
                 setMeasurePending(null);
                 setMeasurement(null);
                 setMovePending(null);
@@ -3724,6 +3872,122 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         scheduleFitToContent();
         setTourIdx(null);
     }, [hardResetSolverAndProject, scheduleFitToContent]);
+
+    /* Import a CAD file (SVG / DXF) and APPEND the resulting entities
+     * to the current scene. If the user holds Shift while picking the
+     * file we REPLACE the scene instead — handy for starting from a
+     * clean import. The importer returns coordinates in millimetres;
+     * the scene's auto-fit will bring whatever was imported into
+     * view. Any parser failure surfaces as a toast so the user knows
+     * the file wasn't silently dropped.
+     *
+     * Supported formats:
+     *   · .svg  — vector graphics (path, polygon, rect, circle, etc.)
+     *   · .dxf  — AutoCAD drawing exchange (LINE / LWPOLYLINE /
+     *             POLYLINE / CIRCLE / ARC / ELLIPSE / SPLINE)
+     */
+    const handleImportCadFile = useCallback(async (file, { replace = false } = {}) => {
+        if (!file) return;
+        const name = (file.name || '').toLowerCase();
+        const isSvg = name.endsWith('.svg') || (file.type && file.type.includes('svg'));
+        const isDxf = name.endsWith('.dxf') || name.endsWith('.dwg');
+        if (!isSvg && !isDxf) {
+            setImportBanner({ level: 'error', text: 'Unsupported file type. Import accepts .svg and .dxf files.' });
+            return;
+        }
+        if (name.endsWith('.dwg')) {
+            setImportBanner({
+                level: 'error',
+                text: 'DWG files aren\'t supported directly. Export to DXF from your CAD tool (AutoCAD / LibreCAD / Inkscape) and re-import.',
+            });
+            return;
+        }
+        let text;
+        try {
+            text = await file.text();
+        } catch (err) {
+            setImportBanner({ level: 'error', text: `Failed to read file: ${err?.message || err}` });
+            return;
+        }
+        let result;
+        try {
+            result = isSvg
+                ? parseSvgToEntities(text)
+                : parseDxfToEntities(text);
+        } catch (err) {
+            setImportBanner({ level: 'error', text: `Import failed: ${err?.message || err}` });
+            return;
+        }
+        if (!result || !result.entities || result.entities.length === 0) {
+            setImportBanner({ level: 'warn', text: `No supported geometry found in ${file.name}.` });
+            return;
+        }
+        // Guard against files that would drown the canvas. The LBM solver
+        // rasterises the geometry so very dense imports still simulate
+        // fine, but 10 000+ editable entities is a UI hazard.
+        if (result.entities.length > 3000) {
+            setImportBanner({
+                level: 'warn',
+                text: `${file.name} contains ${result.entities.length} entities — imported, but consider simplifying the source file for smoother editing.`,
+            });
+        }
+        skipNextHistoryRef.current = false;
+        setEntities((prev) => replace ? result.entities : [...prev, ...result.entities]);
+        setSelection(null);
+        setMultiSelection(new Set());
+        scheduleFitToContent();
+        const unitsMsg = isDxf
+            ? ` · units: ${result.unitsName || 'assumed mm'}`
+            : (result.sourceUnit === 'viewBox'
+                ? ' · units: viewBox units treated as mm (adjust scale if needed)'
+                : '');
+        setImportBanner({
+            level: 'ok',
+            text: `Imported ${result.entities.length} entities from ${file.name}${unitsMsg}.`,
+        });
+    }, [scheduleFitToContent]);
+
+    /* Auto-dismiss the import banner after 6 s so it doesn't linger. */
+    useEffect(() => {
+        if (!importBanner) return;
+        const id = setTimeout(() => setImportBanner(null), 6000);
+        return () => clearTimeout(id);
+    }, [importBanner]);
+
+    /* Drag-and-drop of a CAD file anywhere on the canvas routes into the
+     * same import pipeline as the toolbar button. Keeping the handler
+     * defined here means the DOM listener below can capture the current
+     * handleImportCadFile closure. */
+    useEffect(() => {
+        const wrap = canvasWrapRef.current;
+        if (!wrap) return;
+        const onDragOver = (e) => {
+            if (e.dataTransfer?.types?.includes('Files')) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                wrap.classList.add('fl-dnd-over');
+            }
+        };
+        const onDragLeave = () => wrap.classList.remove('fl-dnd-over');
+        const onDrop = (e) => {
+            wrap.classList.remove('fl-dnd-over');
+            const f = e.dataTransfer?.files?.[0];
+            if (!f) return;
+            const name = (f.name || '').toLowerCase();
+            if (name.endsWith('.svg') || name.endsWith('.dxf') || name.endsWith('.dwg')) {
+                e.preventDefault();
+                handleImportCadFile(f, { replace: e.shiftKey });
+            }
+        };
+        wrap.addEventListener('dragover', onDragOver);
+        wrap.addEventListener('dragleave', onDragLeave);
+        wrap.addEventListener('drop', onDrop);
+        return () => {
+            wrap.removeEventListener('dragover', onDragOver);
+            wrap.removeEventListener('dragleave', onDragLeave);
+            wrap.removeEventListener('drop', onDrop);
+        };
+    }, [handleImportCadFile]);
 
     const loadAromaDemo = useCallback(({ startTour = true } = {}) => {
         hardResetSolverAndProject();
@@ -4943,6 +5207,28 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             }
             return { id: 'preview', type: 'region', closed: true, points: pts, edgeBC: {} };
         }
+        if (ellipseDrag) {
+            const { x0, y0, x1, y1 } = ellipseDrag;
+            if (Math.abs(x1 - x0) > 1e-9 && Math.abs(y1 - y0) > 1e-9) {
+                const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+                const rx = Math.abs(x1 - x0) / 2, ry = Math.abs(y1 - y0) / 2;
+                const n = 64;
+                const pts = [];
+                for (let i = 0; i < n; i++) {
+                    const a = (i / n) * 2 * Math.PI;
+                    pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                }
+                return { id: 'preview', type: 'region', closed: true, points: pts, edgeBC: {} };
+            }
+        }
+        if (pendingArcPoints.length > 0 && cursorWorld) {
+            const pts = [...pendingArcPoints, cursorWorld];
+            if (pts.length === 2) {
+                return { id: 'preview', type: 'region', closed: false, points: pts, edgeBC: {} };
+            }
+            const samples = sampleArc3Point(pts[0], pts[1], pts[2]);
+            return { id: 'preview', type: 'region', closed: false, points: samples, edgeBC: {} };
+        }
         if (pendingPolyPoints.length > 0) {
             const pts = pendingPolyPoints.concat(cursorWorld ? [cursorWorld] : []);
             return { id: 'preview', type: 'region', closed: true, points: pts, edgeBC: {} };
@@ -4952,7 +5238,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             return { id: 'preview', type: 'region', closed: false, points: pts, edgeBC: {} };
         }
         return null;
-    }, [rectDrag, circleDrag, pendingPolyPoints, pendingLinePoints, cursorWorld]);
+    }, [rectDrag, circleDrag, ellipseDrag, pendingArcPoints, pendingPolyPoints, pendingLinePoints, cursorWorld]);
 
     /* When the Line tool is "continuing" from an existing open polyline's
        endpoint, that polyline is duplicated in the preview (it becomes
@@ -5128,6 +5414,24 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                 ? ` (${flowLabFiles.filter((f) => f._kind !== 'marker').length})`
                                 : ''}
                         </button>
+                        <button
+                            className="fl-toolbtn"
+                            title="Import geometry from a CAD file (SVG or DXF). Hold Shift to replace the current scene instead of appending. You can also drag-and-drop a file on the canvas."
+                            onClick={() => cadFileInputRef.current?.click()}
+                        >
+                            <Upload size={14} /> Import CAD…
+                        </button>
+                        <input
+                            ref={cadFileInputRef}
+                            type="file"
+                            accept=".svg,.dxf,image/svg+xml"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) handleImportCadFile(f, { replace: e.nativeEvent.shiftKey });
+                                e.target.value = '';
+                            }}
+                        />
                     </div>
                 </div>
                 <div className="fl-sep" />
@@ -5185,6 +5489,14 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             icon={<Hexagon size={14} />} label="Polyline" />
                         <ToolButton active={tool === TOOLS.CIRCLE} onClick={() => setTool(TOOLS.CIRCLE)}
                             title="Circle (C)" icon={<CircleIcon size={14} />} label="Circle" />
+                        <ToolButton active={tool === TOOLS.ELLIPSE} onClick={() => setTool(TOOLS.ELLIPSE)}
+                            title="Ellipse — drag to define the bounding box"
+                            icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="12" rx="10" ry="6" /></svg>}
+                            label="Ellipse" />
+                        <ToolButton active={tool === TOOLS.ARC} onClick={() => setTool(TOOLS.ARC)}
+                            title="Arc — click START, THROUGH, then END (3-point arc)"
+                            icon={<Spline size={14} />}
+                            label="Arc" />
                     </div>
                 </div>
                 <div className="fl-sep" />
@@ -5954,18 +6266,111 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                                 </g>
                             );
                         })}
-                        {/* Cursor snap glyph */}
-                        {cursorWorld && (
-                            <g>
-                                <circle
-                                    cx={toScreen(cursorWorld).x}
-                                    cy={toScreen(cursorWorld).y}
-                                    r={4}
-                                    className="fl-snap-glyph"
-                                />
-                            </g>
-                        )}
+                        {/* Cursor snap glyph — different shape per snap
+                             kind so the user can tell at a glance why a
+                             click landed where it did. */}
+                        {cursorWorld && (() => {
+                            const scr = toScreen(cursorWorld);
+                            const kind = cursorWorld.kind || 'grid';
+                            const common = {
+                                fill: 'none',
+                                className: `fl-snap-glyph fl-snap-${kind}`,
+                            };
+                            return (
+                                <g data-snap-kind={kind}>
+                                    {kind === 'endpoint' && (
+                                        <rect x={scr.x - 5} y={scr.y - 5} width={10} height={10} {...common} />
+                                    )}
+                                    {kind === 'midpoint' && (
+                                        <polygon points={`${scr.x},${scr.y - 6} ${scr.x - 6},${scr.y + 5} ${scr.x + 6},${scr.y + 5}`} {...common} />
+                                    )}
+                                    {kind === 'intersection' && (
+                                        <g {...common}>
+                                            <line x1={scr.x - 6} y1={scr.y - 6} x2={scr.x + 6} y2={scr.y + 6} />
+                                            <line x1={scr.x - 6} y1={scr.y + 6} x2={scr.x + 6} y2={scr.y - 6} />
+                                        </g>
+                                    )}
+                                    {kind === 'perpendicular' && (
+                                        <g {...common}>
+                                            <path d={`M${scr.x - 6} ${scr.y + 6} L${scr.x - 6} ${scr.y - 6} L${scr.x + 6} ${scr.y - 6}`} />
+                                            <path d={`M${scr.x - 3} ${scr.y - 3} L${scr.x - 3} ${scr.y} L${scr.x} ${scr.y}`} />
+                                        </g>
+                                    )}
+                                    {kind === 'close' && (
+                                        <circle cx={scr.x} cy={scr.y} r={5} className="fl-snap-glyph fl-snap-close" />
+                                    )}
+                                    {(kind === 'grid' || !kind) && (
+                                        <circle cx={scr.x} cy={scr.y} r={4} className="fl-snap-glyph" />
+                                    )}
+                                </g>
+                            );
+                        })()}
                     </svg>
+
+                    {/* Import banner — transient status toast for CAD
+                         import operations (success, warning, error). Sits
+                         just below the top edge of the canvas, above any
+                         sketch-tool hint. */}
+                    {importBanner && !showLanding && (
+                        <div
+                            className={`fl-import-banner fl-import-banner--${importBanner.level}`}
+                            role={importBanner.level === 'error' ? 'alert' : 'status'}
+                        >
+                            <span className="fl-import-banner-text">{importBanner.text}</span>
+                            <button
+                                className="fl-import-banner-close"
+                                aria-label="Dismiss"
+                                onClick={() => setImportBanner(null)}
+                            >×</button>
+                        </div>
+                    )}
+
+                    {/* Sketch-tool hint banner — top-centre strip that
+                         tells the user what the active construction tool
+                         expects next. Only renders for tools with
+                         multi-click state (Line / Polygon / Arc) plus
+                         the primitive drag tools for parity. */}
+                    {!showLanding && cadMode && (() => {
+                        let label = null;
+                        if (tool === TOOLS.LINE) {
+                            const n = pendingLinePoints.length;
+                            label = n === 0
+                                ? 'Line — click to drop the first point'
+                                : n === 1
+                                    ? 'Line — 1 point placed · click again to extend · Esc cancels'
+                                    : `Line — ${n} points placed · click the first point or press Enter to close · Esc cancels`;
+                        } else if (tool === TOOLS.POLY) {
+                            const n = pendingPolyPoints.length;
+                            label = n === 0
+                                ? 'Polygon — click to drop the first vertex'
+                                : `Polygon — ${n} vertex${n === 1 ? '' : 'es'} placed · double-click or Enter to close · Esc cancels`;
+                        } else if (tool === TOOLS.ARC) {
+                            const n = pendingArcPoints.length;
+                            label = n === 0
+                                ? 'Arc — click the START point'
+                                : n === 1
+                                    ? 'Arc — click a THROUGH point anywhere along the arc'
+                                    : 'Arc — click the END point to commit';
+                        } else if (tool === TOOLS.ELLIPSE) {
+                            label = ellipseDrag
+                                ? 'Ellipse — release to commit'
+                                : 'Ellipse — drag to define the bounding box';
+                        } else if (tool === TOOLS.RECT) {
+                            label = rectDrag
+                                ? 'Rectangle — release to commit'
+                                : 'Rectangle — drag two opposite corners';
+                        } else if (tool === TOOLS.CIRCLE) {
+                            label = circleDrag
+                                ? 'Circle — release to commit'
+                                : 'Circle — drag from centre to define the radius';
+                        }
+                        if (!label) return null;
+                        return (
+                            <div className="fl-sketch-hint" role="status" aria-live="polite">
+                                {label}
+                            </div>
+                        );
+                    })()}
 
                     {/* Hover-inspect hint — shown when Inspect is on
                          but the solver hasn't produced a field yet, so

@@ -315,6 +315,76 @@ export function createCircleEntity(cx, cy, r, segments = 48) {
     return createPolylineEntity(pts);
 }
 
+/**
+ * Axis-aligned ellipse defined by its bounding box corners. Produces a
+ * closed polyline; `segments` controls smoothness.
+ */
+export function createEllipseEntity(x0, y0, x1, y1, segments = 64) {
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    const rx = Math.abs(x1 - x0) / 2;
+    const ry = Math.abs(y1 - y0) / 2;
+    if (rx < 1e-9 || ry < 1e-9) return null;
+    const pts = [];
+    for (let i = 0; i < segments; i++) {
+        const a = (i / segments) * 2 * Math.PI;
+        pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+    }
+    return createPolylineEntity(pts);
+}
+
+/**
+ * Sample a circular arc passing through 3 points (p0 → p1 → p2).
+ * Returns `points`, `closed: false` — caller decides whether to wrap
+ * it into a createPolylineEntity. If the 3 points are collinear or
+ * coincident the function falls back to a straight polyline.
+ *
+ * The arc is drawn in the direction p0 → p1 → p2 (i.e. the middle
+ * point is honoured as a "through" point, picking the correct sweep).
+ */
+export function sampleArc3Point(p0, p1, p2, maxSegments = 64) {
+    const ax = p1.x - p0.x, ay = p1.y - p0.y;
+    const bx = p2.x - p1.x, by = p2.y - p1.y;
+    const cross = ax * by - ay * bx;
+    if (!Number.isFinite(cross) || Math.abs(cross) < 1e-9) {
+        // Collinear / degenerate — return a straight polyline.
+        return [
+            { x: p0.x, y: p0.y },
+            { x: p1.x, y: p1.y },
+            { x: p2.x, y: p2.y },
+        ];
+    }
+    // Circumcircle centre via perpendicular bisector intersection.
+    const m1x = (p0.x + p1.x) / 2, m1y = (p0.y + p1.y) / 2;
+    const m2x = (p1.x + p2.x) / 2, m2y = (p1.y + p2.y) / 2;
+    // Perpendicular to (ax,ay) is (-ay, ax); same for (bx,by).
+    const d = ax * by - ay * bx;
+    const t = ((m2x - m1x) * by - (m2y - m1y) * bx) / d;
+    const cx = m1x + t * (-ay);
+    const cy = m1y + t * ax;
+    const r = Math.hypot(p0.x - cx, p0.y - cy);
+    const a0 = Math.atan2(p0.y - cy, p0.x - cx);
+    const a1 = Math.atan2(p1.y - cy, p1.x - cx);
+    const a2 = Math.atan2(p2.y - cy, p2.x - cx);
+    // Choose sweep direction (CCW or CW) so that a1 lies between a0 and a2.
+    const wrapCCW = (a) => {
+        let v = a - a0; while (v < 0) v += 2 * Math.PI; while (v >= 2 * Math.PI) v -= 2 * Math.PI;
+        return v;
+    };
+    const t1 = wrapCCW(a1);
+    const tEnd = wrapCCW(a2);
+    const goCCW = t1 <= tEnd;
+    const sweep = goCCW ? tEnd : (2 * Math.PI - tEnd);
+    const n = Math.max(8, Math.min(maxSegments, Math.ceil(maxSegments * sweep / (2 * Math.PI))));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+        const u = i / n;
+        const a = a0 + (goCCW ? 1 : -1) * sweep * u;
+        pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+    }
+    return pts;
+}
+
 /** Point-in-polygon (ray cast). `pts` is a closed polygon (last → first wraps). */
 export function pointInPolygon(pts, x, y) {
     let inside = false;
