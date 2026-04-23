@@ -298,12 +298,18 @@ export function createRectEntity(x0, y0, x1, y1) {
     const xmax = Math.max(x0, x1);
     const ymin = Math.min(y0, y1);
     const ymax = Math.max(y0, y1);
-    return createPolylineEntity([
+    const ent = createPolylineEntity([
         { x: xmin, y: ymin },
         { x: xmax, y: ymin },
         { x: xmax, y: ymax },
         { x: xmin, y: ymax },
     ]);
+    /* Parametric metadata. The inspector uses this to expose
+     * shape-specific controls (width/height corners for Rect, cx/cy/r
+     * for Circle, etc.). Boolean / offset operations strip it because
+     * the result is no longer "a rectangle" — the entity falls back to
+     * generic polygon editing. */
+    return { ...ent, shape: 'rect', params: { x0: xmin, y0: ymin, x1: xmax, y1: ymax } };
 }
 
 export function createCircleEntity(cx, cy, r, segments = 48) {
@@ -312,7 +318,8 @@ export function createCircleEntity(cx, cy, r, segments = 48) {
         const a = (i / segments) * 2 * Math.PI;
         pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
     }
-    return createPolylineEntity(pts);
+    const ent = createPolylineEntity(pts);
+    return { ...ent, shape: 'circle', params: { cx, cy, r, segments } };
 }
 
 /**
@@ -330,7 +337,112 @@ export function createEllipseEntity(x0, y0, x1, y1, segments = 64) {
         const a = (i / segments) * 2 * Math.PI;
         pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
     }
-    return createPolylineEntity(pts);
+    const ent = createPolylineEntity(pts);
+    return { ...ent, shape: 'ellipse', params: { cx, cy, rx, ry, segments } };
+}
+
+/**
+ * Arc entity — open polyline sampled along a circular arc, tagged with
+ * parametric params so the inspector can edit centre / radius / sweep.
+ * If `a0 > a1` the arc is drawn in the CCW direction from a0 to a1+2π.
+ */
+export function createArcEntity(cx, cy, r, a0, a1, segments = 32) {
+    if (!(r > 0)) return null;
+    let s = a0, e = a1;
+    if (e <= s) e += 2 * Math.PI;
+    const sweep = e - s;
+    const n = Math.max(4, Math.min(96, Math.ceil(segments * sweep / (2 * Math.PI)) || segments));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+        const u = i / n;
+        const a = s + sweep * u;
+        pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+    }
+    const ent = createPolylineEntity(pts, { closed: false });
+    return { ...ent, shape: 'arc', params: { cx, cy, r, a0: s, a1: e, segments } };
+}
+
+/* ---------------------------------------------------------------
+ * Shape rebuild helpers — given the same parametric form stored on
+ * an entity, regenerate the `points` array. The inspector uses these
+ * to keep the entity's polyline in lock-step with the parameters the
+ * user edits. The entity's `id`, `edgeBC`, `obstacle`, and `type`
+ * flags are preserved by the caller; only `points` and `params`
+ * change here.
+ * --------------------------------------------------------------- */
+export function rebuildShapePoints(shape, params) {
+    switch (shape) {
+        case 'rect': {
+            const { x0, y0, x1, y1 } = params;
+            const xmin = Math.min(x0, x1), xmax = Math.max(x0, x1);
+            const ymin = Math.min(y0, y1), ymax = Math.max(y0, y1);
+            return [
+                { x: xmin, y: ymin }, { x: xmax, y: ymin },
+                { x: xmax, y: ymax }, { x: xmin, y: ymax },
+            ];
+        }
+        case 'circle': {
+            const { cx, cy, r } = params;
+            const segs = params.segments || 48;
+            const pts = [];
+            for (let i = 0; i < segs; i++) {
+                const a = (i / segs) * 2 * Math.PI;
+                pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+            }
+            return pts;
+        }
+        case 'ellipse': {
+            const { cx, cy, rx, ry } = params;
+            const segs = params.segments || 64;
+            const pts = [];
+            for (let i = 0; i < segs; i++) {
+                const a = (i / segs) * 2 * Math.PI;
+                pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+            }
+            return pts;
+        }
+        case 'arc': {
+            const { cx, cy, r, a0, a1 } = params;
+            const segs = params.segments || 32;
+            const sweep = a1 - a0;
+            const n = Math.max(4, Math.min(96, Math.ceil(segs * Math.abs(sweep) / (2 * Math.PI)) || segs));
+            const pts = [];
+            for (let i = 0; i <= n; i++) {
+                const u = i / n;
+                const a = a0 + sweep * u;
+                pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+            }
+            return pts;
+        }
+        default:
+            return null;
+    }
+}
+
+/**
+ * Update a parametric shape's `params` and regenerate its `points`.
+ * Attempts to preserve edgeBC when the new vertex count matches the
+ * old (i.e. editing a numeric dimension of the same primitive); if the
+ * vertex count changes (e.g. rebuilding a Rect always yields 4 points,
+ * but the incoming entity might have been offset and have 20) the BC
+ * map is reset to default 'wall' for every edge.
+ */
+export function updateShapeParams(entity, nextParams) {
+    if (!entity?.shape) return entity;
+    const merged = { ...entity.params, ...nextParams };
+    const pts = rebuildShapePoints(entity.shape, merged);
+    if (!pts || pts.length < 2) return entity;
+    const closed = entity.closed !== false;
+    const nEdges = closed ? pts.length : pts.length - 1;
+    const oldEdgeBC = entity.edgeBC || {};
+    let edgeBC;
+    if (Object.keys(oldEdgeBC).length === nEdges && entity.points.length === pts.length) {
+        edgeBC = { ...oldEdgeBC };
+    } else {
+        edgeBC = {};
+        for (let i = 0; i < nEdges; i++) edgeBC[i] = { type: 'wall' };
+    }
+    return { ...entity, params: merged, points: pts, edgeBC };
 }
 
 /**

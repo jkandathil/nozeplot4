@@ -18,10 +18,11 @@ import {
     ResponsiveContainer, CartesianGrid, Legend, ReferenceArea, ReferenceLine
 } from 'recharts';
 import {
-    createRectEntity, createCircleEntity, createEllipseEntity, createPolylineEntity,
+    createRectEntity, createCircleEntity, createEllipseEntity, createArcEntity,
+    createPolylineEntity,
     pointInPolygon, distToSegment, entitiesBBox, rasterizeDomain,
     edgeOutwardNormal, characteristicLength_mm, removeVertexAt, removeEdgeAt,
-    filletVertex, sampleArc3Point,
+    filletVertex, sampleArc3Point, updateShapeParams,
     collectCuttingEdges, trimSection, trimOpenPolylineEdge, trimLineAtPoint,
     projectPointOnSegment,
     booleanUnion, booleanSubtract, booleanIntersect, booleanXor,
@@ -188,6 +189,42 @@ function splitPath(fullName) {
     return { parts: pieces, base, dir: pieces.join('/') };
 }
 const joinPath = (...parts) => parts.filter((p) => p && String(p).length).join('/');
+
+/* Compute the parametric form (centre, radius, start/end angles) of
+ * a circular arc that passes through three ordered points. Returns
+ * null if the points are collinear / coincident. The resulting sweep
+ * goes p0 → p1 → p2 in the direction implied by p1. Mirrors the logic
+ * in `sampleArc3Point` but hands back the params instead of a point
+ * list, so the new entity can be tagged and edited numerically. */
+function arcParamsFrom3Points(p0, p1, p2) {
+    const ax = p1.x - p0.x, ay = p1.y - p0.y;
+    const bx = p2.x - p1.x, by = p2.y - p1.y;
+    const cross = ax * by - ay * bx;
+    if (!Number.isFinite(cross) || Math.abs(cross) < 1e-9) return null;
+    const m1x = (p0.x + p1.x) / 2, m1y = (p0.y + p1.y) / 2;
+    const m2x = (p1.x + p2.x) / 2, m2y = (p1.y + p2.y) / 2;
+    const d = ax * by - ay * bx;
+    if (Math.abs(d) < 1e-12) return null;
+    const t = ((m2x - m1x) * by - (m2y - m1y) * bx) / d;
+    const cx = m1x + t * (-ay);
+    const cy = m1y + t * ax;
+    const r = Math.hypot(p0.x - cx, p0.y - cy);
+    if (!(r > 0) || !Number.isFinite(r)) return null;
+    const a0 = Math.atan2(p0.y - cy, p0.x - cx);
+    const a1Raw = Math.atan2(p1.y - cy, p1.x - cx);
+    const a2Raw = Math.atan2(p2.y - cy, p2.x - cx);
+    const wrapCCW = (a) => {
+        let v = a - a0;
+        while (v < 0) v += 2 * Math.PI;
+        while (v >= 2 * Math.PI) v -= 2 * Math.PI;
+        return v;
+    };
+    const t1 = wrapCCW(a1Raw);
+    const tEnd = wrapCCW(a2Raw);
+    const goCCW = t1 <= tEnd;
+    const sweep = goCCW ? tEnd : -(2 * Math.PI - tEnd);
+    return { cx, cy, r, a0, a1: a0 + sweep };
+}
 
 /* Intersection of two 2-D line segments a→b and c→d. Returns the
  * intersection point only if it lies strictly inside both segments
@@ -2404,13 +2441,29 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             setEllipseDrag({ x0: wp.x, y0: wp.y, x1: wp.x, y1: wp.y });
         } else if (tool === TOOLS.ARC) {
             // 3-point arc. Commit on the THIRD click so the user can
-            // preview the live arc while moving between clicks.
+            // preview the live arc while moving between clicks. The
+            // commit path reconstructs the arc's centre/radius/angles
+            // from the three points so the resulting entity carries
+            // parametric metadata (editable in the inspector). If the
+            // three points are collinear we fall back to a plain
+            // polyline so the geometry isn't silently dropped.
             setPendingArcPoints((pts) => {
                 if (pts.length >= 2) {
                     const three = [...pts, wp];
-                    const samples = sampleArc3Point(three[0], three[1], three[2]);
-                    if (samples && samples.length >= 2) {
-                        const ent = createPolylineEntity(samples, { closed: false });
+                    const arcParams = arcParamsFrom3Points(three[0], three[1], three[2]);
+                    let ent;
+                    if (arcParams) {
+                        ent = createArcEntity(
+                            arcParams.cx, arcParams.cy, arcParams.r,
+                            arcParams.a0, arcParams.a1,
+                        );
+                    } else {
+                        const samples = sampleArc3Point(three[0], three[1], three[2]);
+                        if (samples && samples.length >= 2) {
+                            ent = createPolylineEntity(samples, { closed: false });
+                        }
+                    }
+                    if (ent) {
                         setEntities((es) => [...es, ent]);
                         setSelection({ entityId: ent.id, edgeIdx: null, vertexIdx: null });
                         setMultiSelection(new Set([ent.id]));
@@ -3033,8 +3086,40 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
         }
     };
 
-    /* Polyline finalisation: double-click or Enter closes the loop. */
+    /* Polyline finalisation: double-click or Enter closes the loop.
+     * When NOT in an active drawing session (no pending polyline and
+     * the Select tool is active), a double-click on a shape is a power
+     * shortcut: it picks the whole entity — so the Properties panel
+     * immediately shows the parametric editor (diameter for circles,
+     * radius / centre for ellipses, corners for rects, etc.). */
     const handleDoubleClick = () => {
+        if (tool === TOOLS.SELECT
+            && pendingLinePoints.length === 0
+            && pendingPolyPoints.length === 0
+            && cursorWorld) {
+            const wp = cursorWorld;
+            const pickR_mm = 8 / viewport.pxPerMm;
+            let hit = null;
+            for (const en of entities) {
+                const pts = en.points;
+                if (!pts || pts.length < 2) continue;
+                const closed = en.closed !== false;
+                for (let i = 0; i < pts.length; i++) {
+                    const a = pts[i];
+                    const b = pts[(i + 1) % pts.length];
+                    if (!closed && i === pts.length - 1) break;
+                    if (distToSegment(wp.x, wp.y, a, b) < pickR_mm) { hit = en; break; }
+                }
+                if (hit) break;
+                if (closed && pointInPolygon(pts, wp.x, wp.y)) { hit = en; break; }
+            }
+            if (hit) {
+                setSelection({ entityId: hit.id, edgeIdx: null, vertexIdx: null });
+                setMultiSelection(new Set([hit.id]));
+                setPropDialogDismissed(false);
+                return;
+            }
+        }
         if (tool === TOOLS.POLY && pendingPolyPoints.length >= 3) {
             const ent = createPolylineEntity(pendingPolyPoints, { closed: true });
             setEntities((es) => [...es, ent]);
@@ -3240,7 +3325,15 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             if (e.id !== entityId) return e;
             if (vertexIdx < 0 || vertexIdx >= e.points.length) return e;
             const pts = e.points.map((p, i) => (i === vertexIdx ? { x: x_mm, y: y_mm } : p));
-            return { ...e, points: pts };
+            /* Editing an individual vertex on a parametric shape (Rect
+             * / Circle / Ellipse / Arc) is allowed, but it breaks the
+             * parametric form — the vertices no longer match the stored
+             * cx/cy/r etc. Drop the shape tag so the inspector falls
+             * back to the generic polygon/polyline editor. */
+            const demoted = e.shape
+                ? { ...e, points: pts, shape: undefined, params: undefined }
+                : { ...e, points: pts };
+            return demoted;
         }));
     }, []);
 
@@ -3262,7 +3355,9 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             const ux = dx / curLen, uy = dy / curLen;
             const nb = { x: a.x + ux * newLen_mm, y: a.y + uy * newLen_mm };
             const pts = e.points.map((p, i) => (i === bIdx ? nb : p));
-            return { ...e, points: pts };
+            return e.shape
+                ? { ...e, points: pts, shape: undefined, params: undefined }
+                : { ...e, points: pts };
         }));
     }, []);
 
@@ -3284,8 +3379,20 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
             const rad = (angleDeg * Math.PI) / 180;
             const nb = { x: a.x + len * Math.cos(rad), y: a.y + len * Math.sin(rad) };
             const pts = e.points.map((p, i) => (i === bIdx ? nb : p));
-            return { ...e, points: pts };
+            return e.shape
+                ? { ...e, points: pts, shape: undefined, params: undefined }
+                : { ...e, points: pts };
         }));
+    }, []);
+
+    /* Parametric update — used by the shape-aware inspectors
+     * (CircleEditor, EllipseEditor, RectEditor, ArcEditor). Rebuilds
+     * the entity's points from the new params; keeps id / edgeBC /
+     * obstacle flags intact. */
+    const setShapeParams = useCallback((entityId, nextParams) => {
+        setEntities((es) => es.map((e) => (
+            e.id === entityId ? updateShapeParams(e, nextParams) : e
+        )));
     }, []);
 
     const selectedEntity = entities.find((e) => e.id === selection?.entityId) || null;
@@ -6988,7 +7095,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                             </>
                         )}
                         {selectedEntity && selection?.edgeIdx == null && selection?.vertexIdx == null && (
-                            <EntityInfo entity={selectedEntity} unit={unit} />
+                            <EntityInfo entity={selectedEntity} unit={unit} onShapeChange={setShapeParams} />
                         )}
                     </div>
 
@@ -7378,7 +7485,12 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                 title={
                     selection?.vertexIdx != null ? `Vertex #${selection.vertexIdx}`
                     : selection?.edgeIdx != null ? `Edge #${selection.edgeIdx}`
-                    : selectedEntity?.closed === false ? 'Open polyline'
+                    : selectedEntity?.shape === 'circle' ? 'Circle'
+                    : selectedEntity?.shape === 'ellipse' ? 'Ellipse'
+                    : selectedEntity?.shape === 'rect' ? 'Rectangle'
+                    : selectedEntity?.shape === 'arc' ? 'Arc'
+                    : selectedEntity?.closed === false
+                        ? (selectedEntity?.points?.length === 2 ? 'Line' : 'Open polyline')
                     : 'Region'
                 }
             >
@@ -7417,7 +7529,7 @@ const FlowLabPage = ({ workspaceFiles = [], onSaveJson, onDeleteFile } = {}) => 
                     </>
                 )}
                 {selectedEntity && selection?.edgeIdx == null && selection?.vertexIdx == null && (
-                    <EntityInfo entity={selectedEntity} unit={unit} />
+                    <EntityInfo entity={selectedEntity} unit={unit} onShapeChange={setShapeParams} />
                 )}
             </FloatingPropertyDialog>
 
@@ -9053,7 +9165,25 @@ const EdgeEditor = ({ entity, edgeIdx, unit, onSetStart, onSetEnd, onSetLength, 
     );
 };
 
-const EntityInfo = ({ entity, unit }) => {
+const EntityInfo = ({ entity, unit, onShapeChange }) => {
+    /* Shape-aware branch — if the entity was drawn with a parametric
+     * primitive and the vertices haven't been hand-edited, render the
+     * dedicated inspector (Circle/Ellipse/Rect/Arc). Everything else
+     * (arbitrary polygons from imports, booleans, trims) falls through
+     * to the generic bounding-box summary below. */
+    if (entity.shape === 'circle' && onShapeChange) {
+        return <CircleEditor entity={entity} unit={unit} onShapeChange={onShapeChange} />;
+    }
+    if (entity.shape === 'ellipse' && onShapeChange) {
+        return <EllipseEditor entity={entity} unit={unit} onShapeChange={onShapeChange} />;
+    }
+    if (entity.shape === 'rect' && onShapeChange) {
+        return <RectEditor entity={entity} unit={unit} onShapeChange={onShapeChange} />;
+    }
+    if (entity.shape === 'arc' && onShapeChange) {
+        return <ArcEditor entity={entity} unit={unit} onShapeChange={onShapeChange} />;
+    }
+
     const n = entity.points.length;
     const closed = entity.closed !== false;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, peri = 0;
@@ -9066,14 +9196,224 @@ const EntityInfo = ({ entity, unit }) => {
             peri += Math.hypot(q.x - p.x, q.y - p.y);
         }
     }
+    /* Lines (2-vertex open polylines) get a friendly label + an extra
+     * hint so the user realises they should click the edge to edit
+     * length / angle. The EdgeEditor already handles that. */
+    const isLine = !closed && n === 2;
     return (
         <div className="fl-props">
-            <div className="fl-props-hd">Entity · {closed ? 'closed region' : 'open polyline'}</div>
+            <div className="fl-props-hd">
+                {isLine ? 'Line segment' : `Entity · ${closed ? 'closed region' : 'open polyline'}`}
+            </div>
             <div className="fl-kv"><span>Vertices</span><span>{n}</span></div>
             <div className="fl-kv"><span>Bounding box W</span><span>{formatLength(maxX - minX, unit)}</span></div>
             <div className="fl-kv"><span>Bounding box H</span><span>{formatLength(maxY - minY, unit)}</span></div>
-            <div className="fl-kv"><span>Perimeter</span><span>{formatLength(peri, unit)}</span></div>
-            <div className="fl-props-hint">Click a <b>vertex</b> or an <b>edge</b> to edit dimensions.</div>
+            <div className="fl-kv"><span>{isLine ? 'Length' : 'Perimeter'}</span><span>{formatLength(peri, unit)}</span></div>
+            <div className="fl-props-hint">
+                {isLine
+                    ? <>Click the <b>line</b> itself to edit <b>length, angle, start & end</b> numerically; click an <b>endpoint</b> to edit its X/Y.</>
+                    : <>Click a <b>vertex</b> or an <b>edge</b> to edit dimensions.</>}
+            </div>
+        </div>
+    );
+};
+
+/* ------------------------------------------------------------------ *
+ *  Shape-aware inspectors — parametric editors for the primitives
+ *  created by the drawing tools. They mutate the entity's `params`,
+ *  the parent then rebuilds points via `updateShapeParams`.
+ * ------------------------------------------------------------------ */
+
+const CircleEditor = ({ entity, unit, onShapeChange }) => {
+    const { cx, cy, r } = entity.params || { cx: 0, cy: 0, r: 0 };
+    const cxProps = useMmInput(cx, unit, (v) => onShapeChange(entity.id, { cx: v }));
+    const cyProps = useMmInput(cy, unit, (v) => onShapeChange(entity.id, { cy: v }));
+    const rProps = useMmInput(r, unit, (v) => { if (v > 0) onShapeChange(entity.id, { r: v }); });
+    const dProps = useMmInput(r * 2, unit, (v) => { if (v > 0) onShapeChange(entity.id, { r: v / 2 }); });
+    return (
+        <div className="fl-props">
+            <div className="fl-props-hd">Circle</div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Center X ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cxProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Center Y ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cyProps} />
+                </label>
+            </div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Radius ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...rProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Diameter ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.1 : 10} {...dProps} />
+                </label>
+            </div>
+            <div className="fl-props-hint">Editing a single vertex will demote this to a free polygon.</div>
+        </div>
+    );
+};
+
+const EllipseEditor = ({ entity, unit, onShapeChange }) => {
+    const { cx, cy, rx, ry } = entity.params || { cx: 0, cy: 0, rx: 0, ry: 0 };
+    const cxProps = useMmInput(cx, unit, (v) => onShapeChange(entity.id, { cx: v }));
+    const cyProps = useMmInput(cy, unit, (v) => onShapeChange(entity.id, { cy: v }));
+    const rxProps = useMmInput(rx, unit, (v) => { if (v > 0) onShapeChange(entity.id, { rx: v }); });
+    const ryProps = useMmInput(ry, unit, (v) => { if (v > 0) onShapeChange(entity.id, { ry: v }); });
+    return (
+        <div className="fl-props">
+            <div className="fl-props-hd">Ellipse</div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Center X ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cxProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Center Y ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cyProps} />
+                </label>
+            </div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Semi-axis Rx ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...rxProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Semi-axis Ry ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...ryProps} />
+                </label>
+            </div>
+            <div className="fl-props-hint">Full width = 2·Rx, full height = 2·Ry.</div>
+        </div>
+    );
+};
+
+const RectEditor = ({ entity, unit, onShapeChange }) => {
+    const { x0, y0, x1, y1 } = entity.params || { x0: 0, y0: 0, x1: 0, y1: 0 };
+    const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+    const xMin = Math.min(x0, x1), yMin = Math.min(y0, y1);
+    const x0Props = useMmInput(xMin, unit, (v) => onShapeChange(entity.id, { x0: v, x1: v + w }));
+    const y0Props = useMmInput(yMin, unit, (v) => onShapeChange(entity.id, { y0: v, y1: v + h }));
+    const x1Props = useMmInput(xMin + w, unit, (v) => onShapeChange(entity.id, { x0: xMin, x1: v }));
+    const y1Props = useMmInput(yMin + h, unit, (v) => onShapeChange(entity.id, { y0: yMin, y1: v }));
+    const wProps = useMmInput(w, unit, (v) => { if (v > 0) onShapeChange(entity.id, { x0: xMin, x1: xMin + v }); });
+    const hProps = useMmInput(h, unit, (v) => { if (v > 0) onShapeChange(entity.id, { y0: yMin, y1: yMin + v }); });
+    return (
+        <div className="fl-props">
+            <div className="fl-props-hd">Rectangle</div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>X<sub>min</sub> ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...x0Props} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Y<sub>min</sub> ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...y0Props} />
+                </label>
+            </div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>X<sub>max</sub> ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...x1Props} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Y<sub>max</sub> ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...y1Props} />
+                </label>
+            </div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Width ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...wProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Height ({UNIT_LABEL[unit]})</span>
+                    <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...hProps} />
+                </label>
+            </div>
+            <div className="fl-props-hint">Editing X<sub>min</sub> / Y<sub>min</sub> moves the rectangle; Width / Height grow from the lower-left corner.</div>
+        </div>
+    );
+};
+
+const ArcEditor = ({ entity, unit, onShapeChange }) => {
+    const { cx, cy, r, a0, a1 } = entity.params || { cx: 0, cy: 0, r: 0, a0: 0, a1: 0 };
+    const sweep = a1 - a0;
+    const a0deg = (a0 * 180) / Math.PI;
+    const a1deg = (a1 * 180) / Math.PI;
+    const sweepDeg = (sweep * 180) / Math.PI;
+    const cxProps = useMmInput(cx, unit, (v) => onShapeChange(entity.id, { cx: v }));
+    const cyProps = useMmInput(cy, unit, (v) => onShapeChange(entity.id, { cy: v }));
+    const rProps = useMmInput(r, unit, (v) => { if (v > 0) onShapeChange(entity.id, { r: v }); });
+    const [a0Text, setA0Text] = useState(a0deg.toFixed(2));
+    const [a1Text, setA1Text] = useState(a1deg.toFixed(2));
+    const [swText, setSwText] = useState(sweepDeg.toFixed(2));
+    useEffect(() => { setA0Text(a0deg.toFixed(2)); }, [a0deg]);
+    useEffect(() => { setA1Text(a1deg.toFixed(2)); }, [a1deg]);
+    useEffect(() => { setSwText(sweepDeg.toFixed(2)); }, [sweepDeg]);
+    const flushA0 = () => {
+        const v = Number(a0Text);
+        if (Number.isFinite(v)) onShapeChange(entity.id, { a0: (v * Math.PI) / 180 });
+        else setA0Text(a0deg.toFixed(2));
+    };
+    const flushA1 = () => {
+        const v = Number(a1Text);
+        if (Number.isFinite(v)) onShapeChange(entity.id, { a1: (v * Math.PI) / 180 });
+        else setA1Text(a1deg.toFixed(2));
+    };
+    const flushSw = () => {
+        const v = Number(swText);
+        if (Number.isFinite(v)) onShapeChange(entity.id, { a1: a0 + (v * Math.PI) / 180 });
+        else setSwText(sweepDeg.toFixed(2));
+    };
+    return (
+        <div className="fl-props">
+            <div className="fl-props-hd">Arc</div>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Center X ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cxProps} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>Center Y ({UNIT_LABEL[unit]})</span>
+                    <input type="number" step={unit === 'mm' ? 0.05 : 5} {...cyProps} />
+                </label>
+            </div>
+            <label className="fl-field fl-field-inset">
+                <span>Radius ({UNIT_LABEL[unit]})</span>
+                <input type="number" min={0} step={unit === 'mm' ? 0.05 : 5} {...rProps} />
+            </label>
+            <div className="fl-props-row">
+                <label className="fl-field fl-field-inset">
+                    <span>Start angle (°)</span>
+                    <input type="number" step={1}
+                        value={a0Text}
+                        onChange={(e) => setA0Text(e.target.value)}
+                        onBlur={flushA0}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+                </label>
+                <label className="fl-field fl-field-inset">
+                    <span>End angle (°)</span>
+                    <input type="number" step={1}
+                        value={a1Text}
+                        onChange={(e) => setA1Text(e.target.value)}
+                        onBlur={flushA1}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+                </label>
+            </div>
+            <label className="fl-field fl-field-inset">
+                <span>Sweep (°)</span>
+                <input type="number" step={1}
+                    value={swText}
+                    onChange={(e) => setSwText(e.target.value)}
+                    onBlur={flushSw}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+            </label>
+            <div className="fl-props-hint">Angles measured CCW from +X. Sweep = End − Start; editing it keeps Start fixed.</div>
         </div>
     );
 };
