@@ -35,7 +35,10 @@ import {
     riseTime, fallTime, settlingTime, overshoot, peakToPeak, steadyStateEst,
     corner3dB, peakGain, unityGainFreq, phaseMargin, sampleAt,
 } from '../circuit/measurements.js';
-import { emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent, removeComponent, componentPins } from '../circuit/schematicDoc.js';
+import {
+    emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent,
+    removeComponent, removeWire, componentPins,
+} from '../circuit/schematicDoc.js';
 import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
 import Palette from './circuit/Palette.jsx';
@@ -121,7 +124,8 @@ function CircuitStudioPage() {
         return { past: [], present: initial, future: [] };
     });
     const doc = docState.present;
-    const [selection, setSelection] = useState(null); // { kind: 'component'|'wire', id }
+    // { kind:'component'|'wire', id } | { kind:'multi', componentIds, wireIds }
+    const [selection, setSelection] = useState(null);
     // Inline property popup state: target component + screen-space anchor
     // where the card renders. `null` when the popup is closed.
     const [editPopup, setEditPopup] = useState(null); // { compId, clientX, clientY }
@@ -1287,6 +1291,15 @@ function CircuitStudioPage() {
                             </div>
                             <Inspector
                                 selectedComp={selectedComp}
+                                bulkSelection={selection?.kind === 'multi' ? selection : null}
+                                onBulkDelete={() => {
+                                    if (selection?.kind !== 'multi') return;
+                                    mutateDoc((d) => {
+                                        for (const wid of selection.wireIds || []) removeWire(d, wid);
+                                        for (const cid of selection.componentIds || []) removeComponent(d, cid);
+                                    });
+                                    setSelection(null);
+                                }}
                                 onUpdate={(patch) => selectedComp && mutateDoc((d) => updateComponent(d, selectedComp.id, patch))}
                                 onRotate={() => selectedComp && mutateDoc((d) => rotateComponent(d, selectedComp.id, 90))}
                                 onDelete={() => {

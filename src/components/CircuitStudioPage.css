@@ -1287,6 +1287,13 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 .cs-inspector-empty { color: var(--cs-muted); font-size: 0.85rem; }
 .cs-inspector-empty h3 { margin: 0 0 4px; color: #e2e8f0; font-size: 0.95rem; }
 .cs-inspector-empty p  { margin: 0; line-height: 1.4; }
+.cs-inspector-bulk { display: flex; flex-direction: column; gap: 10px; }
+.cs-inspector-hint {
+    margin: 0 !important;
+    font-size: 0.78rem !important;
+    color: var(--cs-muted) !important;
+    line-height: 1.35 !important;
+}
 .cs-inspector-header { display: flex; gap: 10px; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--cs-panel-border); }
 .cs-inspector-preview {
     flex: 0 0 auto;

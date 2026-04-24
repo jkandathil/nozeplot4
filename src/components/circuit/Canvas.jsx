@@ -14,11 +14,96 @@ import {
 import { renderShape } from './renderShape.jsx';
 import { GroundMarker } from './SymbolGlyph.jsx';
 
+/** Axis-aligned rect from two world-space corners (inclusive). */
+function normalizeWorldRect(a, b) {
+    return {
+        minX: Math.min(a.x, b.x),
+        maxX: Math.max(a.x, b.x),
+        minY: Math.min(a.y, b.y),
+        maxY: Math.max(a.y, b.y),
+    };
+}
+
+/** Tight world AABB around a component symbol (handles rotation). */
+function compWorldBounds(comp) {
+    const cx = comp.pos.x;
+    const cy = comp.pos.y;
+    if (comp.elementType === 'GND') {
+        return { minX: cx - 14, maxX: cx + 14, minY: cy - 18, maxY: cy + 6 };
+    }
+    const sym = SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
+    if (!sym) {
+        return { minX: cx - 14, maxX: cx + 14, minY: cy - 14, maxY: cy + 14 };
+    }
+    const rot = (((comp.rot || 0) % 360) + 360) % 360;
+    const hw = sym.width / 2 + 4;
+    const hh = sym.height / 2 + 4;
+    const rad = (rot * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [lx, ly] of corners) {
+        const wx = cx + cos * lx - sin * ly;
+        const wy = cy + sin * lx + cos * ly;
+        minX = Math.min(minX, wx);
+        maxX = Math.max(maxX, wx);
+        minY = Math.min(minY, wy);
+        maxY = Math.max(maxY, wy);
+    }
+    return { minX, maxX, minY, maxY };
+}
+
+function rectsOverlap(a, b) {
+    return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
+}
+
+/** Manhattan segment vs axis-aligned rect (inclusive). */
+function manhattanSegmentInRect(x1, y1, x2, y2, r) {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2);
+    const maxY = Math.max(y1, y2);
+    const seg = { minX, maxX, minY, maxY };
+    if (!rectsOverlap(seg, r)) return false;
+    if (y1 === y2) return true;
+    if (x1 === x2) return true;
+    return true;
+}
+
+/**
+ * Return component ids and wire ids whose bounds / segments intersect
+ * the marquee rectangle (world px).
+ */
+function collectMarqueeSelection(doc, rect) {
+    const componentIds = [];
+    const wireIds = [];
+    for (const c of doc.components || []) {
+        if (rectsOverlap(compWorldBounds(c), rect)) componentIds.push(c.id);
+    }
+    for (const w of doc.wires || []) {
+        const pts = w.points || [];
+        let hit = false;
+        for (let i = 1; i < pts.length && !hit; i++) {
+            const [x1, y1] = pts[i - 1];
+            const [x2, y2] = pts[i];
+            if (manhattanSegmentInRect(x1, y1, x2, y2, rect)) hit = true;
+        }
+        if (hit) wireIds.push(w.id);
+    }
+    return { componentIds, wireIds };
+}
+
 /**
  * Interactive schematic canvas — the centre pane of the editor.
  *
  * Tools:
- *   select  — click to select a component; drag to move it
+ *   select  — click to select a component; drag to move it. Right-drag
+ *             draws a marquee to box-select many parts + wires; Del
+ *             removes the whole set.
  *   wire    — click a pin (or grid cell) to start a wire, click another
  *             to end it; polyline is manhattan-snapped
  *   pan     — hold mouse button to drag the view; wheel zooms
@@ -28,7 +113,7 @@ import { GroundMarker } from './SymbolGlyph.jsx';
  *   W        wire tool
  *   H        pan tool
  *   R        rotate selected component by 90°
- *   Del/Back delete selected component (or wire)
+ *   Del/Back delete selection (single part/wire or entire marquee set)
  *   +/-      zoom
  *   0        fit to content
  *
@@ -59,7 +144,7 @@ export default function Canvas({
     const [hoverPin, setHoverPin] = useState(null); // { compId, pinId, x, y }
     const [wireStart, setWireStart] = useState(null); // { x, y }
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 }); // world coords
-    const [dragState, setDragState] = useState(null); // { kind: 'drag-comp'|'drag-wire'|'pan', … }
+    const [dragState, setDragState] = useState(null); // 'drag-comp'|'drag-wire'|'pan'|'marquee'
     // Live visual delta for the thing being dragged. We render the
     // component/wire with this offset applied without touching the doc
     // so (a) every drag frame doesn't bloat the undo stack and (b) the
@@ -76,6 +161,24 @@ export default function Canvas({
         const y = (ev.clientY - rect.top) / zoom - pan.y;
         return { x, y };
     }, [pan.x, pan.y, zoom]);
+
+    const multiSelSets = useMemo(() => {
+        if (!selectedId || selectedId.kind !== 'multi') return null;
+        return {
+            comps: new Set(selectedId.componentIds || []),
+            wires: new Set(selectedId.wireIds || []),
+        };
+    }, [selectedId]);
+
+    const isComponentSelected = useCallback((id) => {
+        if (selectedId?.kind === 'component' && selectedId.id === id) return true;
+        return multiSelSets?.comps.has(id) ?? false;
+    }, [selectedId, multiSelSets]);
+
+    const isWireSelected = useCallback((id) => {
+        if (selectedId?.kind === 'wire' && selectedId.id === id) return true;
+        return multiSelSets?.wires.has(id) ?? false;
+    }, [selectedId, multiSelSets]);
 
     /* ---------------------- drop handling ---------------------- */
     const onDragOver = (ev) => {
@@ -185,6 +288,12 @@ export default function Canvas({
             return;
         }
         const world = clientToWorld(ev);
+        // Right-drag marquee (select tool only) — box-select parts & wires.
+        if (ev.button === 2 && tool === 'select') {
+            ev.preventDefault();
+            setDragState({ kind: 'marquee', startWorld: { ...world }, curWorld: { ...world } });
+            return;
+        }
         if (tool === 'wire') {
             const pin = pinAt(world);
             const sx = pin ? pin.pin.x : snap(world.x);
@@ -256,6 +365,12 @@ export default function Canvas({
             setPan({ x: dragState.startPan.x + dx, y: dragState.startPan.y + dy });
             return;
         }
+        if (dragState?.kind === 'marquee') {
+            setDragState((prev) => (prev?.kind === 'marquee'
+                ? { ...prev, curWorld: { ...world } }
+                : prev));
+            return;
+        }
         if (dragState?.kind === 'drag-comp' || dragState?.kind === 'drag-wire') {
             // Snap the *delta* so the preview stays on the grid instead
             // of floating freely while the cursor moves.
@@ -273,6 +388,23 @@ export default function Canvas({
 
     const onPointerUp = (ev) => {
         try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        if (dragState?.kind === 'marquee') {
+            const cur = dragState.curWorld || dragState.startWorld;
+            const r = normalizeWorldRect(dragState.startWorld, cur);
+            const rw = r.maxX - r.minX;
+            const rh = r.maxY - r.minY;
+            if (rw >= 4 || rh >= 4) {
+                const { componentIds, wireIds } = collectMarqueeSelection(doc, r);
+                if (componentIds.length + wireIds.length > 0) {
+                    onSelect({ kind: 'multi', componentIds, wireIds });
+                } else {
+                    onSelect(null);
+                }
+            }
+            setDragState(null);
+            setDragDelta(null);
+            return;
+        }
         // Commit drags — one history entry per drag, no matter how
         // far the pointer travelled. Localized behaviour: components
         // move and stretch their connected wires; wires translate
@@ -371,7 +503,11 @@ export default function Canvas({
                     return;
                 }
             }
-            if (key === 'escape') { setWireStart(null); return; }
+            if (key === 'escape') {
+                setWireStart(null);
+                if (selectedId?.kind === 'multi') onSelect(null);
+                return;
+            }
             if (key === 'v') { setTool('select'); return; }
             if (key === 'w') { setTool('wire'); return; }
             if (key === 'h') { setTool('pan'); return; }
@@ -387,7 +523,10 @@ export default function Canvas({
             if (key === 'delete' || key === 'backspace') {
                 ev.preventDefault();
                 onDocChange((d) => {
-                    if (selectedId.kind === 'component') removeComponent(d, selectedId.id);
+                    if (selectedId.kind === 'multi') {
+                        for (const wid of selectedId.wireIds || []) removeWire(d, wid);
+                        for (const cid of selectedId.componentIds || []) removeComponent(d, cid);
+                    } else if (selectedId.kind === 'component') removeComponent(d, selectedId.id);
                     else if (selectedId.kind === 'wire') removeWire(d, selectedId.id);
                 });
                 onSelect(null);
@@ -515,10 +654,17 @@ export default function Canvas({
                     <RotateCw size={14} />
                 </ToolButton>
                 <ToolButton
-                    onClick={() => selectedId && onDocChange((d) => {
-                        if (selectedId.kind === 'component') removeComponent(d, selectedId.id);
-                        else if (selectedId.kind === 'wire') removeWire(d, selectedId.id);
-                    }) && onSelect(null)}
+                    onClick={() => {
+                        if (!selectedId) return;
+                        onDocChange((d) => {
+                            if (selectedId.kind === 'multi') {
+                                for (const wid of selectedId.wireIds || []) removeWire(d, wid);
+                                for (const cid of selectedId.componentIds || []) removeComponent(d, cid);
+                            } else if (selectedId.kind === 'component') removeComponent(d, selectedId.id);
+                            else if (selectedId.kind === 'wire') removeWire(d, selectedId.id);
+                        });
+                        onSelect(null);
+                    }}
                     disabled={!selectedId}
                     title="Delete (Del)"
                 >
@@ -547,7 +693,11 @@ export default function Canvas({
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
-                    {tool === 'select' && (selectedId ? 'Drag to move just this part — connected wires stretch to follow. Hold Ctrl to detach. Double-click to edit. R rotate · Del delete.' : 'Drag parts from the palette. Click to select, drag to move. Wires stretch with connected pins. Double-click to edit a property.')}
+                    {tool === 'select' && (selectedId?.kind === 'multi'
+                        ? `${(selectedId.componentIds?.length || 0) + (selectedId.wireIds?.length || 0)} selected — Del removes all. Esc clears the box.`
+                        : selectedId
+                            ? 'Drag to move just this part — connected wires stretch to follow. Hold Ctrl to detach. Double-click to edit. R rotate · Del delete.'
+                            : 'Drag parts from the palette. Click to select; right-drag a rectangle to box-select. Wires stretch with connected pins. Double-click to edit.')}
                     {tool === 'pan' && 'Drag to pan. Scroll wheel to zoom (Shift = finer).'}
                 </div>
             </div>
@@ -560,6 +710,7 @@ export default function Canvas({
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
+                onContextMenu={(ev) => { ev.preventDefault(); }}
                 onDoubleClick={(ev) => {
                     const world = clientToWorld(ev);
                     const hit = componentAt(world);
@@ -592,9 +743,28 @@ export default function Canvas({
                 <rect x={0} y={0} width="100%" height="100%" fill="url(#cs-grid-minor)" />
 
                 <g transform={`scale(${zoom}) translate(${pan.x}, ${pan.y})`}>
+                    {dragState?.kind === 'marquee' && dragState.curWorld && (() => {
+                        const r = normalizeWorldRect(dragState.startWorld, dragState.curWorld);
+                        const rw = Math.max(0, r.maxX - r.minX);
+                        const rh = Math.max(0, r.maxY - r.minY);
+                        return (
+                            <rect
+                                key="marquee"
+                                x={r.minX}
+                                y={r.minY}
+                                width={rw}
+                                height={rh}
+                                fill="rgba(56, 189, 248, 0.14)"
+                                stroke="var(--cs-accent)"
+                                strokeWidth={1}
+                                strokeDasharray="5 4"
+                                pointerEvents="none"
+                            />
+                        );
+                    })()}
                     {/* Wires */}
                     {doc.wires.map((w) => {
-                        const selected = selectedId?.kind === 'wire' && selectedId.id === w.id;
+                        const selected = isWireSelected(w.id);
                         const flagged = flaggedWireIds.has(w.id);
                         let stroke = 'var(--sch-wire)';
                         if (selected) stroke = 'var(--cs-accent)';
@@ -704,7 +874,7 @@ export default function Canvas({
                             <CanvasComponent
                                 key={`comp-${c.id}`}
                                 comp={c}
-                                selected={selectedId?.kind === 'component' && selectedId.id === c.id}
+                                selected={isComponentSelected(c.id)}
                                 flagged={flaggedComponentIds.has(c.id)}
                                 floatingIds={floatingIds}
                                 dx={dragging ? dragDelta.dx : 0}

@@ -21,15 +21,39 @@ import { BUILTIN_MODELS, getPart } from '../../circuit/library.js';
  */
 export default function Inspector({
     selectedComp, onUpdate, onRotate, onDelete,
+    bulkSelection, onBulkDelete,
     netWarnings, analysisPane,
 }) {
     if (!selectedComp) {
+        const nBulk = bulkSelection
+            ? (bulkSelection.componentIds?.length || 0) + (bulkSelection.wireIds?.length || 0)
+            : 0;
         return (
             <div className="cs-inspector">
-                <div className="cs-inspector-empty">
-                    <h3>No selection</h3>
-                    <p>Click a component on the canvas to edit its properties.</p>
-                </div>
+                {bulkSelection && nBulk > 0 ? (
+                    <div className="cs-inspector-empty cs-inspector-bulk">
+                        <h3>Area selection</h3>
+                        <p>
+                            {bulkSelection.componentIds?.length || 0} part(s),{' '}
+                            {bulkSelection.wireIds?.length || 0} wire segment(s).
+                        </p>
+                        <button
+                            type="button"
+                            className="cs-inspector-btn cs-danger"
+                            onClick={onBulkDelete}
+                        >
+                            <Trash2 size={14} /> Delete selected
+                        </button>
+                        <p className="cs-inspector-hint">
+                            Right-drag on the canvas (select tool) to draw a selection rectangle. Del removes everything inside.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="cs-inspector-empty">
+                        <h3>No selection</h3>
+                        <p>Click a component on the canvas to edit its properties.</p>
+                    </div>
+                )}
                 {netWarnings && netWarnings.length > 0 && (
                     <div className="cs-inspector-warnings">
                         <div className="cs-inspector-title">Net warnings</div>
