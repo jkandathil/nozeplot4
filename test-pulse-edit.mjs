@@ -12,13 +12,15 @@ const src = fs.readFileSync(
     'utf-8',
 );
 
-// Extract everything from SI_MAP declaration through the source-spec
-// helpers (stopping right before modelChoicesFor). This pulls in
-// parseSiValue, formatForEdit, and the new pulse/sin/dc helpers as a
-// single contiguous block.
-const start = src.indexOf('const SI_MAP');
+// Extract from formatForEdit through the source-spec helpers
+// (stopping right before modelChoicesFor). parseSiValue / SI_MAP now
+// live in the shared siUnits.js module, so we inject a plain re-export
+// at the top of the bundle.
+const start = src.indexOf('function formatForEdit');
 const end   = src.indexOf('function modelChoicesFor');
-const bundle = src.slice(start, end) +
+const bundle =
+    "import { SI_MAP, parseSiValue } from './src/circuit/siUnits.js';\n" +
+    src.slice(start, end) +
     '\nexport { normaliseSpecs, buildWaveSpec, buildAcSpec, waveFieldDefs, defaultWaveFields };\n';
 
 // Write to a tmp ESM file and import it.

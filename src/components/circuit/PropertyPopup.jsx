@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Check } from 'lucide-react';
 import { BUILTIN_MODELS, getPart } from '../../circuit/library.js';
+// SI parsing is shared with the parametric-sweep editor — keep it
+// in one place so "4.7k" parses identically everywhere.
+import { SI_MAP, parseSiValue } from '../../circuit/siUnits.js';
 
 /**
  * Floating property editor that appears when the user double-clicks a
@@ -273,30 +276,6 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
 
 function inferUnit(type) {
     return { R: 'Ω', C: 'F', L: 'H', E: 'V/V', G: 'A/V' }[type] || '';
-}
-
-const SI_MAP = {
-    f: 1e-15, p: 1e-12, n: 1e-9, u: 1e-6, µ: 1e-6,
-    m: 1e-3, k: 1e3, K: 1e3,
-    meg: 1e6, Meg: 1e6, MEG: 1e6,
-    g: 1e9, G: 1e9,
-};
-
-function parseSiValue(txt) {
-    if (txt == null) return NaN;
-    const s = String(txt).trim();
-    if (!s) return NaN;
-    // Match "4.7k", "1meg", "220u", "10", etc.
-    const m = s.match(/^([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([a-zA-Zµ]*)\s*[a-zA-ZΩ/]*$/);
-    if (!m) return Number(s);
-    const num = parseFloat(m[1]);
-    const suffix = m[2] || '';
-    if (!suffix) return num;
-    if (SI_MAP[suffix] != null) return num * SI_MAP[suffix];
-    // Case-insensitive fallback for "meg"/"Meg"/"MEG".
-    const lower = suffix.toLowerCase();
-    if (SI_MAP[lower] != null) return num * SI_MAP[lower];
-    return num;
 }
 
 function formatForEdit(v) {

@@ -1817,6 +1817,47 @@ html[data-theme="light"] .cs-tran-hint code {
     background: #e2e8f0;
 }
 
+/* ---------- Parametric sweep subbar ---------- */
+.cs-sweep-bar {
+    /* Sits directly below the transient bar and inherits most of the
+       .cs-subbar styling. When enabled we lift the background a touch
+       so it reads as an "active" row. */
+    gap: 10px;
+}
+.cs-sweep-bar.is-on {
+    background: linear-gradient(
+        180deg,
+        rgba(56, 189, 248, 0.09) 0%,
+        rgba(15, 23, 42, 0.35) 100%
+    );
+    border-color: rgba(56, 189, 248, 0.28);
+}
+.cs-sweep-target {
+    background: var(--cs-input-bg, #0b1220);
+    color: var(--cs-text, #e2e8f0);
+    border: 1px solid var(--cs-border, #334155);
+    border-radius: 6px;
+    padding: 3px 6px;
+    font: inherit;
+    font-size: 0.82rem;
+    min-width: 150px;
+}
+.cs-sweep-target:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.cs-sweep-err {
+    color: #fca5a5 !important;
+    font-weight: 600;
+}
+html[data-theme="light"] .cs-sweep-bar.is-on {
+    background: linear-gradient(180deg, #e0f2fe 0%, #ffffff 100%);
+    border-color: #7dd3fc;
+}
+html[data-theme="light"] .cs-sweep-target {
+    background: #ffffff; color: #0f172a; border-color: #cbd5e1;
+}
+
 /* ---------- File menu dropdown ---------- */
 .cs-file-menu-wrap {
     position: relative;

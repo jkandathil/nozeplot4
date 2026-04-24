@@ -303,6 +303,7 @@ export function toExportEnvelope(project) {
             doc: project.doc,
             analysis: project.analysis,
             tranOverride: project.tranOverride,
+            sweep: project.sweep,
             selectedSignals: project.selectedSignals,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,

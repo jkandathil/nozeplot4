@@ -49,6 +49,7 @@ import {
     loadInitialProject, saveProject, uniqueName,
     setCurrentProjectId, importProjectJson,
 } from '../circuit/projects.js';
+import { parseSiValue, formatSi, linspaceByStep } from '../circuit/siUnits.js';
 import {
     exportProjectJson, exportSpiceNetlist, exportResultsCsv,
     exportCanvasSvg, exportCanvasPng,
@@ -181,6 +182,23 @@ function CircuitStudioPage() {
         tstop: '1m',
         tstep: '1u',
     });
+    // Parametric sweep (`.step PARAM` in SPICE-speak). When enabled,
+    // the Run pipeline walks `target` from start → stop in step-sized
+    // increments, collects per-iteration results, and hands them to
+    // `buildStepResult` which names each trace "V(vout) @R1=1.2k" so
+    // they land as a family of overlaid curves on the plot.
+    //
+    // Fields are kept as strings (with SI prefixes tolerated) to match
+    // the transient-override pattern and avoid floating-point noise in
+    // the inputs. An empty `target` means "use first sweepable
+    // component at run time".
+    const [sweep, setSweep] = useState({
+        enabled: false,
+        target: '',
+        start: '100',
+        stop: '1k',
+        step: '100',
+    });
     const [runResult, setRunResult] = useState(null);
     const [runError, setRunError] = useState('');
     const [running, setRunning] = useState(false);
@@ -214,6 +232,7 @@ function CircuitStudioPage() {
                 doc,
                 analysis,
                 tranOverride,
+                sweep,
                 selectedSignals,
             });
             if (!currentProjectId) {
@@ -224,8 +243,8 @@ function CircuitStudioPage() {
             console.warn('autosave failed:', e);
         }
     // We deliberately leave selectedSignals / analysis / tranOverride
-    // out of the dep array to avoid write storms during idle UI
-    // tweaks; the next doc edit will flush them into the slot.
+    // / sweep out of the dep array to avoid write storms during idle
+    // UI tweaks; the next doc edit will flush them into the slot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [doc, projectName, currentProjectId]);
 
@@ -431,6 +450,7 @@ function CircuitStudioPage() {
         analysisId = 'tran',
         tranOv = null,
         signals = null,
+        sweepOv = null,
         demoId = null,
         tour = null,
     } = {}) => {
@@ -442,6 +462,8 @@ function CircuitStudioPage() {
         setAnalysis(analysisId || 'tran');
         if (tranOv) setTranOverride(tranOv);
         if (signals) setSelectedSignals(signals);
+        if (sweepOv) setSweep(sweepOv);
+        else setSweep({ enabled: false, target: '', start: '100', stop: '1k', step: '100' });
         setLoadedDemoId(demoId);
         setRunResult(null);
         setRunError('');
@@ -497,6 +519,7 @@ function CircuitStudioPage() {
             analysisId: full.analysis || 'tran',
             tranOv: full.tranOverride || null,
             signals: full.selectedSignals || null,
+            sweepOv: full.sweep || null,
         });
         setProjectManagerOpen(false);
     }, [_switchToDoc]);
@@ -513,6 +536,7 @@ function CircuitStudioPage() {
                 doc,
                 analysis,
                 tranOverride,
+                sweep,
                 selectedSignals,
             });
             setCurrentProjectIdState(saved.id);
@@ -521,7 +545,7 @@ function CircuitStudioPage() {
         } catch (e) {
             setRunError(`Save as failed: ${e?.message || e}`);
         }
-    }, [projectName, doc, analysis, tranOverride, selectedSignals]);
+    }, [projectName, doc, analysis, tranOverride, sweep, selectedSignals]);
 
     const handleRename = useCallback(() => {
         // eslint-disable-next-line no-alert
@@ -578,7 +602,17 @@ function CircuitStudioPage() {
         setTimeout(() => {
             try {
                 const ctx = buildContext(parsed);
-                const stepDir = parsed.directives.find((d) => d.kind === 'step') || null;
+                // Sweep priority:
+                //   1. UI parametric sweep (if enabled + fully specified)
+                //   2. parsed `.step` directive from the netlist drawer
+                //   3. null → single run
+                const parsedStepDir = parsed.directives.find((d) => d.kind === 'step') || null;
+                let stepDir = parsedStepDir;
+                if (sweep?.enabled) {
+                    const synth = buildSweepDirective(sweep, doc, ctx);
+                    if (synth.error) throw new Error(synth.error);
+                    stepDir = synth.stepDir;
+                }
 
                 // Snapshot the pin → signal mapping that the run was
                 // actually computed against. We stash this on the
@@ -661,7 +695,7 @@ function CircuitStudioPage() {
                 setRunning(false);
             }
         }, 30);
-    }, [parsed, analysis, tranOverride, liveMode, doc, resolvedNets]);
+    }, [parsed, analysis, tranOverride, sweep, liveMode, doc, resolvedNets]);
 
     const copyNetlist = useCallback(() => {
         if (!netlistText) return;
@@ -784,7 +818,7 @@ function CircuitStudioPage() {
                             <div className="cs-file-menu-sep" />
                             <button className="cs-file-menu-item"
                                 onClick={() => { setFileMenuOpen(false); exportProjectJson({
-                                    name: projectName, doc, analysis, tranOverride, selectedSignals,
+                                    name: projectName, doc, analysis, tranOverride, sweep, selectedSignals,
                                 }); }}>
                                 <FileJson size={14} /> Export project (.noze.json)
                             </button>
@@ -923,6 +957,98 @@ function CircuitStudioPage() {
                         <Activity size={12} /> Live stream
                     </label>
                     <span className="cs-tran-hint">SI prefixes ok: <code>1m</code>, <code>500u</code>, <code>2n</code></span>
+                </div>
+            )}
+
+            {/* ---- Parametric sweep subbar (always visible) ---- */}
+            {analysis !== 'op' && (
+                <div className={`cs-subbar cs-sweep-bar${sweep.enabled ? ' is-on' : ''}`}>
+                    <label className={`cs-tran-live${sweep.enabled ? ' is-on' : ''}`}>
+                        <input
+                            type="checkbox"
+                            checked={sweep.enabled}
+                            onChange={(e) => setSweep((s) => ({ ...s, enabled: e.target.checked }))}
+                        />
+                        <SlidersHorizontal size={12} /> Parametric sweep
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Target</span>
+                        <select
+                            className="cs-sweep-target"
+                            value={sweep.target}
+                            onChange={(e) => setSweep((s) => ({ ...s, target: e.target.value }))}
+                            disabled={!sweep.enabled}
+                        >
+                            <option value="">(first R/C/L/V/I)</option>
+                            {(doc?.components || [])
+                                .filter((c) => isSweepableType(c.elementType))
+                                .map((c) => (
+                                    <option key={c.id} value={c.ref}>
+                                        {c.ref}{c.value != null ? ` = ${formatSi(c.value)}` : ''}
+                                    </option>
+                                ))}
+                        </select>
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>From</span>
+                        <input
+                            type="text"
+                            value={sweep.start}
+                            onChange={(e) => setSweep((s) => ({ ...s, start: e.target.value }))}
+                            disabled={!sweep.enabled}
+                            spellCheck={false}
+                            placeholder="100"
+                        />
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>To</span>
+                        <input
+                            type="text"
+                            value={sweep.stop}
+                            onChange={(e) => setSweep((s) => ({ ...s, stop: e.target.value }))}
+                            disabled={!sweep.enabled}
+                            spellCheck={false}
+                            placeholder="1k"
+                        />
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Step</span>
+                        <input
+                            type="text"
+                            value={sweep.step}
+                            onChange={(e) => setSweep((s) => ({ ...s, step: e.target.value }))}
+                            disabled={!sweep.enabled}
+                            spellCheck={false}
+                            placeholder="100"
+                        />
+                    </label>
+                    {sweep.enabled && (() => {
+                        const start = parseSiValue(sweep.start);
+                        const stop  = parseSiValue(sweep.stop);
+                        const step  = parseSiValue(sweep.step);
+                        const vals  = linspaceByStep(start, stop, step);
+                        if (vals.length === 0) {
+                            return <span className="cs-tran-hint cs-sweep-err">invalid range</span>;
+                        }
+                        const tooMany = vals.length > 200;
+                        return (
+                            <span className={`cs-tran-hint${tooMany ? ' cs-sweep-err' : ''}`}>
+                                {vals.length} runs{tooMany ? ' (> 200 cap)' : ''}
+                                {!tooMany && vals.length <= 6
+                                    ? `: ${vals.map((v) => formatSi(v)).join(', ')}`
+                                    : !tooMany
+                                    ? `: ${formatSi(vals[0])} … ${formatSi(vals[vals.length - 1])}`
+                                    : ''}
+                            </span>
+                        );
+                    })()}
+                    {!sweep.enabled && (
+                        <span className="cs-tran-hint">
+                            Sweep <code>R</code>/<code>C</code>/<code>L</code> value, or <code>V</code>/<code>I</code>{' '}
+                            <strong>DC bias</strong> (same as the DC field in the property editor). Example:{' '}
+                            <code>Vin</code> from <code>0</code> to <code>3.3</code> by <code>0.33</code>.
+                        </span>
+                    )}
                 </div>
             )}
 
@@ -1158,6 +1284,75 @@ function CircuitStudioPage() {
             </div>
         </div>
     );
+}
+
+/**
+ * Build a synthetic `.step` directive from the UI parametric-sweep
+ * spec. Returns `{ stepDir }` on success, or `{ error }` with a
+ * user-facing message on any validation failure.
+ *
+ * The solver accepts { target, start, stop, step } where `target` is
+ * the component ref (e.g. "R1" or "V1"). We cross-check that the
+ * component exists and is sweepable (R / C / L / V / I) before
+ * handing anything to runWithStep so the user gets a helpful
+ * message instead of a solver stack trace.
+ */
+function buildSweepDirective(sweep, doc, ctx) {
+    const start = parseSiValue(sweep.start);
+    const stop  = parseSiValue(sweep.stop);
+    const step  = parseSiValue(sweep.step);
+
+    if (!Number.isFinite(start) || !Number.isFinite(stop) || !Number.isFinite(step)) {
+        return { error: 'Parametric sweep: start / stop / step must all be valid numbers.' };
+    }
+    if (step === 0) return { error: 'Parametric sweep: step cannot be zero.' };
+    if (Math.sign(stop - start) !== Math.sign(step) && start !== stop) {
+        return { error: `Parametric sweep: step sign doesn't match the ${start} → ${stop} direction.` };
+    }
+
+    // Target resolution: explicit UI choice wins; otherwise fall back
+    // to the first sweepable element in the schematic (handy for
+    // quick "just sweep something" runs).
+    let target = String(sweep.target || '').trim();
+    if (!target) {
+        const first = doc?.components?.find((c) => isSweepableType(c.elementType));
+        if (!first) return { error: 'Parametric sweep: no R / C / L / V / I in the schematic to sweep.' };
+        target = first.ref;
+    }
+
+    // Confirm the element actually landed in the compiled context —
+    // otherwise runWithStep would throw with a less friendly message.
+    const lower = target.toLowerCase();
+    const hit = ctx.elems.find((el) => String(el.name).toLowerCase() === lower);
+    if (!hit) {
+        return { error: `Parametric sweep: element "${target}" not found in the compiled circuit.` };
+    }
+    if (!['R', 'C', 'L', 'V', 'I'].includes(hit.type)) {
+        return { error: `Parametric sweep: ${hit.type}-type element "${target}" has no sweepable value.` };
+    }
+
+    // Guard against accidental 10 000-iteration runs from a typo.
+    const values = linspaceByStep(start, stop, step);
+    if (values.length === 0) {
+        return { error: 'Parametric sweep: range produced no points. Check start / stop / step.' };
+    }
+    if (values.length > 200) {
+        return { error: `Parametric sweep: ${values.length} steps is too many — cap at 200.` };
+    }
+
+    return {
+        stepDir: { kind: 'step', target, start, stop, step },
+        values,
+    };
+}
+
+/** Is this element type sweepable via setElementValue? */
+function isSweepableType(elementType) {
+    if (!elementType) return false;
+    // Schematic element types include R, C, L, V_dc, V_pulse, V_sin,
+    // V_ac, I_dc, etc. Reduce to the solver primitive.
+    const first = String(elementType).charAt(0).toUpperCase();
+    return ['R', 'C', 'L', 'V', 'I'].includes(first);
 }
 
 /**
