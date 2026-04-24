@@ -94,6 +94,10 @@ function CircuitStudioPage() {
     const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
     const [showResults, setShowResults] = useState(true);
     const [netlistDraft, setNetlistDraft] = useState(''); // user-edited raw text when drawer open
+    // Bump this to ask the Canvas to fit-to-content. Only do this on
+    // external load events (demo / blank / apply-netlist); incremental
+    // editing keeps the viewport stable.
+    const [fitNonce, setFitNonce] = useState(0);
     const [view, setView] = useState(() => {
         try {
             const saved = localStorage.getItem('circuitStudio:doc');
@@ -272,6 +276,7 @@ function CircuitStudioPage() {
         try {
             const { doc: imported } = importNetlistToDoc(demo.netlist);
             setDocState({ past: [], present: imported, future: [] });
+            setFitNonce((n) => n + 1);
         } catch (e) {
             setRunError(`Failed to import demo: ${e?.message || e}`);
             return;
@@ -289,6 +294,7 @@ function CircuitStudioPage() {
 
     const loadBlank = useCallback(() => {
         setDocState({ past: [], present: emptyDoc(), future: [] });
+        setFitNonce((n) => n + 1);
         setLoadedDemoId(null);
         setRunResult(null);
         setRunError('');
@@ -306,6 +312,7 @@ function CircuitStudioPage() {
         try {
             const { doc: imported } = importNetlistToDoc(netlistDraft);
             setDocState({ past: [], present: imported, future: [] });
+            setFitNonce((n) => n + 1);
             setSelection(null);
             setRunError('');
         } catch (e) {
@@ -519,6 +526,7 @@ function CircuitStudioPage() {
                         resolvedNets={resolvedNets}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
+                        fitNonce={fitNonce}
                     />
 
                     {/* Optional bottom drawer: results + netlist source */}

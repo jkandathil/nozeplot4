@@ -144,6 +144,53 @@ export function moveComponent(doc, compId, px, py) {
     return true;
 }
 
+/**
+ * Translate a component by (dx, dy) pixels. Deltas are snapped to the
+ * grid, so the final position lands on a grid cell even if the mouse
+ * moved by a non-grid amount. Any net labels anchored to one of the
+ * component's pin coordinates are shifted in lock-step (unless another
+ * component's pin sits on the same point — in that case we leave the
+ * label behind so the other part keeps its connectivity).
+ */
+export function translateComponent(doc, compId, dx, dy) {
+    const c = doc.components.find((c) => c.id === compId);
+    if (!c) return false;
+    const gdx = snap(dx);
+    const gdy = snap(dy);
+    if (gdx === 0 && gdy === 0) return false;
+
+    // Capture old pin coords before mutating.
+    const oldPins = componentPins(c);
+    c.pos = { x: c.pos.x + gdx, y: c.pos.y + gdy };
+    const newPins = componentPins(c);
+
+    for (let i = 0; i < oldPins.length; i++) {
+        const op = oldPins[i];
+        const np = newPins[i];
+        // Is another component still anchored at the old pin coord?
+        let sharedElsewhere = false;
+        for (const other of doc.components) {
+            if (other.id === c.id) continue;
+            for (const otherPin of componentPins(other)) {
+                if (otherPin.x === op.x && otherPin.y === op.y) {
+                    sharedElsewhere = true;
+                    break;
+                }
+            }
+            if (sharedElsewhere) break;
+        }
+        if (sharedElsewhere) continue;
+        // Shift every label sitting exactly on the old pin coord.
+        for (const lab of doc.labels) {
+            if (lab.x === Math.round(op.x) && lab.y === Math.round(op.y)) {
+                lab.x = Math.round(np.x);
+                lab.y = Math.round(np.y);
+            }
+        }
+    }
+    return true;
+}
+
 export function rotateComponent(doc, compId, delta = 90) {
     const c = doc.components.find((c) => c.id === compId);
     if (!c) return false;
@@ -200,6 +247,20 @@ export function removeWire(doc, wireId) {
     const idx = doc.wires.findIndex((w) => w.id === wireId);
     if (idx < 0) return false;
     doc.wires.splice(idx, 1);
+    return true;
+}
+
+/**
+ * Translate a whole wire polyline by (dx, dy). Deltas snap to the grid
+ * so every vertex stays on a grid cell. Returns true if the wire moved.
+ */
+export function translateWire(doc, wireId, dx, dy) {
+    const w = doc.wires.find((w) => w.id === wireId);
+    if (!w) return false;
+    const gdx = snap(dx);
+    const gdy = snap(dy);
+    if (gdx === 0 && gdy === 0) return false;
+    w.points = w.points.map(([x, y]) => [x + gdx, y + gdy]);
     return true;
 }
 

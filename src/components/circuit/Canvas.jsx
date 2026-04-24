@@ -5,7 +5,8 @@ import {
 import { SYMBOLS } from '../../circuit/symbols.js';
 import {
     GRID, snap, componentPins,
-    addWirePath, removeComponent, moveComponent, rotateComponent,
+    addWirePath, removeComponent, rotateComponent,
+    translateComponent, translateWire,
     addLabel, removeWire,
 } from '../../circuit/schematicDoc.js';
 import { renderShape } from './renderShape.jsx';
@@ -42,15 +43,23 @@ export default function Canvas({
     resolvedNets,
     onUndo,
     onRedo,
+    fitNonce = 0,
 }) {
     const svgRef = useRef(null);
     const [tool, setTool] = useState('select'); // 'select' | 'wire' | 'pan'
-    const [zoom, setZoom] = useState(1);
+    // Default to 2× so freshly-placed 80 px-wide symbols feel like real
+    // parts on a ~800-wide canvas (they'd be thumbnail-sized at 1×).
+    const [zoom, setZoom] = useState(2);
     const [pan, setPan] = useState({ x: 100, y: 100 });
     const [hoverPin, setHoverPin] = useState(null); // { compId, pinId, x, y }
     const [wireStart, setWireStart] = useState(null); // { x, y }
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 }); // world coords
-    const [dragState, setDragState] = useState(null); // { kind: 'move'|'pan', … }
+    const [dragState, setDragState] = useState(null); // { kind: 'drag-comp'|'drag-wire'|'pan', … }
+    // Live visual delta for the thing being dragged. We render the
+    // component/wire with this offset applied without touching the doc
+    // so (a) every drag frame doesn't bloat the undo stack and (b) the
+    // preview is perfectly smooth instead of snapped-every-frame.
+    const [dragDelta, setDragDelta] = useState(null); // { dx, dy }
 
     const wrapperRef = useRef(null);
 
@@ -179,16 +188,22 @@ export default function Canvas({
         if (hit) {
             onSelect({ kind: 'component', id: hit.id });
             setDragState({
-                kind: 'move',
-                compId: hit.id,
+                kind: 'drag-comp',
+                id: hit.id,
                 startWorld: world,
-                startPos: { ...hit.pos },
             });
+            setDragDelta({ dx: 0, dy: 0 });
             return;
         }
         const wireHit = wireAt(world);
         if (wireHit) {
             onSelect({ kind: 'wire', id: wireHit.id });
+            setDragState({
+                kind: 'drag-wire',
+                id: wireHit.id,
+                startWorld: world,
+            });
+            setDragDelta({ dx: 0, dy: 0 });
             return;
         }
         onSelect(null);
@@ -203,10 +218,12 @@ export default function Canvas({
             setPan({ x: dragState.startPan.x + dx, y: dragState.startPan.y + dy });
             return;
         }
-        if (dragState?.kind === 'move') {
-            const nx = dragState.startPos.x + (world.x - dragState.startWorld.x);
-            const ny = dragState.startPos.y + (world.y - dragState.startWorld.y);
-            onDocChange((d) => { moveComponent(d, dragState.compId, nx, ny); });
+        if (dragState?.kind === 'drag-comp' || dragState?.kind === 'drag-wire') {
+            // Snap the *delta* so the preview stays on the grid instead
+            // of floating freely while the cursor moves.
+            const dx = snap(world.x - dragState.startWorld.x);
+            const dy = snap(world.y - dragState.startWorld.y);
+            setDragDelta({ dx, dy });
             return;
         }
         // Pin hover highlight (select/wire tools)
@@ -217,15 +234,24 @@ export default function Canvas({
     };
 
     const onPointerUp = (ev) => {
-        try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) {}
-        if (dragState?.kind === 'move') {
-            // After moving, re-stamp any labels that were at the component's
-            // old pin coordinates so connectivity follows the pin.
-            // (Simplest heuristic: we rely on the doc's labels still being
-            // at their original positions; net resolution will surface
-            // any disconnections as floating pins.)
+        try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        // Commit drags — one history entry per drag, no matter how far
+        // the pointer travelled.
+        if (dragState?.kind === 'drag-comp' && dragDelta) {
+            const { dx, dy } = dragDelta;
+            if (dx !== 0 || dy !== 0) {
+                const id = dragState.id;
+                onDocChange((d) => { translateComponent(d, id, dx, dy); });
+            }
+        } else if (dragState?.kind === 'drag-wire' && dragDelta) {
+            const { dx, dy } = dragDelta;
+            if (dx !== 0 || dy !== 0) {
+                const id = dragState.id;
+                onDocChange((d) => { translateWire(d, id, dx, dy); });
+            }
         }
         setDragState(null);
+        setDragDelta(null);
     };
 
     const commitWire = (start, end) => {
@@ -322,15 +348,18 @@ export default function Canvas({
         return () => window.removeEventListener('keydown', handler);
     }, [selectedId, onDocChange, onSelect, fitToContent, onUndo, onRedo]);
 
-    // Initial fit when doc changes identity (e.g. loading a demo).
-    const docVersionRef = useRef(doc);
+    // Fit-to-content only on external "load" events (demo import, blank
+    // reset, raw-netlist apply) — we don't want the view to snap around
+    // while the user is placing parts one at a time.
     useEffect(() => {
-        if (docVersionRef.current !== doc && doc.components.length > 0) {
-            docVersionRef.current = doc;
-            // Defer to allow layout.
-            setTimeout(fitToContent, 0);
+        if (fitNonce > 0 && doc.components.length > 0) {
+            // Defer so the fresh doc has laid out in the DOM first.
+            const t = setTimeout(fitToContent, 0);
+            return () => clearTimeout(t);
         }
-    }, [doc, fitToContent]);
+        return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fitNonce]);
 
     /* --------------------- derived visuals --------------------- */
     const nets = resolvedNets;
@@ -403,7 +432,7 @@ export default function Canvas({
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
-                    {tool === 'select' && (selectedId ? 'Drag to move. R to rotate. Del to delete.' : 'Drag parts from the palette onto the canvas.')}
+                    {tool === 'select' && (selectedId ? 'Drag to move. R to rotate. Del to delete.' : 'Drag parts from the palette. Click + drag a component or wire on the canvas to move it.')}
                     {tool === 'pan' && 'Drag to pan. Wheel to zoom.'}
                 </div>
             </div>
@@ -427,15 +456,19 @@ export default function Canvas({
                     {/* Wires */}
                     {doc.wires.map((w) => {
                         const selected = selectedId?.kind === 'wire' && selectedId.id === w.id;
+                        const dragging = dragState?.kind === 'drag-wire' && dragState.id === w.id && dragDelta;
+                        const tx = dragging ? dragDelta.dx : 0;
+                        const ty = dragging ? dragDelta.dy : 0;
                         return (
                             <polyline
                                 key={`wire-${w.id}`}
-                                points={w.points.map((p) => `${p[0]},${p[1]}`).join(' ')}
+                                points={w.points.map((p) => `${p[0] + tx},${p[1] + ty}`).join(' ')}
                                 fill="none"
                                 stroke={selected ? 'var(--cs-accent)' : 'var(--sch-wire)'}
                                 strokeWidth={selected ? 2.4 : 1.8}
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
+                                opacity={dragging ? 0.85 : 1}
                             />
                         );
                     })}
@@ -457,14 +490,20 @@ export default function Canvas({
                     ))}
 
                     {/* Components */}
-                    {doc.components.map((c) => (
-                        <CanvasComponent
-                            key={`comp-${c.id}`}
-                            comp={c}
-                            selected={selectedId?.kind === 'component' && selectedId.id === c.id}
-                            floatingIds={floatingIds}
-                        />
-                    ))}
+                    {doc.components.map((c) => {
+                        const dragging = dragState?.kind === 'drag-comp' && dragState.id === c.id && dragDelta;
+                        return (
+                            <CanvasComponent
+                                key={`comp-${c.id}`}
+                                comp={c}
+                                selected={selectedId?.kind === 'component' && selectedId.id === c.id}
+                                floatingIds={floatingIds}
+                                dx={dragging ? dragDelta.dx : 0}
+                                dy={dragging ? dragDelta.dy : 0}
+                                ghost={!!dragging}
+                            />
+                        );
+                    })}
 
                     {/* Pin hover highlight */}
                     {hoverPin && (
@@ -518,18 +557,21 @@ function ToolButton({ active, disabled, onClick, title, children }) {
     );
 }
 
-function CanvasComponent({ comp, selected, floatingIds }) {
+function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = false }) {
     if (comp.elementType === 'GND') {
-        return <GroundMarker x={comp.pos.x} y={comp.pos.y} selected={selected} />;
+        return <GroundMarker x={comp.pos.x + dx} y={comp.pos.y + dy} selected={selected} />;
     }
     const sym = SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
     if (!sym) return null;
     const labelRef = pickRefAnchor(sym);
     const valueText = formatValueLabel(comp);
     const pins = componentPins(comp);
+    const cx = comp.pos.x + dx;
+    const cy = comp.pos.y + dy;
     return (
-        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}`}>
-            <g transform={`translate(${comp.pos.x}, ${comp.pos.y}) rotate(${comp.rot})`}>
+        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}`}
+           opacity={ghost ? 0.85 : 1}>
+            <g transform={`translate(${cx}, ${cy}) rotate(${comp.rot})`}>
                 {sym.shapes.map((s, i) => renderShape(s, i))}
                 {selected && (
                     <rect
@@ -542,8 +584,8 @@ function CanvasComponent({ comp, selected, floatingIds }) {
             </g>
             {/* ref + value text */}
             <text
-                x={comp.pos.x + labelRef.dx}
-                y={comp.pos.y + labelRef.dy}
+                x={cx + labelRef.dx}
+                y={cy + labelRef.dy}
                 textAnchor={labelRef.anchor}
                 fontSize={11} fontWeight={600}
                 fill="var(--sch-label)"
@@ -554,8 +596,8 @@ function CanvasComponent({ comp, selected, floatingIds }) {
             </text>
             {valueText ? (
                 <text
-                    x={comp.pos.x + labelRef.dx}
-                    y={comp.pos.y + labelRef.dy + 13}
+                    x={cx + labelRef.dx}
+                    y={cy + labelRef.dy + 13}
                     textAnchor={labelRef.anchor}
                     fontSize={10}
                     fill="var(--sch-label-dim)"
@@ -572,7 +614,7 @@ function CanvasComponent({ comp, selected, floatingIds }) {
                 return (
                     <circle
                         key={`fp-${pin.id}`}
-                        cx={pin.x} cy={pin.y} r={4}
+                        cx={pin.x + dx} cy={pin.y + dy} r={4}
                         fill="none"
                         stroke="var(--cs-warn)"
                         strokeWidth={1.4}
