@@ -265,6 +265,213 @@ export function translateWire(doc, wireId, dx, dy) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rubber-band translate                                              */
+/*                                                                    */
+/* "Pro-sim" localized drag: moving a component shifts ONLY that      */
+/* component plus whichever wire vertices were sitting on its pins    */
+/* (stretching wires to follow). Moving a wire shifts just that one   */
+/* wire, but any endpoint that was anchored to a component pin stays  */
+/* locked to that pin and a bend is inserted so the polyline stays    */
+/* manhattan. Nothing else in the schematic moves — no whole-circuit  */
+/* rubber-banding, which is what most users actually expect.          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Move a component and "rubber-band" any wire endpoints / mid-segment
+ * T-junctions that were electrically attached to its pins, so the
+ * wires follow the component instead of detaching.
+ *
+ * Strategy:
+ *   1. Record each pin's old coord before mutating.
+ *   2. Shift the component position.
+ *   3. For every wire, remap any vertex that coincided with an old
+ *      pin coord to the matching new pin coord (per-pin pairing).
+ *   4. If a wire segment passed *through* a pin at a mid-segment
+ *      coord, splice the new pin coord into that segment so the wire
+ *      still hits the pin after the move.
+ *   5. Collapse consecutive duplicate vertices, then re-manhattan any
+ *      non-axis-aligned segments the move introduced by inserting
+ *      one extra bend per offending segment.
+ *
+ * Returns true if anything moved.
+ */
+export function translateComponentRubber(doc, compId, dx, dy) {
+    const c = doc.components.find((c) => c.id === compId);
+    if (!c) return false;
+    const gdx = snap(dx);
+    const gdy = snap(dy);
+    if (gdx === 0 && gdy === 0) return false;
+
+    const oldPins = componentPins(c);
+    // Map old-pin-coord → new-pin-coord, one entry per pin. We pair
+    // by pin index instead of by coord so rotationally-symmetric
+    // parts (two pins mirrored across the centre) still get the
+    // right mapping when they translate.
+    const oldNewByIndex = oldPins.map((op) => ({
+        old: [op.x, op.y],
+        new: [op.x + gdx, op.y + gdy],
+    }));
+    const oldCoordKeys = new Set(oldPins.map((op) => `${op.x}|${op.y}`));
+
+    // --- 1. Shift the component itself.
+    c.pos = { x: c.pos.x + gdx, y: c.pos.y + gdy };
+
+    // --- 2. Label book-keeping (identical rule to translateComponent).
+    for (let i = 0; i < oldPins.length; i++) {
+        const op = oldPins[i];
+        const np = { x: op.x + gdx, y: op.y + gdy };
+        let sharedElsewhere = false;
+        for (const other of doc.components) {
+            if (other.id === c.id) continue;
+            for (const otherPin of componentPins(other)) {
+                if (otherPin.x === op.x && otherPin.y === op.y) {
+                    sharedElsewhere = true;
+                    break;
+                }
+            }
+            if (sharedElsewhere) break;
+        }
+        if (sharedElsewhere) continue;
+        for (const lab of doc.labels) {
+            if (lab.x === Math.round(op.x) && lab.y === Math.round(op.y)) {
+                lab.x = Math.round(np.x);
+                lab.y = Math.round(np.y);
+            }
+        }
+    }
+
+    // --- 3. Rubber-band wire vertices at each pin.
+    const lookupNew = (x, y) => {
+        for (const p of oldNewByIndex) {
+            if (p.old[0] === x && p.old[1] === y) return p.new;
+        }
+        return null;
+    };
+
+    for (const wire of doc.wires) {
+        const pts = wire.points;
+        // (a) Remap vertices at old pin coords.
+        for (let i = 0; i < pts.length; i++) {
+            const np = lookupNew(pts[i][0], pts[i][1]);
+            if (np) pts[i] = [np[0], np[1]];
+        }
+        // (b) Mid-segment T-junctions: an old pin coord sitting
+        //     strictly inside an axis-aligned segment gets spliced
+        //     into the polyline so the "wire passes through pin"
+        //     connection still holds after the component moves.
+        for (let s = pts.length - 1; s >= 1; s--) {
+            const [x1, y1] = pts[s - 1];
+            const [x2, y2] = pts[s];
+            const horiz = y1 === y2;
+            const vert  = x1 === x2;
+            if (!horiz && !vert) continue;
+            // Skip segments we already remapped — the endpoints would
+            // have matched an old pin coord and been moved above.
+            for (const op of oldPins) {
+                const onSeg = (horiz && op.y === y1 && op.x > Math.min(x1, x2) && op.x < Math.max(x1, x2))
+                           || (vert  && op.x === x1 && op.y > Math.min(y1, y2) && op.y < Math.max(y1, y2));
+                if (!onSeg) continue;
+                if (!oldCoordKeys.has(`${op.x}|${op.y}`)) continue;
+                const np = lookupNew(op.x, op.y);
+                if (!np) continue;
+                // Splice the new coord into this segment so the wire
+                // still hits the pin after the move. If the result
+                // creates a diagonal jump we'll fix it in step (d).
+                pts.splice(s, 0, [np[0], np[1]]);
+            }
+        }
+        // (c) Drop consecutive duplicate vertices introduced by the
+        //     remap (e.g. two pins that landed on the same coord).
+        dedupePoints(pts);
+        // (d) Re-manhattan: insert a bend between any two neighbours
+        //     that aren't axis-aligned.
+        rekinkManhattan(pts);
+        wire.points = pts;
+    }
+    return true;
+}
+
+/**
+ * Move a wire by (dx, dy) while keeping any endpoint that was
+ * anchored to a component pin locked at that pin. A bend is inserted
+ * next to each anchored endpoint so the polyline stays manhattan.
+ *
+ * Only this one wire moves — the rest of the schematic is untouched.
+ * Returns true if the wire changed.
+ */
+export function translateWireRubber(doc, wireId, dx, dy) {
+    const w = doc.wires.find((w) => w.id === wireId);
+    if (!w) return false;
+    const gdx = snap(dx);
+    const gdy = snap(dy);
+    if (gdx === 0 && gdy === 0) return false;
+
+    // Pin-coord index across the whole doc.
+    const pinCoords = new Set();
+    for (const c of doc.components) {
+        for (const p of componentPins(c)) pinCoords.add(`${p.x}|${p.y}`);
+    }
+
+    const pts = w.points.map(([x, y]) => [x, y]);
+    const n = pts.length;
+    const firstAnchored = pinCoords.has(`${pts[0][0]}|${pts[0][1]}`);
+    const lastAnchored  = pinCoords.has(`${pts[n - 1][0]}|${pts[n - 1][1]}`);
+
+    // Shift every interior vertex by (gdx, gdy). Endpoint handling
+    // depends on whether they're anchored.
+    const shifted = pts.map(([x, y]) => [x + gdx, y + gdy]);
+    if (firstAnchored) shifted[0] = pts[0];
+    if (lastAnchored)  shifted[n - 1] = pts[n - 1];
+
+    // If only one endpoint is anchored and the drag is axis-aligned,
+    // the wire would already look fine. Otherwise, splice a bend in
+    // next to each anchored endpoint to keep the polyline manhattan.
+    if (firstAnchored) {
+        const [ax, ay] = shifted[0];
+        const [bx, by] = shifted[1];
+        if (ax !== bx && ay !== by) {
+            // Insert corner (bx, ay) so first segment is horizontal
+            // then the next is vertical (or vice-versa; either works).
+            shifted.splice(1, 0, [bx, ay]);
+        }
+    }
+    if (lastAnchored) {
+        const m = shifted.length;
+        const [px, py] = shifted[m - 2];
+        const [qx, qy] = shifted[m - 1];
+        if (px !== qx && py !== qy) {
+            shifted.splice(m - 1, 0, [px, qy]);
+        }
+    }
+
+    dedupePoints(shifted);
+    rekinkManhattan(shifted);
+    w.points = shifted;
+    return true;
+}
+
+/** In-place: drop consecutive duplicate vertices. */
+function dedupePoints(pts) {
+    for (let i = pts.length - 1; i >= 1; i--) {
+        if (pts[i][0] === pts[i - 1][0] && pts[i][1] === pts[i - 1][1]) {
+            pts.splice(i, 1);
+        }
+    }
+}
+
+/** In-place: ensure every segment is axis-aligned by inserting one
+ *  bend per offending pair. Bend choice favours horizontal-first for
+ *  symmetry with the wire tool's default routing. */
+function rekinkManhattan(pts) {
+    for (let i = pts.length - 1; i >= 1; i--) {
+        const [x1, y1] = pts[i - 1];
+        const [x2, y2] = pts[i];
+        if (x1 === x2 || y1 === y2) continue;
+        pts.splice(i, 0, [x2, y1]);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Group drag (OrCAD / KiCad style rubber-band)                       */
 /* ------------------------------------------------------------------ */
 

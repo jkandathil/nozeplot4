@@ -7,7 +7,8 @@ import { SYMBOLS } from '../../circuit/symbols.js';
 import {
     GRID, snap, componentPins,
     addWirePath, removeComponent, rotateComponent,
-    translateComponent, translateWire, translateGroup, findConnectedGroup,
+    translateComponent, translateWire,
+    translateComponentRubber, translateWireRubber,
     addLabel, removeWire,
 } from '../../circuit/schematicDoc.js';
 import { renderShape } from './renderShape.jsx';
@@ -207,12 +208,19 @@ export default function Canvas({
         const hit = componentAt(world);
         if (hit) {
             onSelect({ kind: 'component', id: hit.id });
-            const group = buildDragGroup(doc, { kind: 'component', id: hit.id }, ev);
+            // Localized drag: the component moves, and any wire
+            // vertex that was sitting on one of its pin coords
+            // (either as an endpoint or spliced into a segment)
+            // follows along. Holding Ctrl/Cmd is the escape hatch
+            // to tear the component out without stretching wires.
+            const wireFollow = ev.ctrlKey || ev.metaKey
+                ? null
+                : computeComponentFollow(doc, hit.id);
             setDragState({
                 kind: 'drag-comp',
                 id: hit.id,
                 startWorld: world,
-                group,
+                wireFollow,
             });
             setDragDelta({ dx: 0, dy: 0 });
             return;
@@ -220,12 +228,18 @@ export default function Canvas({
         const wireHit = wireAt(world);
         if (wireHit) {
             onSelect({ kind: 'wire', id: wireHit.id });
-            const group = buildDragGroup(doc, { kind: 'wire', id: wireHit.id }, ev);
+            // Localized wire drag: only this wire translates, and any
+            // endpoint that was anchored to a component pin stays
+            // locked (we'll insert a bend on commit). Ctrl/Cmd skips
+            // the anchoring so the wire moves rigidly.
+            const anchors = ev.ctrlKey || ev.metaKey
+                ? { first: false, last: false }
+                : computeWireAnchors(doc, wireHit.id);
             setDragState({
                 kind: 'drag-wire',
                 id: wireHit.id,
                 startWorld: world,
-                group,
+                anchors,
             });
             setDragDelta({ dx: 0, dy: 0 });
             return;
@@ -259,22 +273,18 @@ export default function Canvas({
 
     const onPointerUp = (ev) => {
         try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
-        // Commit drags — one history entry per drag, no matter how far
-        // the pointer travelled. When a connected group was captured at
-        // drag-start, every member moves by the same delta so nothing
-        // detaches (OrCAD / KiCad style). If the user held Ctrl/Cmd the
-        // group collapses to just the seed element and we fall back to
-        // the legacy single-element translate helpers, which preserve
-        // the "smart label" behaviour for components.
+        // Commit drags — one history entry per drag, no matter how
+        // far the pointer travelled. Localized behaviour: components
+        // move and stretch their connected wires; wires translate
+        // while staying anchored to any pins on their endpoints.
+        // Ctrl/Cmd disables the stretching (see onPointerDown) and
+        // falls back to the legacy single-element translators.
         if (dragState?.kind === 'drag-comp' && dragDelta) {
             const { dx, dy } = dragDelta;
             if (dx !== 0 || dy !== 0) {
-                const { id, group } = dragState;
-                const groupSize = group
-                    ? group.componentIds.size + group.wireIds.size + group.labelIds.size
-                    : 0;
-                if (group && groupSize > 1) {
-                    onDocChange((d) => { translateGroup(d, group, dx, dy); });
+                const { id, wireFollow } = dragState;
+                if (wireFollow) {
+                    onDocChange((d) => { translateComponentRubber(d, id, dx, dy); });
                 } else {
                     onDocChange((d) => { translateComponent(d, id, dx, dy); });
                 }
@@ -282,12 +292,9 @@ export default function Canvas({
         } else if (dragState?.kind === 'drag-wire' && dragDelta) {
             const { dx, dy } = dragDelta;
             if (dx !== 0 || dy !== 0) {
-                const { id, group } = dragState;
-                const groupSize = group
-                    ? group.componentIds.size + group.wireIds.size + group.labelIds.size
-                    : 0;
-                if (group && groupSize > 1) {
-                    onDocChange((d) => { translateGroup(d, group, dx, dy); });
+                const { id, anchors } = dragState;
+                if (anchors && (anchors.first || anchors.last)) {
+                    onDocChange((d) => { translateWireRubber(d, id, dx, dy); });
                 } else {
                     onDocChange((d) => { translateWire(d, id, dx, dy); });
                 }
@@ -540,7 +547,7 @@ export default function Canvas({
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
-                    {tool === 'select' && (selectedId ? 'Drag to move connected group. Hold Ctrl to move just this one. Double-click to edit properties. R rotate · Del delete.' : 'Drag parts from the palette. Double-click any component for a quick property edit. Drag to move everything wired to it (Ctrl = just this one).')}
+                    {tool === 'select' && (selectedId ? 'Drag to move just this part — connected wires stretch to follow. Hold Ctrl to detach. Double-click to edit. R rotate · Del delete.' : 'Drag parts from the palette. Click to select, drag to move. Wires stretch with connected pins. Double-click to edit a property.')}
                     {tool === 'pan' && 'Drag to pan. Scroll wheel to zoom (Shift = finer).'}
                 </div>
             </div>
@@ -587,21 +594,23 @@ export default function Canvas({
                     {/* Wires */}
                     {doc.wires.map((w) => {
                         const selected = selectedId?.kind === 'wire' && selectedId.id === w.id;
-                        // A wire is "dragging" if it's inside the current
-                        // drag group — so group-mates stretch along with
-                        // the seed element and nothing detaches.
-                        const inGroup = !!(dragDelta && dragState?.group?.wireIds?.has(w.id));
-                        const dragging = inGroup;
                         const flagged = flaggedWireIds.has(w.id);
-                        const tx = dragging ? dragDelta.dx : 0;
-                        const ty = dragging ? dragDelta.dy : 0;
                         let stroke = 'var(--sch-wire)';
                         if (selected) stroke = 'var(--cs-accent)';
                         else if (flagged) stroke = 'var(--cs-danger, #ef4444)';
+
+                        // Localized drag preview: compute the point
+                        // list this wire should render *right now*.
+                        // Base case is the committed polyline; we
+                        // rewrite it below if this wire is involved
+                        // in the active drag.
+                        const pts = previewWirePoints(w, dragState, dragDelta);
+                        const dragging = pts !== w.points;
+
                         return (
                             <polyline
                                 key={`wire-${w.id}`}
-                                points={w.points.map((p) => `${p[0] + tx},${p[1] + ty}`).join(' ')}
+                                points={pts.map((p) => `${p[0]},${p[1]}`).join(' ')}
                                 fill="none"
                                 stroke={stroke}
                                 strokeWidth={selected ? 2.4 : 1.8}
@@ -662,11 +671,15 @@ export default function Canvas({
 
                     {/* Visible net labels */}
                     {doc.labels.filter((l) => l.visible).map((l) => {
-                        const inGroup = !!(dragDelta && dragState?.group?.labelIds?.has(l.id));
-                        const tx = inGroup ? dragDelta.dx : 0;
-                        const ty = inGroup ? dragDelta.dy : 0;
+                        // A label only follows a drag if it was
+                        // attached to a pin of the component being
+                        // dragged (i.e. its id is in the follow set).
+                        const followSet = dragState?.wireFollow?.labelIds;
+                        const follows = !!(dragDelta && followSet && followSet.has(l.id));
+                        const tx = follows ? dragDelta.dx : 0;
+                        const ty = follows ? dragDelta.dy : 0;
                         return (
-                            <g key={`lab-${l.id}`} transform={`translate(${l.x + tx}, ${l.y + ty})`} opacity={inGroup ? 0.85 : 1}>
+                            <g key={`lab-${l.id}`} transform={`translate(${l.x + tx}, ${l.y + ty})`} opacity={follows ? 0.85 : 1}>
                                 <text
                                     x={8} y={-6} fontSize={10}
                                     fill="var(--cs-label)"
@@ -678,8 +691,14 @@ export default function Canvas({
 
                     {/* Components */}
                     {doc.components.map((c) => {
-                        const inGroup = !!(dragDelta && dragState?.group?.componentIds?.has(c.id));
-                        const dragging = inGroup;
+                        // Only the dragged component itself moves
+                        // during a component drag — everything else
+                        // stays put while its connected wires stretch.
+                        const dragging = !!(
+                            dragDelta
+                            && dragState?.kind === 'drag-comp'
+                            && dragState.id === c.id
+                        );
                         return (
                             <CanvasComponent
                                 key={`comp-${c.id}`}
@@ -894,32 +913,154 @@ function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0,
  * end ≈ left / centered / right of the anchor point).
  */
 /**
- * Resolve which elements should move together when the user starts a
- * drag. By default every electrically-connected element travels in
- * lock-step (OrCAD-style rubber band), so pulling on a wire also
- * pulls every pin wired to it — nothing detaches.
- *
- * Holding Ctrl (or Cmd on macOS) is the documented escape hatch: it
- * collapses the group to just the seed so the user can deliberately
- * tear one element out of a connected network.
+ * Compute the point list to render for a wire given the current
+ * drag state. Returns the original `w.points` when nothing relevant
+ * is happening, or a new array with vertices shifted / spliced for
+ * the preview. The result is never committed to the doc — pointer-up
+ * calls the proper `translate*Rubber` helpers instead.
  */
-function buildDragGroup(doc, seed, ev) {
-    if (ev && (ev.ctrlKey || ev.metaKey)) {
-        return {
-            componentIds: new Set(seed.kind === 'component' ? [seed.id] : []),
-            wireIds:      new Set(seed.kind === 'wire'      ? [seed.id] : []),
-            labelIds:     new Set(seed.kind === 'label'     ? [seed.id] : []),
-        };
+function previewWirePoints(w, dragState, dragDelta) {
+    if (!dragDelta || !dragState) return w.points;
+    const { dx, dy } = dragDelta;
+
+    // --- Wire drag: this wire is the one being dragged.
+    if (dragState.kind === 'drag-wire' && dragState.id === w.id) {
+        const { anchors } = dragState;
+        const n = w.points.length;
+        const out = w.points.map(([x, y], i) => {
+            if (i === 0 && anchors?.first) return [x, y];
+            if (i === n - 1 && anchors?.last) return [x, y];
+            return [x + dx, y + dy];
+        });
+        // Insert a preview bend next to each anchored endpoint so
+        // the polyline looks manhattan in real time (matches what
+        // translateWireRubber will commit on pointerUp).
+        if (anchors?.first && out.length >= 2) {
+            const [ax, ay] = out[0];
+            const [bx, by] = out[1];
+            if (ax !== bx && ay !== by) out.splice(1, 0, [bx, ay]);
+        }
+        if (anchors?.last && out.length >= 2) {
+            const m = out.length;
+            const [px, py] = out[m - 2];
+            const [qx, qy] = out[m - 1];
+            if (px !== qx && py !== qy) out.splice(m - 1, 0, [px, qy]);
+        }
+        return out;
     }
-    try {
-        return findConnectedGroup(doc, seed);
-    } catch {
-        return {
-            componentIds: new Set(seed.kind === 'component' ? [seed.id] : []),
-            wireIds:      new Set(seed.kind === 'wire'      ? [seed.id] : []),
-            labelIds:     new Set(seed.kind === 'label'     ? [seed.id] : []),
-        };
+
+    // --- Component drag: shift any vertex of this wire that's
+    //     anchored to a pin of the moving component, and splice in
+    //     a new coord for mid-segment pass-throughs.
+    if (dragState.kind === 'drag-comp') {
+        const follow = dragState.wireFollow;
+        if (!follow) return w.points;
+        const hit = follow.wireHits.find((h) => h.wireId === w.id);
+        if (!hit) return w.points;
+        const out = w.points.map(([x, y]) => [x, y]);
+        // Remap real vertices at old pin coords.
+        for (const idx of hit.vertexIndices) {
+            if (idx >= 0) {
+                out[idx] = [out[idx][0] + dx, out[idx][1] + dy];
+            }
+        }
+        // Splice in a preview vertex for mid-segment follows. We
+        // walk from the end so splice indices stay valid.
+        const spliceSegments = hit.vertexIndices
+            .filter((i) => i < 0)
+            .map((i) => -i)
+            .sort((a, b) => b - a);
+        for (const s of spliceSegments) {
+            // Find which pin coord lies on this segment (original).
+            const [x1, y1] = w.points[s - 1];
+            const [x2, y2] = w.points[s];
+            const horiz = y1 === y2;
+            const vert  = x1 === x2;
+            for (const [px, py] of follow.pinCoords) {
+                const onSeg = (horiz && py === y1 && px > Math.min(x1, x2) && px < Math.max(x1, x2))
+                           || (vert  && px === x1 && py > Math.min(y1, y2) && py < Math.max(y1, y2));
+                if (!onSeg) continue;
+                out.splice(s, 0, [px + dx, py + dy]);
+                break;
+            }
+        }
+        return out;
     }
+
+    return w.points;
+}
+
+/**
+ * Pre-compute, at drag-start, which wire vertices and labels should
+ * "follow" a component as it's being dragged. We store the indices
+ * captured at the moment the pointer went down so the preview render
+ * doesn't have to re-walk the doc on every pointermove.
+ *
+ * Shape:
+ *   {
+ *     pinCoords: Array<[x, y]>,             // component's pin coords
+ *     wireHits:  Array<{ wireId, vertexIndices: number[] }>,
+ *     labelIds:  Set<labelId>,
+ *   }
+ */
+function computeComponentFollow(doc, compId) {
+    const comp = doc.components.find((c) => c.id === compId);
+    if (!comp) return null;
+    const pins = componentPins(comp);
+    const pinCoords = pins.map((p) => [p.x, p.y]);
+    const pinKeys = new Set(pinCoords.map(([x, y]) => `${x}|${y}`));
+
+    const wireHits = [];
+    for (const w of doc.wires) {
+        const idxs = [];
+        for (let i = 0; i < w.points.length; i++) {
+            if (pinKeys.has(`${w.points[i][0]}|${w.points[i][1]}`)) idxs.push(i);
+        }
+        // Mid-segment pass-through: record a "virtual" follow so the
+        // preview splices the new coord in. We tag these with a
+        // negative segment index to distinguish them from real
+        // vertices during render.
+        for (let s = 1; s < w.points.length; s++) {
+            const [x1, y1] = w.points[s - 1];
+            const [x2, y2] = w.points[s];
+            const horiz = y1 === y2;
+            const vert  = x1 === x2;
+            if (!horiz && !vert) continue;
+            for (const [px, py] of pinCoords) {
+                const onSeg = (horiz && py === y1 && px > Math.min(x1, x2) && px < Math.max(x1, x2))
+                           || (vert  && px === x1 && py > Math.min(y1, y2) && py < Math.max(y1, y2));
+                if (!onSeg) continue;
+                idxs.push(-s); // negative marks a splice-before-index
+            }
+        }
+        if (idxs.length > 0) wireHits.push({ wireId: w.id, vertexIndices: idxs });
+    }
+
+    const labelIds = new Set();
+    for (const lab of doc.labels) {
+        if (pinKeys.has(`${lab.x}|${lab.y}`)) labelIds.add(lab.id);
+    }
+    return { pinCoords, pinKeys, wireHits, labelIds };
+}
+
+/**
+ * At drag-start of a wire, figure out which endpoints are anchored
+ * to component pins. Those stay locked during the drag; other
+ * endpoints translate with the rest of the wire.
+ */
+function computeWireAnchors(doc, wireId) {
+    const w = doc.wires.find((x) => x.id === wireId);
+    if (!w || w.points.length < 2) return { first: false, last: false };
+    const pinKeys = new Set();
+    for (const c of doc.components) {
+        for (const p of componentPins(c)) pinKeys.add(`${p.x}|${p.y}`);
+    }
+    const [fx, fy] = w.points[0];
+    const [lx, ly] = w.points[w.points.length - 1];
+    return {
+        first: pinKeys.has(`${fx}|${fy}`),
+        last:  pinKeys.has(`${lx}|${ly}`),
+    };
 }
 
 function pickRefLabelPosition(sym, rot = 0) {
