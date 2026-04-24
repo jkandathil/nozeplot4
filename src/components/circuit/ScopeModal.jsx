@@ -124,11 +124,30 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         ctx.strokeRect(pad.l, pad.t, plotW, plotH);
 
         if (!series || !series.xs || series.xs.length === 0) {
-            ctx.fillStyle = '#64748b';
+            ctx.fillStyle = '#94a3b8';
             ctx.font = '13px ui-monospace, Menlo, monospace';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('No waveform yet — hit Run.', pad.l + plotW / 2, pad.t + plotH / 2);
+            const cx = pad.l + plotW / 2;
+            const cy = pad.t + plotH / 2;
+            if (!signalName) {
+                ctx.fillStyle = '#fbbf24';
+                ctx.fillText('Scope tip is not on a node.', cx, cy - 10);
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '11px ui-monospace, Menlo, monospace';
+                ctx.fillText('Drag the scope so its tip lands on a wire or pin.', cx, cy + 10);
+            } else if (!result) {
+                ctx.fillText('No waveform yet — hit Run.', cx, cy - 8);
+                ctx.font = '11px ui-monospace, Menlo, monospace';
+                ctx.fillStyle = '#64748b';
+                ctx.fillText(`Probe: ${signalName}`, cx, cy + 12);
+            } else {
+                ctx.fillStyle = '#f87171';
+                ctx.fillText(`Signal "${signalName}" not found in results.`, cx, cy - 8);
+                ctx.font = '11px ui-monospace, Menlo, monospace';
+                ctx.fillStyle = '#94a3b8';
+                ctx.fillText('Re-run after connecting the scope to a different node.', cx, cy + 12);
+            }
             return;
         }
 
@@ -217,7 +236,7 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
             ctx.textBaseline = 'middle';
             ctx.fillText('LIVE', pad.l + plotW - 20, pad.t + 12);
         }
-    }, [series, fullscreen]);
+    }, [series, fullscreen, signalName, result]);
 
     // Re-draw on resize
     useEffect(() => {

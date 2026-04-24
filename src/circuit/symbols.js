@@ -335,29 +335,35 @@ const IP_SYMBOL = {
 // pop the CRT modal and inspect the waveform for its attached node.
 // Visual: a CRT-style rounded rectangle with a little sine-wave
 // "screen" and a probe lead dropping down to the connection pin.
+// Tip pin is placed at the symbol origin (0, 0) so drag-and-drop
+// snaps it directly onto the node you want to probe — the rest of
+// the CRT body floats above. This mirrors how GND anchors at its
+// pin, which is what people intuitively expect when clipping a
+// scope probe to a trace.
 const SCOPE_SYMBOL = {
-    width: 80, height: 60,
-    pins: [{ id: 'tip', x: 0, y: 40, side: 'B' }],
+    width: 80, height: 80,
+    pins: [{ id: 'tip', x: 0, y: 0, side: 'B' }],
     shapes: [
-        { kind: 'line', x1: 0, y1: 40, x2: 0, y2: 20 },
+        // Probe lead: straight down from body to the tip.
+        { kind: 'line', x1: 0, y1: 0, x2: 0, y2: -20 },
         // CRT body
-        { kind: 'rect', x: -30, y: -22, w: 60, h: 44, rx: 6, ry: 6, fill: 'var(--sch-body)' },
+        { kind: 'rect', x: -30, y: -62, w: 60, h: 44, rx: 6, ry: 6, fill: 'var(--sch-body)' },
         // Inner "screen"
-        { kind: 'rect', x: -22, y: -16, w: 44, h: 24, rx: 2, ry: 2, fill: 'none' },
+        { kind: 'rect', x: -22, y: -56, w: 44, h: 24, rx: 2, ry: 2, fill: 'none' },
         // Sine-wave squiggle inside the screen
         {
             kind: 'path',
-            d: 'M-18,-4 Q-12,-14 -6,-4 T 6,-4 T 18,-4',
+            d: 'M-18,-44 Q-12,-54 -6,-44 T 6,-44 T 18,-44',
             fill: 'none',
         },
         // Axis cross inside screen (dim)
-        { kind: 'line', x1: 0,   y1: -16, x2: 0,   y2: 8,  opacity: 0.5 },
-        { kind: 'line', x1: -22, y1: -4,  x2: 22,  y2: -4, opacity: 0.5 },
-        // "SCOPE" tag
-        { kind: 'text', x: 0, y: 18, text: 'SCOPE', fontSize: 7, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+        { kind: 'line', x1: 0,   y1: -56, x2: 0,   y2: -32, opacity: 0.5 },
+        { kind: 'line', x1: -22, y1: -44, x2: 22,  y2: -44, opacity: 0.5 },
+        // "SCOPE" tag between body and tip
+        { kind: 'text', x: 0, y: -22, text: 'SCOPE', fontSize: 7, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
     ],
-    labelRef: { x: 0, y: -28, anchor: 'middle', baseline: 'baseline' },
-    labelVal: { x: 0, y:  44, anchor: 'middle', baseline: 'hanging' },
+    labelRef: { x: 0, y: -68, anchor: 'middle', baseline: 'baseline' },
+    labelVal: { x: 10, y:   4, anchor: 'start',  baseline: 'hanging' },
 };
 
 // ---------- Registry ----------------------------------------------

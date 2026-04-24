@@ -8,7 +8,12 @@
  *     users through the circuit the first time it loads
  *   - a list of "recommended signals" for the plot panel so the user
  *     sees the interesting curves immediately
+ *   - an optional postImport(doc) hook that can sprinkle UI-only
+ *     parts (SCOPE / VP / IP) onto the imported schematic, since
+ *     those don't survive a netlist round-trip.
  */
+
+import { addComponent, componentPins } from './schematicDoc.js';
 
 export const DEMOS = [
     {
@@ -359,6 +364,59 @@ Q2   c2 bq2 0 QN
             {
                 title: 'Tune the frequency',
                 body: 'Halve both cap values (47n → 22n) to double the frequency. Or reduce Rb1/Rb2 to 10 k to do the same. The duty cycle is only 50 % when both halves are symmetric — try making one Rb bigger than the other to see it skew.',
+            },
+        ],
+    },
+    {
+        id: 'scope-rc',
+        title: 'Oscilloscope: RC pulse response',
+        tagline: 'RC low-pass with a scope clipped to vout. Run → double-click the scope for a live waveform.',
+        category: 'Introductory',
+        netlist: `* RC low-pass filter with a pulse input, pre-probed with
+* a SCOPE on vout. Run .tran and double-click the scope on
+* the canvas to see the trace in a dedicated waveform viewer.
+
+V_in vin 0 PULSE(0 1 100u 1u 1u 500u 2m)
+R1 vin vout 1k
+C1 vout 0 100n
+
+.tran 2u 4m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+        },
+        postImport: (doc) => {
+            // Clip a SCOPE onto the vout node after the netlist is
+            // imported. The scope's tip pin is at its symbol origin,
+            // so comp.pos IS the probed node — we line it up with
+            // whichever R1 pin currently lands on vout.
+            const r1 = doc.components.find((c) => c.ref === 'R1');
+            if (!r1) return;
+            const pins = componentPins(r1);
+            // `importNetlist` names the downstream pin 'n2' — but
+            // defensively pick whichever pin coord has a label /
+            // wire attached to vout.
+            const voutPin = pins.find((p) => p.id === 'n2') || pins[pins.length - 1];
+            if (!voutPin) return;
+            addComponent(doc, 'SCOPE', voutPin.x, voutPin.y, 0);
+        },
+        tour: [
+            {
+                title: 'Attach a scope',
+                body: 'The RC filter is already wired up. A SCOPE component is pre-clipped to the vout node — its triangular probe tip sits right on the wire between R1 and C1.',
+            },
+            {
+                title: 'Run the simulation',
+                body: 'Hit Run. The solver produces ~2000 samples over 4 ms. You should see V(vout) appear in the plotter at the bottom.',
+            },
+            {
+                title: 'Open the waveform viewer',
+                body: 'Double-click the scope on the canvas — a dedicated CRT-style modal pops up showing just that node\'s waveform. Tick the Live box in the transient subbar before hitting Run for a streaming-replay effect.',
+            },
+            {
+                title: 'Move the scope',
+                body: 'Drag the scope by its body — the tip stretches to follow without detaching. Drop the tip on V_in (to the left of R1) to probe the input pulse instead; the modal updates on the next Run.',
             },
         ],
     },

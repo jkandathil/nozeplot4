@@ -372,6 +372,15 @@ function CircuitStudioPage() {
     const loadDemo = useCallback((demo) => {
         try {
             const { doc: imported } = importNetlistToDoc(demo.netlist);
+            // Optional post-import hook lets a demo sprinkle UI-only
+            // parts (SCOPE / VP / IP) onto the imported schematic,
+            // since those don't survive a netlist round-trip. Keeps
+            // the netlist authoring experience clean while still
+            // giving us scope-on-by-default demos.
+            if (typeof demo.postImport === 'function') {
+                try { demo.postImport(imported); }
+                catch (err) { console.warn('demo.postImport failed:', err); }
+            }
             setDocState({ past: [], present: imported, future: [] });
             setFitNonce((n) => n + 1);
         } catch (e) {
