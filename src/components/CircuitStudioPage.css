@@ -1033,6 +1033,7 @@ html[data-theme="light"] .cs-measure-table tr.cs-measure-delta td {
     background: rgba(10, 14, 26, 0.9);
     cursor: default;
     user-select: none;
+    touch-action: none;
 }
 .cs-canvas-tool-wire .cs-canvas-svg { cursor: crosshair; }
 .cs-canvas-tool-pan .cs-canvas-svg { cursor: grab; }

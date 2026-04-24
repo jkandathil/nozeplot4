@@ -25,7 +25,7 @@ import {
 import {
     Cpu, Play, Home, RefreshCw, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
     BookOpen, Copy, Plus, FileText, Activity,
-    SlidersHorizontal, LayoutGrid, Terminal,
+    SlidersHorizontal, LayoutGrid, Terminal, Undo, Redo,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
 import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
@@ -81,13 +81,15 @@ function CircuitStudioPage() {
     // Phase 3: the SchematicDoc is the source of truth. netlistText
     // is derived via emitNetlist(); we only store raw text for the
     // optional "source view" drawer and for home-page loads (demos).
-    const [doc, setDoc] = useState(() => {
+    const [docState, setDocState] = useState(() => {
+        let initial = emptyDoc();
         try {
             const saved = localStorage.getItem('circuitStudio:doc');
-            if (saved) return JSON.parse(saved);
+            if (saved) initial = JSON.parse(saved);
         } catch { /* ignore */ }
-        return emptyDoc();
+        return { past: [], present: initial, future: [] };
     });
+    const doc = docState.present;
     const [selection, setSelection] = useState(null); // { kind: 'component'|'wire', id }
     const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
     const [showResults, setShowResults] = useState(true);
@@ -162,10 +164,40 @@ function CircuitStudioPage() {
     // Imperative helper passed to Canvas/Inspector — takes a function
     // (mutator) and applies it to a clone of the current doc.
     const mutateDoc = useCallback((mutator) => {
-        setDoc((d) => {
-            const copy = JSON.parse(JSON.stringify(d));
+        setDocState((state) => {
+            const copy = JSON.parse(JSON.stringify(state.present));
             mutator(copy);
-            return copy;
+            return {
+                past: [...state.past, state.present].slice(-50),
+                present: copy,
+                future: []
+            };
+        });
+    }, []);
+
+    const handleUndo = useCallback(() => {
+        setDocState((state) => {
+            if (state.past.length === 0) return state;
+            const previous = state.past[state.past.length - 1];
+            const newPast = state.past.slice(0, -1);
+            return {
+                past: newPast,
+                present: previous,
+                future: [state.present, ...state.future]
+            };
+        });
+    }, []);
+
+    const handleRedo = useCallback(() => {
+        setDocState((state) => {
+            if (state.future.length === 0) return state;
+            const next = state.future[0];
+            const newFuture = state.future.slice(1);
+            return {
+                past: [...state.past, state.present],
+                present: next,
+                future: newFuture
+            };
         });
     }, []);
 
@@ -239,7 +271,7 @@ function CircuitStudioPage() {
     const loadDemo = useCallback((demo) => {
         try {
             const { doc: imported } = importNetlistToDoc(demo.netlist);
-            setDoc(imported);
+            setDocState({ past: [], present: imported, future: [] });
         } catch (e) {
             setRunError(`Failed to import demo: ${e?.message || e}`);
             return;
@@ -256,7 +288,7 @@ function CircuitStudioPage() {
     }, []);
 
     const loadBlank = useCallback(() => {
-        setDoc(emptyDoc());
+        setDocState({ past: [], present: emptyDoc(), future: [] });
         setLoadedDemoId(null);
         setRunResult(null);
         setRunError('');
@@ -273,7 +305,7 @@ function CircuitStudioPage() {
     const applyNetlistDraft = useCallback(() => {
         try {
             const { doc: imported } = importNetlistToDoc(netlistDraft);
-            setDoc(imported);
+            setDocState({ past: [], present: imported, future: [] });
             setSelection(null);
             setRunError('');
         } catch (e) {
@@ -445,6 +477,12 @@ function CircuitStudioPage() {
                     {running ? <><RefreshCw size={14} className="cs-spin" /> Running…</> : <><Play size={14} /> Run</>}
                 </button>
                 <div className="cs-topbar-spacer" />
+                <button className="cs-topbtn" onClick={handleUndo} disabled={docState.past.length === 0} title="Undo (Ctrl+Z)">
+                    <Undo size={14} />
+                </button>
+                <button className="cs-topbtn" onClick={handleRedo} disabled={docState.future.length === 0} title="Redo (Ctrl+Y)">
+                    <Redo size={14} />
+                </button>
                 <button className="cs-topbtn" onClick={copyNetlist} title="Copy netlist to clipboard">
                     <Copy size={14} /> Copy
                 </button>
@@ -479,6 +517,8 @@ function CircuitStudioPage() {
                         onCommand={handleCommand}
                         onDocChange={mutateDoc}
                         resolvedNets={resolvedNets}
+                        onUndo={handleUndo}
+                        onRedo={handleRedo}
                     />
 
                     {/* Optional bottom drawer: results + netlist source */}

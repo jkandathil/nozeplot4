@@ -40,6 +40,8 @@ export default function Canvas({
     onCommand,
     onDocChange,
     resolvedNets,
+    onUndo,
+    onRedo,
 }) {
     const svgRef = useRef(null);
     const [tool, setTool] = useState('select'); // 'select' | 'wire' | 'pan'
@@ -145,7 +147,8 @@ export default function Canvas({
         return null;
     }, [doc.wires]);
 
-    const onMouseDown = (ev) => {
+    const onPointerDown = (ev) => {
+        ev.currentTarget.setPointerCapture(ev.pointerId);
         if (ev.button === 1 || tool === 'pan' || (ev.button === 0 && ev.altKey)) {
             setDragState({ kind: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: { ...pan } });
             ev.preventDefault();
@@ -191,7 +194,7 @@ export default function Canvas({
         onSelect(null);
     };
 
-    const onMouseMove = (ev) => {
+    const onPointerMove = (ev) => {
         const world = clientToWorld(ev);
         setMousePos(world);
         if (dragState?.kind === 'pan') {
@@ -213,7 +216,8 @@ export default function Canvas({
         }
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = (ev) => {
+        try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) {}
         if (dragState?.kind === 'move') {
             // After moving, re-stamp any labels that were at the component's
             // old pin coordinates so connectivity follows the pin.
@@ -275,6 +279,22 @@ export default function Canvas({
             if (!wrapperRef.current || (!wrapperRef.current.contains(document.activeElement)
                 && !wrapperRef.current.matches(':hover'))) return;
             const key = ev.key.toLowerCase();
+            if (ev.ctrlKey || ev.metaKey) {
+                if (key === 'z') {
+                    ev.preventDefault();
+                    if (ev.shiftKey) {
+                        if (onRedo) onRedo();
+                    } else {
+                        if (onUndo) onUndo();
+                    }
+                    return;
+                }
+                if (key === 'y') {
+                    ev.preventDefault();
+                    if (onRedo) onRedo();
+                    return;
+                }
+            }
             if (key === 'escape') { setWireStart(null); return; }
             if (key === 'v') { setTool('select'); return; }
             if (key === 'w') { setTool('wire'); return; }
@@ -300,7 +320,7 @@ export default function Canvas({
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [selectedId, onDocChange, onSelect, fitToContent]);
+    }, [selectedId, onDocChange, onSelect, fitToContent, onUndo, onRedo]);
 
     // Initial fit when doc changes identity (e.g. loading a demo).
     const docVersionRef = useRef(doc);
@@ -391,10 +411,10 @@ export default function Canvas({
             <svg
                 ref={svgRef}
                 className="cs-canvas-svg"
-                onMouseDown={onMouseDown}
-                onMouseMove={onMouseMove}
-                onMouseUp={onMouseUp}
-                onMouseLeave={onMouseUp}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
             >
                 <defs>
                     <pattern id="cs-grid-minor" width={GRID} height={GRID} patternUnits="userSpaceOnUse" patternTransform={`scale(${zoom}) translate(${pan.x}, ${pan.y})`}>
