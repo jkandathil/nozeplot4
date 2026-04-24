@@ -26,6 +26,7 @@ import {
     Cpu, Play, Home, RefreshCw, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
     BookOpen, Copy, Plus, FileText, Activity,
     SlidersHorizontal, LayoutGrid, Terminal, Undo, Redo,
+    Save, FolderOpen, FilePlus, Download, Image as ImageIcon, FileJson,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
 import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
@@ -41,8 +42,17 @@ import Palette from './circuit/Palette.jsx';
 import Canvas from './circuit/Canvas.jsx';
 import PropertyPopup from './circuit/PropertyPopup.jsx';
 import ScopeModal from './circuit/ScopeModal.jsx';
+import ProjectManager from './circuit/ProjectManager.jsx';
 import { validateSchematic } from '../circuit/validate.js';
 import Inspector from './circuit/Inspector.jsx';
+import {
+    loadInitialProject, saveProject, uniqueName,
+    setCurrentProjectId, importProjectJson,
+} from '../circuit/projects.js';
+import {
+    exportProjectJson, exportSpiceNetlist, exportResultsCsv,
+    exportCanvasSvg, exportCanvasPng,
+} from '../circuit/exporters.js';
 import './CircuitStudioPage.css';
 
 const ANALYSIS_TYPES = [
@@ -84,12 +94,24 @@ function CircuitStudioPage() {
     // Phase 3: the SchematicDoc is the source of truth. netlistText
     // is derived via emitNetlist(); we only store raw text for the
     // optional "source view" drawer and for home-page loads (demos).
+    //
+    // Projects layer (see src/circuit/projects.js): instead of a
+    // single autosave slot we now track a list of named projects.
+    // On boot we load the most-recently-updated project (migrating
+    // the legacy single-slot blob if present), or start empty.
+    const bootProject = (() => {
+        try { return loadInitialProject(); } catch { return null; }
+    })();
+
+    const [currentProjectId, setCurrentProjectIdState] = useState(bootProject?.id || null);
+    const [projectName, setProjectName] = useState(bootProject?.name || 'Untitled');
+    // Manager modal (File → Open project…).
+    const [projectManagerOpen, setProjectManagerOpen] = useState(false);
+    // File-menu dropdown visibility.
+    const [fileMenuOpen, setFileMenuOpen] = useState(false);
+
     const [docState, setDocState] = useState(() => {
-        let initial = emptyDoc();
-        try {
-            const saved = localStorage.getItem('circuitStudio:doc');
-            if (saved) initial = JSON.parse(saved);
-        } catch { /* ignore */ }
+        const initial = bootProject?.doc || emptyDoc();
         return { past: [], present: initial, future: [] };
     });
     const doc = docState.present;
@@ -148,12 +170,7 @@ function CircuitStudioPage() {
     // external load events (demo / blank / apply-netlist); incremental
     // editing keeps the viewport stable.
     const [fitNonce, setFitNonce] = useState(0);
-    const [view, setView] = useState(() => {
-        try {
-            const saved = localStorage.getItem('circuitStudio:doc');
-            return saved ? 'workspace' : 'home';
-        } catch { return 'home'; }
-    });
+    const [view, setView] = useState(() => (bootProject ? 'workspace' : 'home'));
     const [analysis, setAnalysis] = useState('tran');
     // User-editable transient settings — when non-null, these override
     // the parsed .tran directive from the netlist at run time. Stored
@@ -180,13 +197,37 @@ function CircuitStudioPage() {
     const [activeCursor, setActiveCursor] = useState(null); // 'A' | 'B' | null
     const [showMeasure, setShowMeasure] = useState(true);
 
-    // Persist the schematic doc across sessions.
+    // Autosave into the active project slot whenever the doc, name,
+    // or run-time knobs change. We intentionally skip the empty doc
+    // to avoid clobbering a good slot with a blank sheet that may
+    // appear briefly during load / migration.
     useEffect(() => {
-        if (doc && doc.components.length > 0) {
-            try { localStorage.setItem('circuitStudio:doc', JSON.stringify(doc)); }
-            catch { /* storage may be full; ignore */ }
+        if (!doc) return;
+        // Only create a slot once the user has something to save —
+        // this stops a bare boot from littering the manager with
+        // "Untitled" cards.
+        if ((doc.components?.length || 0) === 0 && !currentProjectId) return;
+        try {
+            const saved = saveProject({
+                id: currentProjectId,
+                name: projectName,
+                doc,
+                analysis,
+                tranOverride,
+                selectedSignals,
+            });
+            if (!currentProjectId) {
+                setCurrentProjectIdState(saved.id);
+                setCurrentProjectId(saved.id);
+            }
+        } catch (e) {
+            console.warn('autosave failed:', e);
         }
-    }, [doc]);
+    // We deliberately leave selectedSignals / analysis / tranOverride
+    // out of the dep array to avoid write storms during idle UI
+    // tweaks; the next doc edit will flush them into the slot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [doc, projectName, currentProjectId]);
 
     // Emit SPICE netlist from the doc. This is what the solver runs,
     // what "Copy" copies, and what the source drawer shows when closed.
@@ -380,9 +421,41 @@ function CircuitStudioPage() {
         }
     }, [runResult]);
 
+    // Common reset applied whenever the user swaps to a different
+    // doc — opening a project, loading a demo, starting a blank
+    // sheet. Keeps the UI state coherent (no stale results, no stale
+    // selection, no stale tour).
+    const _switchToDoc = useCallback((nextDoc, {
+        projectId = null,
+        name = 'Untitled',
+        analysisId = 'tran',
+        tranOv = null,
+        signals = null,
+        demoId = null,
+        tour = null,
+    } = {}) => {
+        setDocState({ past: [], present: nextDoc, future: [] });
+        setFitNonce((n) => n + 1);
+        setCurrentProjectIdState(projectId);
+        setCurrentProjectId(projectId); // persist pointer
+        setProjectName(name);
+        setAnalysis(analysisId || 'tran');
+        if (tranOv) setTranOverride(tranOv);
+        if (signals) setSelectedSignals(signals);
+        setLoadedDemoId(demoId);
+        setRunResult(null);
+        setRunError('');
+        setSelection(null);
+        setActiveTour(tour || null);
+        setTourStep(0);
+        setTourOpen((tour || []).length > 0);
+        setView('workspace');
+    }, []);
+
     const loadDemo = useCallback((demo) => {
+        let imported;
         try {
-            const { doc: imported } = importNetlistToDoc(demo.netlist);
+            imported = importNetlistToDoc(demo.netlist).doc;
             // Optional post-import hook lets a demo sprinkle UI-only
             // parts (SCOPE / VP / IP) onto the imported schematic,
             // since those don't survive a netlist round-trip. Keeps
@@ -392,35 +465,81 @@ function CircuitStudioPage() {
                 try { demo.postImport(imported); }
                 catch (err) { console.warn('demo.postImport failed:', err); }
             }
-            setDocState({ past: [], present: imported, future: [] });
-            setFitNonce((n) => n + 1);
         } catch (e) {
             setRunError(`Failed to import demo: ${e?.message || e}`);
             return;
         }
-        setAnalysis(demo.defaultAnalysis || 'tran');
-        setLoadedDemoId(demo.id);
-        setRunResult(null);
-        setRunError('');
-        setSelection(null);
-        setView('workspace');
-        setActiveTour(demo.tour || null);
-        setTourStep(0);
-        setTourOpen((demo.tour || []).length > 0);
-    }, []);
+        // Loading a demo mints a fresh project slot so the user's
+        // previous in-progress design isn't clobbered.
+        _switchToDoc(imported, {
+            projectId: null,
+            name: uniqueName(demo.title || 'Demo'),
+            analysisId: demo.defaultAnalysis || 'tran',
+            demoId: demo.id,
+            tour: demo.tour || null,
+        });
+    }, [_switchToDoc]);
 
     const loadBlank = useCallback(() => {
-        setDocState({ past: [], present: emptyDoc(), future: [] });
-        setFitNonce((n) => n + 1);
-        setLoadedDemoId(null);
-        setRunResult(null);
-        setRunError('');
-        setSelection(null);
-        setActiveTour(null);
-        setTourOpen(false);
-        setAnalysis('tran');
-        setView('workspace');
-    }, []);
+        _switchToDoc(emptyDoc(), {
+            projectId: null,
+            name: uniqueName('Untitled'),
+            analysisId: 'tran',
+        });
+    }, [_switchToDoc]);
+
+    /* ---------------- File-menu command bindings ---------------- */
+
+    const openProjectFromManager = useCallback((full) => {
+        _switchToDoc(full.doc || emptyDoc(), {
+            projectId: full.id,
+            name: full.name || 'Untitled',
+            analysisId: full.analysis || 'tran',
+            tranOv: full.tranOverride || null,
+            signals: full.selectedSignals || null,
+        });
+        setProjectManagerOpen(false);
+    }, [_switchToDoc]);
+
+    const handleSaveAs = useCallback(() => {
+        const suggested = `${projectName} copy`;
+        // eslint-disable-next-line no-alert
+        const name = window.prompt('Save a copy as…', suggested);
+        if (!name) return;
+        try {
+            const saved = saveProject({
+                id: null,
+                name: uniqueName(name.trim()),
+                doc,
+                analysis,
+                tranOverride,
+                selectedSignals,
+            });
+            setCurrentProjectIdState(saved.id);
+            setCurrentProjectId(saved.id);
+            setProjectName(saved.name);
+        } catch (e) {
+            setRunError(`Save as failed: ${e?.message || e}`);
+        }
+    }, [projectName, doc, analysis, tranOverride, selectedSignals]);
+
+    const handleRename = useCallback(() => {
+        // eslint-disable-next-line no-alert
+        const name = window.prompt('Rename project', projectName);
+        if (!name) return;
+        setProjectName(name.trim() || 'Untitled');
+    }, [projectName]);
+
+    const importProjectFile = useCallback(async (file) => {
+        try {
+            const text = await file.text();
+            const json = JSON.parse(text);
+            const imported = importProjectJson(json);
+            openProjectFromManager(imported);
+        } catch (e) {
+            setRunError(`Import failed: ${e?.message || e}`);
+        }
+    }, [openProjectFromManager]);
 
     // When the user edits the raw netlist drawer and hits "Apply",
     // re-import the text into the doc. This is the one-way escape
@@ -606,12 +725,122 @@ function CircuitStudioPage() {
     const hasTran = directives.some((d) => d.kind === 'tran');
     const hasAc = directives.some((d) => d.kind === 'ac');
 
+    // Drop a `.noze.json` file anywhere over the studio to import it
+    // as a new project. We accept only JSON-looking files and let
+    // importProjectFile surface a clean error for anything else.
+    const onRootDragOver = useCallback((ev) => {
+        const items = ev.dataTransfer?.items;
+        if (items && [...items].some((it) => it.kind === 'file')) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'copy';
+        }
+    }, []);
+    const onRootDrop = useCallback((ev) => {
+        const file = ev.dataTransfer?.files?.[0];
+        if (!file) return;
+        if (!/\.(json|noze)$/i.test(file.name)) return;
+        ev.preventDefault();
+        importProjectFile(file);
+    }, [importProjectFile]);
+
     return (
-        <div className="cs-root">
+        <div className="cs-root" onDragOver={onRootDragOver} onDrop={onRootDrop}>
             <div className="cs-topbar">
                 <button className="cs-topbtn" onClick={goHome} title="Back to Circuit Studio home">
                     <Home size={14} /> Home
                 </button>
+                <div className="cs-topbar-sep" />
+
+                {/* ------------ File menu ------------ */}
+                <div className="cs-file-menu-wrap">
+                    <button
+                        className={`cs-topbtn${fileMenuOpen ? ' is-active' : ''}`}
+                        onClick={() => setFileMenuOpen((v) => !v)}
+                        onBlur={() => { setTimeout(() => setFileMenuOpen(false), 120); }}
+                        title="File menu"
+                    >
+                        <FolderOpen size={14} /> File
+                        <ChevronDown size={12} style={{ marginLeft: 2 }} />
+                    </button>
+                    {fileMenuOpen && (
+                        <div className="cs-file-menu" onMouseDown={(e) => e.preventDefault()}>
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); loadBlank(); }}>
+                                <FilePlus size={14} /> New project
+                            </button>
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); setProjectManagerOpen(true); }}>
+                                <FolderOpen size={14} /> Open project…
+                            </button>
+                            <div className="cs-file-menu-sep" />
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); handleRename(); }}>
+                                Rename…
+                            </button>
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); handleSaveAs(); }}>
+                                <Save size={14} /> Save as copy…
+                            </button>
+                            <div className="cs-file-menu-sep" />
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); exportProjectJson({
+                                    name: projectName, doc, analysis, tranOverride, selectedSignals,
+                                }); }}>
+                                <FileJson size={14} /> Export project (.noze.json)
+                            </button>
+                            <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); exportSpiceNetlist(netlistText, projectName); }}>
+                                <FileText size={14} /> Export SPICE netlist (.cir)
+                            </button>
+                            <button className="cs-file-menu-item"
+                                disabled={!runResult}
+                                onClick={() => { setFileMenuOpen(false); exportResultsCsv(runResult, selectedSignals, projectName); }}>
+                                <Download size={14} /> Export results (.csv)
+                            </button>
+                            <button className="cs-file-menu-item"
+                                onClick={() => {
+                                    setFileMenuOpen(false);
+                                    try { exportCanvasSvg(projectName); }
+                                    catch (e) { setRunError(e?.message || String(e)); }
+                                }}>
+                                <ImageIcon size={14} /> Export canvas (.svg)
+                            </button>
+                            <button className="cs-file-menu-item"
+                                onClick={() => {
+                                    setFileMenuOpen(false);
+                                    Promise.resolve(exportCanvasPng(projectName))
+                                        .catch((e) => setRunError(e?.message || String(e)));
+                                }}>
+                                <ImageIcon size={14} /> Export canvas (.png)
+                            </button>
+                            <div className="cs-file-menu-sep" />
+                            <label className="cs-file-menu-item">
+                                <Plus size={14} /> Import project…
+                                <input
+                                    type="file"
+                                    accept=".json,.noze,application/json"
+                                    style={{ display: 'none' }}
+                                    onChange={(ev) => {
+                                        const f = ev.target.files?.[0];
+                                        setFileMenuOpen(false);
+                                        if (f) importProjectFile(f);
+                                        ev.target.value = '';
+                                    }}
+                                />
+                            </label>
+                        </div>
+                    )}
+                </div>
+
+                {/* Active project name (click to rename) */}
+                <button
+                    className="cs-project-name"
+                    onClick={handleRename}
+                    title="Click to rename this project"
+                >
+                    {projectName || 'Untitled'}
+                </button>
+
                 <div className="cs-topbar-sep" />
                 <div className="cs-analysis-group">
                     <SlidersHorizontal size={14} />
@@ -761,6 +990,15 @@ function CircuitStudioPage() {
                                     if (c) Object.assign(c, patch);
                                 });
                             }}
+                        />
+                    )}
+
+                    {projectManagerOpen && (
+                        <ProjectManager
+                            currentId={currentProjectId}
+                            onOpen={openProjectFromManager}
+                            onNew={() => { setProjectManagerOpen(false); loadBlank(); }}
+                            onClose={() => setProjectManagerOpen(false)}
                         />
                     )}
 

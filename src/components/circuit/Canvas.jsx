@@ -555,6 +555,7 @@ export default function Canvas({
             <svg
                 ref={svgRef}
                 className="cs-canvas-svg"
+                data-cs-canvas-svg=""
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
