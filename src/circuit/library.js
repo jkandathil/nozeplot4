@@ -330,6 +330,16 @@ export const LIBRARY = [
         symbolKey: 'IP',
         refPrefix: 'IP',
     },
+    {
+        id: 'SCOPE',
+        name: 'Oscilloscope',
+        short: 'OSC',
+        category: 'Probe',
+        description: 'Clip onto any node. After Run, double-click the scope to pop a live waveform viewer for its attached signal.',
+        elementType: 'SCOPE',
+        symbolKey: 'SCOPE',
+        refPrefix: 'X',
+    },
 
     // ---------- Power & ground ----------
     {

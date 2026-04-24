@@ -17,6 +17,21 @@ export function renderShape(s, key) {
                     strokeWidth={strokeWidth}
                     strokeDasharray={s.strokeDasharray}
                     strokeLinecap="round"
+                    opacity={s.opacity}
+                />
+            );
+        case 'rect':
+            return (
+                <rect
+                    key={key}
+                    x={s.x} y={s.y} width={s.w} height={s.h}
+                    rx={s.rx} ry={s.ry}
+                    fill={s.fill === 'var(--sch-body)' ? 'var(--sch-body)'
+                        : s.fill === 'var(--sch-stroke)' ? 'var(--sch-stroke)'
+                        : s.fill || 'none'}
+                    stroke={strokeColor}
+                    strokeWidth={strokeWidth}
+                    opacity={s.opacity}
                 />
             );
         case 'path':

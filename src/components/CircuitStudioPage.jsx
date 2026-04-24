@@ -40,6 +40,7 @@ import { importNetlistToDoc } from '../circuit/importNetlist.js';
 import Palette from './circuit/Palette.jsx';
 import Canvas from './circuit/Canvas.jsx';
 import PropertyPopup from './circuit/PropertyPopup.jsx';
+import ScopeModal from './circuit/ScopeModal.jsx';
 import { validateSchematic } from '../circuit/validate.js';
 import Inspector from './circuit/Inspector.jsx';
 import './CircuitStudioPage.css';
@@ -96,6 +97,50 @@ function CircuitStudioPage() {
     // Inline property popup state: target component + screen-space anchor
     // where the card renders. `null` when the popup is closed.
     const [editPopup, setEditPopup] = useState(null); // { compId, clientX, clientY }
+    // Oscilloscope modal: double-clicking a SCOPE part opens this.
+    // Also drives the live-streaming state below.
+    const [scopeModal, setScopeModal] = useState(null); // { compId }
+    // Partial results appended by the live transient runner. Cleared on
+    // each Run. Shape: { t: number[], ySignals: Map<name, number[]> }.
+    const [liveStream, setLiveStream] = useState(null);
+    // Live transient toggle — when true, Run streams samples in as the
+    // solver produces them so open scopes tick in real time.
+    const [liveMode, setLiveMode] = useState(false);
+    // Collapsible side panels — remembered per-user via localStorage so
+    // the canvas-centric layout persists across reloads.
+    const [paletteCollapsed, setPaletteCollapsed] = useState(
+        () => {
+            try { return localStorage.getItem('circuitStudio:paletteCollapsed') === 'true'; }
+            catch { return false; }
+        }
+    );
+    const [inspectorCollapsed, setInspectorCollapsed] = useState(
+        () => {
+            try { return localStorage.getItem('circuitStudio:inspectorCollapsed') === 'true'; }
+            catch { return false; }
+        }
+    );
+    useEffect(() => {
+        try { localStorage.setItem('circuitStudio:paletteCollapsed', String(paletteCollapsed)); }
+        catch { /* storage may be full; ignore */ }
+    }, [paletteCollapsed]);
+    useEffect(() => {
+        try { localStorage.setItem('circuitStudio:inspectorCollapsed', String(inspectorCollapsed)); }
+        catch { /* storage may be full; ignore */ }
+    }, [inspectorCollapsed]);
+    useEffect(() => {
+        const onKey = (ev) => {
+            // Ignore when the user is typing in an input / textarea.
+            const t = ev.target;
+            const tag = t && t.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+            if (!(ev.metaKey || ev.ctrlKey)) return;
+            if (ev.key === '[') { setPaletteCollapsed((v) => !v); ev.preventDefault(); }
+            else if (ev.key === ']') { setInspectorCollapsed((v) => !v); ev.preventDefault(); }
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, []);
     const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
     const [showResults, setShowResults] = useState(true);
     const [netlistDraft, setNetlistDraft] = useState(''); // user-edited raw text when drawer open
@@ -110,6 +155,15 @@ function CircuitStudioPage() {
         } catch { return 'home'; }
     });
     const [analysis, setAnalysis] = useState('tran');
+    // User-editable transient settings — when non-null, these override
+    // the parsed .tran directive from the netlist at run time. Stored
+    // as strings (with SI prefixes allowed) so the input fields stay
+    // exactly what the user typed; parseSiTime below converts to
+    // seconds when handing off to the solver.
+    const [tranOverride, setTranOverride] = useState({
+        tstop: '1m',
+        tstep: '1u',
+    });
     const [runResult, setRunResult] = useState(null);
     const [runError, setRunError] = useState('');
     const [running, setRunning] = useState(false);
@@ -233,34 +287,65 @@ function CircuitStudioPage() {
     // Auto-detect default signals when results arrive. With .step
     // active, suggestions like "V(vout)" fan out into the family
     // "V(vout) @R1=1k", "V(vout) @R1=2k", … so we match by name prefix.
+    //
+    // Probes on the schematic take priority over demo defaults: if the
+    // user placed a VP / IP, we auto-tick its signal (and its whole
+    // .step family) so there's always something on the plot after Run.
     useEffect(() => {
         if (!runResult || !runResult.signals) return;
         const allSignals = runResult.signals;
         const all = allSignals.map((s) => s.name);
+
+        // 1) Probe-driven preferences — derived from the schematic, not
+        //    the demo catalog.
+        //    VP / SCOPE → V(<tip node label>); IP → I(<ref>).
+        const probeWanted = [];
+        if (doc && resolvedNets) {
+            for (const c of doc.components) {
+                if (c.elementType === 'VP' || c.elementType === 'SCOPE') {
+                    const nodeId = resolvedNets.pinNode(c, 'tip');
+                    if (nodeId != null && nodeId !== 0) {
+                        const lab = resolvedNets.nodeLabels?.get(nodeId);
+                        // Mirror emitNetlist's naming rule so the chip
+                        // name matches a signal in `result.signals`.
+                        const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd')
+                            ? lab
+                            : `n${nodeId}`;
+                        probeWanted.push(`V(${label})`);
+                    }
+                } else if (c.elementType === 'IP') {
+                    probeWanted.push(`I(${c.ref})`);
+                }
+            }
+        }
+
+        // 2) Demo suggestions (fallback when there are no probes).
         const demo = DEMOS.find((d) => d.id === loadedDemoId);
         const suggested = demo?.signals?.[analysis] || [];
+
         const preferred = [];
-        for (const want of suggested) {
+        for (const want of [...probeWanted, ...suggested]) {
             const exact = all.filter((n) => n === want);
             if (exact.length > 0) {
                 preferred.push(...exact);
                 continue;
             }
-            const family = all.filter((n) => n.startsWith(`${want} `) || n === want);
+            // Match the .step family for a given base signal name.
+            const family = all.filter((n) => n.startsWith(`${want} @`));
             preferred.push(...family);
         }
+
         if (preferred.length > 0) {
-            setSelectedSignals(preferred);
+            // De-dupe while preserving order.
+            setSelectedSignals(Array.from(new Set(preferred)));
         } else if (runResult.step) {
-            // Pick the first node's whole family of curves so users see
-            // the point of .step at a glance.
             const firstBase = allSignals[0]?.baseNode;
             const family = allSignals.filter((s) => s.baseNode === firstBase).map((s) => s.name);
             setSelectedSignals(family.slice(0, Math.min(8, family.length)));
         } else {
             setSelectedSignals(all.slice(0, Math.min(4, all.length)));
         }
-    }, [runResult, loadedDemoId, analysis]);
+    }, [runResult, loadedDemoId, analysis, doc, resolvedNets]);
 
     // Re-seed measurement cursors whenever a new result arrives. Placing
     // them at the 25th and 75th percentile of the x-axis puts them inside
@@ -347,30 +432,9 @@ function CircuitStudioPage() {
         }
         setRunning(true);
         setRunError('');
-
-        // Derive the "must-plot" signals from every probe in the doc
-        // so the plot auto-populates without the user having to tick
-        // chips by hand. Voltage probes resolve their tip's pin → net
-        // → node name (same lookup the netlist emitter uses); current
-        // probes expose I(<ref>), matching the branchName rule in
-        // buildStepResult.
-        const probeSignals = [];
-        if (doc && resolvedNets) {
-            for (const c of doc.components) {
-                if (c.elementType === 'VP') {
-                    const nodeId = resolvedNets.pinNode(c, 'tip');
-                    if (nodeId != null) {
-                        const name = nodeId === 0
-                            ? '0'
-                            : (parsed.nodeNames?.[nodeId] || `n${nodeId}`);
-                        // Skip ground — plotting a flat zero is useless.
-                        if (nodeId !== 0) probeSignals.push(`V(${name})`);
-                    }
-                } else if (c.elementType === 'IP') {
-                    probeSignals.push(`I(${c.ref})`);
-                }
-            }
-        }
+        setLiveStream(null);
+        // Probe auto-select lives in the runResult useEffect so it
+        // composes cleanly with the demo-suggested-signal logic there.
         // Defer to next tick so the UI can update to "Running…" state.
         setTimeout(() => {
             try {
@@ -396,11 +460,34 @@ function CircuitStudioPage() {
                         signals: nodeVals.map((n) => ({ name: `V(${n.name})`, kind: 'op', value: n.value })),
                     });
                 } else if (analysis === 'tran') {
-                    const dir = parsed.directives.find((d) => d.kind === 'tran') || {
-                        tstep: 1e-6, tstop: 1e-3, tstart: 0,
+                    const parsedDir = parsed.directives.find((d) => d.kind === 'tran');
+                    const userTstop = parseSiTime(tranOverride?.tstop);
+                    const userTstep = parseSiTime(tranOverride?.tstep);
+                    // UI settings take precedence when the user typed
+                    // a valid number; otherwise fall back to the
+                    // parsed .tran directive, then to the defaults.
+                    const dir = {
+                        kind: 'tran',
+                        tstop:  userTstop  ?? parsedDir?.tstop  ?? 1e-3,
+                        tstep:  userTstep  ?? parsedDir?.tstep  ?? 1e-6,
+                        tstart: parsedDir?.tstart ?? 0,
+                        uic:    parsedDir?.uic ?? false,
                     };
                     const runs = runWithStep(ctx, stepDir, { tran: dir });
-                    setRunResult(buildStepResult('tran', runs, parsed, stepDir, ctx));
+                    const finalResult = buildStepResult('tran', runs, parsed, stepDir, ctx);
+                    if (liveMode) {
+                        // Animate the plot: stream samples into
+                        // `liveStream` in chunks, firing rAF between
+                        // batches. When the last batch lands, commit
+                        // the full result so the static plot takes
+                        // over and cursors / export work normally.
+                        streamTranResult(finalResult, setLiveStream, () => {
+                            setRunResult(finalResult);
+                            setLiveStream(null);
+                        });
+                    } else {
+                        setRunResult(finalResult);
+                    }
                 } else if (analysis === 'ac') {
                     const dir = parsed.directives.find((d) => d.kind === 'ac') || {
                         mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
@@ -415,17 +502,6 @@ function CircuitStudioPage() {
                     const runs = runWithStep(ctx, stepDir, { dc: dir });
                     setRunResult(buildStepResult('dc', runs, parsed, stepDir, ctx));
                 }
-                // If probes are present on the schematic, auto-tick
-                // their signals so the user sees something on the plot
-                // as soon as the run finishes. We union with the user's
-                // prior selection so manual choices aren't clobbered.
-                if (probeSignals.length > 0 && analysis !== 'op') {
-                    setSelectedSignals((prev) => {
-                        const set = new Set(prev);
-                        for (const name of probeSignals) set.add(name);
-                        return Array.from(set);
-                    });
-                }
             } catch (e) {
                 setRunError(e?.message || String(e));
                 setRunResult(null);
@@ -433,7 +509,7 @@ function CircuitStudioPage() {
                 setRunning(false);
             }
         }, 30);
-    }, [parsed, analysis, doc, resolvedNets]);
+    }, [parsed, analysis, tranOverride, liveMode]);
 
     const copyNetlist = useCallback(() => {
         if (!netlistText) return;
@@ -551,16 +627,77 @@ function CircuitStudioPage() {
                 )}
             </div>
 
-            <div className="cs-body cs-body-phase3">
-                <div className="cs-pane cs-pane-palette">
-                    <div className="cs-pane-title">
-                        <LayoutGrid size={13} /> Components
-                    </div>
-                    <Palette onPick={(partId) => {
-                        // Click-to-place centres the new part near the
-                        // middle of the current canvas.
-                        mutateDoc((d) => { addComponent(d, partId, 200, 160, 0); });
-                    }} />
+            {analysis === 'tran' && (
+                <div className="cs-subbar cs-tran-bar">
+                    <span className="cs-tran-label">Transient</span>
+                    <label className="cs-tran-field">
+                        <span>Duration</span>
+                        <input
+                            type="text"
+                            value={tranOverride.tstop}
+                            onChange={(e) => setTranOverride((s) => ({ ...s, tstop: e.target.value }))}
+                            spellCheck={false}
+                            placeholder="1m"
+                        />
+                        <span className="cs-tran-unit">s</span>
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Step</span>
+                        <input
+                            type="text"
+                            value={tranOverride.tstep}
+                            onChange={(e) => setTranOverride((s) => ({ ...s, tstep: e.target.value }))}
+                            spellCheck={false}
+                            placeholder="1u"
+                        />
+                        <span className="cs-tran-unit">s</span>
+                    </label>
+                    <label className={`cs-tran-live${liveMode ? ' is-on' : ''}`}>
+                        <input
+                            type="checkbox"
+                            checked={liveMode}
+                            onChange={(e) => setLiveMode(e.target.checked)}
+                        />
+                        <Activity size={12} /> Live stream
+                    </label>
+                    <span className="cs-tran-hint">SI prefixes ok: <code>1m</code>, <code>500u</code>, <code>2n</code></span>
+                </div>
+            )}
+
+            <div className={`cs-body cs-body-phase3${paletteCollapsed ? ' is-palette-collapsed' : ''}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
+                <div className={`cs-pane cs-pane-palette${paletteCollapsed ? ' is-collapsed' : ''}`}>
+                    {paletteCollapsed ? (
+                        <button
+                            type="button"
+                            className="cs-pane-expand"
+                            onClick={() => setPaletteCollapsed(false)}
+                            title="Show components (⌘/Ctrl+[)"
+                        >
+                            <LayoutGrid size={14} />
+                            <span className="cs-pane-expand-label">Components</span>
+                            <ChevronRight size={12} />
+                        </button>
+                    ) : (
+                        <>
+                            <div className="cs-pane-title">
+                                <LayoutGrid size={13} /> Components
+                                <button
+                                    type="button"
+                                    className="cs-pane-collapse"
+                                    onClick={() => setPaletteCollapsed(true)}
+                                    title="Hide components panel"
+                                    aria-label="Collapse components panel"
+                                >
+                                    <ChevronLeft size={12} />
+                                </button>
+                            </div>
+                            <Palette onPick={(partId) => {
+                                // Click-to-place centres the new part near the
+                                // middle of the current canvas.
+                                mutateDoc((d) => { addComponent(d, partId, 200, 160, 0); });
+                            }} />
+                        </>
+                    )}
                 </div>
 
                 <div className="cs-pane cs-pane-stage">
@@ -575,6 +712,7 @@ function CircuitStudioPage() {
                         onUndo={handleUndo}
                         onRedo={handleRedo}
                         onEditComponent={setEditPopup}
+                        onOpenScope={setScopeModal}
                         fitNonce={fitNonce}
                     />
 
@@ -592,6 +730,27 @@ function CircuitStudioPage() {
                             }}
                         />
                     )}
+
+                    {scopeModal && (() => {
+                        const comp = doc?.components?.find((c) => c.id === scopeModal.compId) || null;
+                        const { signalName, nodeLabel } = scopeSignalFor(comp, resolvedNets);
+                        const livePartial = (liveStream && signalName)
+                            ? {
+                                t: liveStream.t,
+                                y: liveStream.ySignals?.[signalName] || [],
+                            }
+                            : null;
+                        return (
+                            <ScopeModal
+                                comp={comp}
+                                signalName={signalName}
+                                nodeLabel={nodeLabel}
+                                result={runResult}
+                                livePartial={livePartial}
+                                onClose={() => setScopeModal(null)}
+                            />
+                        );
+                    })()}
 
                     {/* Optional bottom drawer: results + netlist source */}
                     <div className={`cs-drawer${showResults ? ' is-open' : ''}`}>
@@ -664,46 +823,167 @@ function CircuitStudioPage() {
                     </div>
                 </div>
 
-                <div className="cs-pane cs-pane-inspector">
-                    <div className="cs-pane-title">
-                        <SlidersHorizontal size={13} /> Inspector
-                    </div>
-                    <Inspector
-                        selectedComp={selectedComp}
-                        onUpdate={(patch) => selectedComp && mutateDoc((d) => updateComponent(d, selectedComp.id, patch))}
-                        onRotate={() => selectedComp && mutateDoc((d) => rotateComponent(d, selectedComp.id, 90))}
-                        onDelete={() => {
-                            if (!selectedComp) return;
-                            mutateDoc((d) => removeComponent(d, selectedComp.id));
-                            setSelection(null);
-                        }}
-                        netWarnings={buildNetWarnings(resolvedNets, doc, validation)}
-                        analysisPane={tourOpen && activeTour ? (
-                            <div className="cs-inspector-tour">
-                                <div className="cs-inspector-title">
-                                    <BookOpen size={12} /> Guided tour · Step {tourStep + 1}/{activeTour.length}
-                                </div>
-                                <div className="cs-tour-step-title">{activeTour[tourStep]?.title}</div>
-                                <div className="cs-tour-step-body">{activeTour[tourStep]?.body}</div>
-                                <div className="cs-tour-nav">
-                                    <button className="cs-topbtn" onClick={() => setTourStep((s) => Math.max(0, s - 1))} disabled={tourStep === 0}>
-                                        <ChevronLeft size={12} /> Back
-                                    </button>
-                                    <button className="cs-topbtn cs-topbtn-primary"
-                                        onClick={() => {
-                                            if (tourStep + 1 < activeTour.length) setTourStep(tourStep + 1);
-                                            else setTourOpen(false);
-                                        }}>
-                                        {tourStep + 1 >= activeTour.length ? 'Finish' : <>Next <ChevronRight size={12} /></>}
-                                    </button>
-                                </div>
+                <div className={`cs-pane cs-pane-inspector${inspectorCollapsed ? ' is-collapsed' : ''}`}>
+                    {inspectorCollapsed ? (
+                        <button
+                            type="button"
+                            className="cs-pane-expand"
+                            onClick={() => setInspectorCollapsed(false)}
+                            title="Show inspector (⌘/Ctrl+])"
+                        >
+                            <ChevronLeft size={12} />
+                            <span className="cs-pane-expand-label">Inspector</span>
+                            <SlidersHorizontal size={14} />
+                        </button>
+                    ) : (
+                        <>
+                            <div className="cs-pane-title">
+                                <button
+                                    type="button"
+                                    className="cs-pane-collapse cs-pane-collapse-right"
+                                    onClick={() => setInspectorCollapsed(true)}
+                                    title="Hide inspector panel"
+                                    aria-label="Collapse inspector panel"
+                                >
+                                    <ChevronRight size={12} />
+                                </button>
+                                <SlidersHorizontal size={13} /> Inspector
                             </div>
-                        ) : null}
-                    />
+                            <Inspector
+                                selectedComp={selectedComp}
+                                onUpdate={(patch) => selectedComp && mutateDoc((d) => updateComponent(d, selectedComp.id, patch))}
+                                onRotate={() => selectedComp && mutateDoc((d) => rotateComponent(d, selectedComp.id, 90))}
+                                onDelete={() => {
+                                    if (!selectedComp) return;
+                                    mutateDoc((d) => removeComponent(d, selectedComp.id));
+                                    setSelection(null);
+                                }}
+                                netWarnings={buildNetWarnings(resolvedNets, doc, validation)}
+                                analysisPane={tourOpen && activeTour ? (
+                                    <div className="cs-inspector-tour">
+                                        <div className="cs-inspector-title">
+                                            <BookOpen size={12} /> Guided tour · Step {tourStep + 1}/{activeTour.length}
+                                        </div>
+                                        <div className="cs-tour-step-title">{activeTour[tourStep]?.title}</div>
+                                        <div className="cs-tour-step-body">{activeTour[tourStep]?.body}</div>
+                                        <div className="cs-tour-nav">
+                                            <button className="cs-topbtn" onClick={() => setTourStep((s) => Math.max(0, s - 1))} disabled={tourStep === 0}>
+                                                <ChevronLeft size={12} /> Back
+                                            </button>
+                                            <button className="cs-topbtn cs-topbtn-primary"
+                                                onClick={() => {
+                                                    if (tourStep + 1 < activeTour.length) setTourStep(tourStep + 1);
+                                                    else setTourOpen(false);
+                                                }}>
+                                                {tourStep + 1 >= activeTour.length ? 'Finish' : <>Next <ChevronRight size={12} /></>}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : null}
+                            />
+                        </>
+                    )}
                 </div>
             </div>
         </div>
     );
+}
+
+/**
+ * Parse a time string like "1m", "500u", "2n", or "1e-3" into seconds.
+ * Returns null if the string is empty, malformed, or non-positive.
+ * Accepts both SPICE-ish SI prefixes (k M G m u n p f) and the plain
+ * engineering suffix "ms" / "us" / "ns".
+ */
+function parseSiTime(raw) {
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    if (s === '') return null;
+    // Strip a trailing "s" unit so "1ms" reads as "1m".
+    const body = s.replace(/s\b$/i, '');
+    // Regex: optional sign, mantissa (required), optional exponent,
+    // optional SI suffix. "Meg" is called out separately so "M" alone
+    // means mega.
+    const m = body.match(/^([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([a-zA-Zµ]+)?$/);
+    if (!m) return null;
+    const num = parseFloat(m[1]);
+    if (!isFinite(num) || num <= 0) return null;
+    const suffixRaw = (m[2] || '').toLowerCase();
+    let scale = 1;
+    if (suffixRaw === '' || suffixRaw === 's') scale = 1;
+    else if (suffixRaw === 'meg') scale = 1e6;
+    else if (suffixRaw === 'k')   scale = 1e3;
+    else if (suffixRaw === 'g')   scale = 1e9;
+    else if (suffixRaw === 'm')   scale = 1e-3;
+    else if (suffixRaw === 'ms')  scale = 1e-3;
+    else if (suffixRaw === 'u' || suffixRaw === 'µ') scale = 1e-6;
+    else if (suffixRaw === 'us')  scale = 1e-6;
+    else if (suffixRaw === 'n')   scale = 1e-9;
+    else if (suffixRaw === 'ns')  scale = 1e-9;
+    else if (suffixRaw === 'p')   scale = 1e-12;
+    else if (suffixRaw === 'ps')  scale = 1e-12;
+    else if (suffixRaw === 'f')   scale = 1e-15;
+    else return null;
+    return num * scale;
+}
+
+/**
+ * Animate a completed transient result into `liveStream` in chunks,
+ * so any open scope modals replay the waveform as if it were being
+ * produced in real time. Chunks are sized to target ~60fps; we cap
+ * at a sensible total duration so long sweeps don't feel glacial.
+ *
+ * `onDone` is invoked with no arguments once the last chunk ships.
+ * Callers typically use it to commit the full `runResult` and clear
+ * `liveStream` back to null.
+ */
+function streamTranResult(result, setLiveStream, onDone) {
+    if (!result || result.kind !== 'tran' || !result.t?.length) {
+        onDone?.();
+        return;
+    }
+    const total = result.t.length;
+    // Play it back in ~30 frames, or fewer if the data is short.
+    const frames = Math.min(30, Math.max(4, Math.ceil(total / 32)));
+    const perFrame = Math.max(1, Math.ceil(total / frames));
+
+    // Pre-index signals by name for fast slicing.
+    const byName = {};
+    for (const sig of result.signals) byName[sig.name] = sig;
+
+    let cursor = 0;
+    const step = () => {
+        cursor = Math.min(total, cursor + perFrame);
+        const tSlice = result.t.slice(0, cursor);
+        const ySignals = {};
+        for (const name of Object.keys(byName)) {
+            const arr = byName[name].y;
+            if (!arr) continue;
+            ySignals[name] = arr.slice(0, cursor);
+        }
+        setLiveStream({ t: tSlice, ySignals });
+        if (cursor < total) {
+            requestAnimationFrame(step);
+        } else {
+            onDone?.();
+        }
+    };
+    requestAnimationFrame(step);
+}
+
+/**
+ * Resolve a SCOPE component's tip-pin to a (signalName, nodeLabel)
+ * pair the way the plot names it. Mirrors the probe auto-select rule.
+ * Returns { signalName: null } when the scope is dangling / connected
+ * only to ground, so the modal can render its "no connection" state.
+ */
+function scopeSignalFor(comp, nets) {
+    if (!comp || !nets) return { signalName: null, nodeLabel: null };
+    const nodeId = nets.pinNode(comp, 'tip');
+    if (nodeId == null || nodeId === 0) return { signalName: null, nodeLabel: 'ground / floating' };
+    const lab = nets.nodeLabels?.get(nodeId);
+    const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
+    return { signalName: `V(${label})`, nodeLabel: label };
 }
 
 function buildNetWarnings(nets, doc, validation) {

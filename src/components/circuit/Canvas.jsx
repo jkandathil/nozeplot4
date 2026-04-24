@@ -46,6 +46,7 @@ export default function Canvas({
     onUndo,
     onRedo,
     onEditComponent,
+    onOpenScope,
     fitNonce = 0,
 }) {
     const svgRef = useRef(null);
@@ -420,6 +421,53 @@ export default function Canvas({
     const errorCount = validation?.errorCount || 0;
     const warnCount = validation?.warnCount || 0;
 
+    // Connection dots — a green filled circle rendered wherever a
+    // component pin physically coincides with a wire (endpoint or
+    // mid-segment). Gives the user an at-a-glance "pin is wired" cue
+    // without needing to run the simulator. Floating pins get their
+    // own dashed-warn marker on the component itself, so any pin that
+    // isn't showing a green dot OR a warn ring is literally unreachable.
+    const connectionDots = useMemo(() => {
+        if (!doc) return [];
+        const out = [];
+        const seen = new Set(); // de-dupe coords across pins/components
+        // Precompute wire geometry once.
+        const wires = doc.wires || [];
+        const onWire = (x, y) => {
+            for (const w of wires) {
+                const pts = w.points;
+                // Exact vertex hit
+                for (let i = 0; i < pts.length; i++) {
+                    if (pts[i][0] === x && pts[i][1] === y) return true;
+                }
+                // Mid-segment hit (axis-aligned only; matches the same
+                // logic resolveNets uses for T-junctions).
+                for (let s = 1; s < pts.length; s++) {
+                    const [x1, y1] = pts[s - 1];
+                    const [x2, y2] = pts[s];
+                    if (y1 === y2 && y === y1
+                        && x > Math.min(x1, x2) && x < Math.max(x1, x2)) return true;
+                    if (x1 === x2 && x === x1
+                        && y > Math.min(y1, y2) && y < Math.max(y1, y2)) return true;
+                }
+            }
+            return false;
+        };
+        for (const c of doc.components) {
+            // Ground symbol is itself the terminator, not a "connected pin".
+            if (c.elementType === 'GND') continue;
+            const pins = componentPins(c);
+            for (const p of pins) {
+                if (!onWire(p.x, p.y)) continue;
+                const key = `${p.x}|${p.y}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({ x: p.x, y: p.y });
+            }
+        }
+        return out;
+    }, [doc]);
+
     const wirePreview = (() => {
         if (tool !== 'wire' || !wireStart) return null;
         const pin = hoverPin;
@@ -505,12 +553,20 @@ export default function Canvas({
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
                 onDoubleClick={(ev) => {
-                    if (!onEditComponent) return;
                     const world = clientToWorld(ev);
                     const hit = componentAt(world);
                     if (!hit) return;
-                    // Skip fixed parts with nothing meaningful to edit.
+                    // Oscilloscope: pop the waveform viewer instead
+                    // of the property popup.
+                    if (hit.elementType === 'SCOPE') {
+                        onSelect({ kind: 'component', id: hit.id });
+                        if (onOpenScope) onOpenScope({ compId: hit.id });
+                        ev.stopPropagation();
+                        return;
+                    }
+                    // Fixed parts with nothing meaningful to edit.
                     if (hit.elementType === 'GND' || hit.elementType === 'VP') return;
+                    if (!onEditComponent) return;
                     onSelect({ kind: 'component', id: hit.id });
                     onEditComponent({
                         compId: hit.id,
@@ -585,9 +641,23 @@ export default function Canvas({
                         );
                     })}
 
-                    {/* Junctions */}
+                    {/* Junctions (≥3-way) — drawn in the wire color so
+                        T-intersections read as part of the net. */}
                     {nets?.junctions?.map((j, i) => (
                         <circle key={`jx-${i}`} cx={j.x} cy={j.y} r={3.2} fill="var(--sch-wire)" />
+                    ))}
+
+                    {/* Pin-on-wire connection dots — bright green so a
+                        successful connection is unmistakable. Hidden
+                        briefly while the user is actively dragging
+                        something so we don't paint dots at stale pin
+                        coords mid-drag. */}
+                    {!dragDelta && connectionDots.map((d, i) => (
+                        <g key={`cd-${i}`} pointerEvents="none">
+                            <circle cx={d.x} cy={d.y} r={4.2}
+                                fill="var(--sch-connection)"
+                                stroke="var(--sch-paper)" strokeWidth={1} />
+                        </g>
                     ))}
 
                     {/* Visible net labels */}

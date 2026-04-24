@@ -104,9 +104,11 @@ export function emitNetlist(doc, opts = {}) {
 
     for (const comp of doc.components) {
         if (comp.elementType === 'GND') continue; // just a marker
-        // Voltage probes are UI-only — they tag a node for the plot
-        // auto-selector but contribute nothing to the netlist.
+        // Voltage probes + oscilloscopes are UI-only — they tag a
+        // node for the plot auto-selector and the scope modal, but
+        // contribute nothing to the netlist.
         if (comp.elementType === 'VP') continue;
+        if (comp.elementType === 'SCOPE') continue;
 
         const ref = comp.ref;
         const pinOrder = pinOrderFor(comp.elementType);
@@ -252,6 +254,7 @@ function pinOrderFor(elementType) {
         case 'E': case 'G': return ['n1', 'n2', 'nc1', 'nc2'];
         case 'IP': return ['n1', 'n2'];
         case 'VP': return ['tip'];
+        case 'SCOPE': return ['tip'];
         default: return [];
     }
 }

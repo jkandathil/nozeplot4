@@ -234,9 +234,13 @@ function empty() {
  * does any non-GND pin sit at the exact coord of a GND pin?
  */
 function detectGround(doc, nets) {
+    // Probes don't count toward ground detection. A scope clipped
+    // to ground doesn't actually wire the circuit to anything.
+    const isProbe = (t) => t === 'VP' || t === 'IP' || t === 'SCOPE';
     if (nets && typeof nets.pinNode === 'function') {
         for (const comp of doc.components) {
             if (comp.elementType === 'GND') continue;
+            if (isProbe(comp.elementType)) continue;
             for (const pin of componentPins(comp) || []) {
                 if (nets.pinNode(comp, pin.id) === 0) return true;
             }
@@ -254,6 +258,7 @@ function detectGround(doc, nets) {
     if (gndCoords.size === 0) return false;
     for (const comp of doc.components) {
         if (comp.elementType === 'GND') continue;
+        if (isProbe(comp.elementType)) continue;
         for (const pin of componentPins(comp) || []) {
             if (gndCoords.has(`${pin.x}|${pin.y}`)) return true;
         }

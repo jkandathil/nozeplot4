@@ -17,7 +17,13 @@
     --sch-paper: rgba(10, 14, 26, 0.85);
     --sch-paper-grid: rgba(148, 163, 184, 0.10);
     --sch-stroke: #e2e8f0;
-    --sch-wire: #cbd5e1;
+    /* Wires are drawn in cyan so they read as "signal" at a glance and
+       stay visually distinct from component bodies (which use
+       --sch-stroke). */
+    --sch-wire: #38bdf8;
+    /* Filled green dot shown wherever a component pin actually lands
+       on a wire — a pro-sim "connection-made" affordance. */
+    --sch-connection: #22c55e;
     --sch-body: rgba(15, 23, 42, 0.95);
     --sch-label: #f1f5f9;
     --sch-label-dim: #94a3b8;
@@ -748,7 +754,8 @@ html[data-theme="light"] .cs-root {
     --sch-paper: #fdfcf6;
     --sch-paper-grid: rgba(15, 23, 42, 0.18);
     --sch-stroke: #0f172a;
-    --sch-wire: #1e293b;
+    --sch-wire: #2563eb;
+    --sch-connection: #16a34a;
     --sch-body: #ffffff;
     --sch-label: #0f172a;
     --sch-label-dim: #475569;
@@ -826,7 +833,91 @@ html[data-theme="light"] .cs-measure-table tr.cs-measure-delta td {
 
 .cs-body-phase3 {
     grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) minmax(260px, 320px);
+    transition: grid-template-columns 160ms ease;
 }
+/* Collapsed side panes shrink to a slim vertical rail so the canvas
+   gets the reclaimed real estate. Both rails together give up ~560 px
+   of horizontal room, which is typically the difference between a
+   cramped schematic and a breathing one. */
+.cs-body-phase3.is-palette-collapsed {
+    grid-template-columns: 34px minmax(0, 1fr) minmax(260px, 320px);
+}
+.cs-body-phase3.is-inspector-collapsed {
+    grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) 34px;
+}
+.cs-body-phase3.is-palette-collapsed.is-inspector-collapsed {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+}
+
+/* Collapse/expand affordances on the side panes */
+.cs-pane-collapse {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+}
+.cs-pane-collapse:hover {
+    background: rgba(148, 163, 184, 0.14);
+    color: #e2e8f0;
+}
+/* The inspector collapse button lives on the LEFT edge (pointing right
+   = "push me off-screen to the right"), so we drop the auto margin. */
+.cs-pane-collapse-right {
+    margin-left: 0;
+    margin-right: 6px;
+}
+
+.cs-pane.is-collapsed {
+    overflow: hidden;
+    padding: 0;
+    background: var(--cs-panel-bg);
+    border-left: 1px solid var(--cs-panel-border);
+    border-right: 1px solid var(--cs-panel-border);
+}
+.cs-pane-expand {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    background: transparent;
+    color: #cbd5e1;
+    border: none;
+    cursor: pointer;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+}
+.cs-pane-expand:hover {
+    background: rgba(148, 163, 184, 0.08);
+    color: #e2e8f0;
+}
+.cs-pane-expand-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: #94a3b8;
+}
+.cs-pane-expand > svg {
+    /* Lucide icons inherit currentColor. We un-rotate them so the glyph
+       reads correctly even though the parent is vertical text. */
+    transform: rotate(90deg);
+    flex: 0 0 auto;
+}
+
+html[data-theme="light"] .cs-pane-collapse { color: #64748b; }
+html[data-theme="light"] .cs-pane-collapse:hover { background: #e2e8f0; color: #0f172a; }
+html[data-theme="light"] .cs-pane-expand { color: #475569; }
+html[data-theme="light"] .cs-pane-expand:hover { background: #f1f5f9; color: #0f172a; }
+html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 
 /* ---------- Palette (left) ---------- */
 .cs-pane-palette {
@@ -1456,4 +1547,213 @@ html[data-theme="light"] .cs-prop-popup-field > select {
 }
 html[data-theme="light"] .cs-prop-popup-btn {
     background: #f1f5f9; border-color: #e2e8f0; color: #0f172a;
+}
+
+/* ---------- Oscilloscope modal ---------- */
+.cs-scope-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(2, 6, 15, 0.6);
+    backdrop-filter: blur(3px);
+    animation: cs-scope-fade 140ms ease;
+}
+@keyframes cs-scope-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.cs-scope-card {
+    width: min(860px, 92vw);
+    height: min(580px, 82vh);
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    background: linear-gradient(180deg, #0b1220 0%, #061018 100%);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6),
+                0 0 0 1px rgba(56, 189, 248, 0.05) inset;
+    overflow: hidden;
+}
+.cs-scope-modal.is-fullscreen .cs-scope-card {
+    width: 96vw;
+    height: 94vh;
+}
+.cs-scope-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    color: #e2e8f0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    background: rgba(15, 23, 42, 0.55);
+}
+.cs-scope-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 0.92rem;
+    flex: 1;
+    min-width: 0;
+}
+.cs-scope-sub {
+    color: #94a3b8;
+    font-weight: 500;
+    font-size: 0.78rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cs-scope-iconbtn {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    color: #cbd5e1;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 4px 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.cs-scope-iconbtn:hover {
+    background: rgba(148, 163, 184, 0.12);
+    color: #f1f5f9;
+}
+.cs-scope-body {
+    flex: 1;
+    min-height: 0;
+    padding: 10px 12px;
+    display: flex;
+}
+.cs-scope-canvas {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 6px;
+}
+.cs-scope-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 0.76rem;
+    color: #94a3b8;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.5);
+}
+.cs-scope-live {
+    color: #f87171;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+}
+
+/* ---------- Transient settings subbar ---------- */
+.cs-subbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 14px;
+    background: rgba(15, 23, 42, 0.55);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    font-size: 0.8rem;
+    color: #cbd5e1;
+    flex-wrap: wrap;
+}
+.cs-tran-label {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #38bdf8;
+    font-size: 0.74rem;
+}
+.cs-tran-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.cs-tran-field > span:first-child {
+    color: #94a3b8;
+    font-size: 0.78rem;
+}
+.cs-tran-field > input {
+    width: 68px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(10, 14, 26, 0.7);
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem;
+    outline: none;
+}
+.cs-tran-field > input:focus {
+    border-color: #38bdf8;
+}
+.cs-tran-unit {
+    color: #64748b;
+    font-size: 0.72rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.cs-tran-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.4);
+    cursor: pointer;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    user-select: none;
+}
+.cs-tran-live input {
+    accent-color: #22c55e;
+}
+.cs-tran-live.is-on {
+    border-color: rgba(34, 197, 94, 0.55);
+    background: rgba(34, 197, 94, 0.1);
+    color: #86efac;
+}
+.cs-tran-hint {
+    color: #64748b;
+    font-size: 0.74rem;
+}
+.cs-tran-hint code {
+    background: rgba(148, 163, 184, 0.12);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin: 0 2px;
+}
+html[data-theme="light"] .cs-subbar {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+    color: #334155;
+}
+html[data-theme="light"] .cs-tran-label { color: #2563eb; }
+html[data-theme="light"] .cs-tran-field > input {
+    background: #ffffff;
+    border-color: #cbd5e1;
+    color: #0f172a;
+}
+html[data-theme="light"] .cs-tran-field > input:focus { border-color: #2563eb; }
+html[data-theme="light"] .cs-tran-unit { color: #94a3b8; }
+html[data-theme="light"] .cs-tran-live {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #334155;
+}
+html[data-theme="light"] .cs-tran-live.is-on {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #166534;
+}
+html[data-theme="light"] .cs-tran-hint code {
+    background: #e2e8f0;
 }
