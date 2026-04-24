@@ -44,6 +44,11 @@ import PropertyPopup from './circuit/PropertyPopup.jsx';
 import ScopeModal from './circuit/ScopeModal.jsx';
 import ProjectManager from './circuit/ProjectManager.jsx';
 import { validateSchematic } from '../circuit/validate.js';
+import {
+    mergeDcConnectivityIssues,
+    mergeSolverDiagnostic,
+    diagnoseSolverRunFailure,
+} from '../circuit/dcDiagnostics.js';
 import Inspector from './circuit/Inspector.jsx';
 import {
     loadInitialProject, saveProject, uniqueName,
@@ -201,6 +206,8 @@ function CircuitStudioPage() {
     });
     const [runResult, setRunResult] = useState(null);
     const [runError, setRunError] = useState('');
+    /** Pins / issues merged into Canvas after a failed Run (singular matrix, etc.). */
+    const [solverRunDiagnostic, setSolverRunDiagnostic] = useState(null);
     const [running, setRunning] = useState(false);
     const [tourOpen, setTourOpen] = useState(false);
     const [tourStep, setTourStep] = useState(0);
@@ -287,9 +294,24 @@ function CircuitStudioPage() {
     // Design-rule check layered on top of resolvedNets. Feeds the canvas
     // (visual markers) and the results drawer (textual summary).
     const validation = useMemo(() => {
-        try { return validateSchematic(doc, resolvedNets); }
+        try {
+            const base = validateSchematic(doc, resolvedNets);
+            if (parsed?.errors?.length === 0 && parsed?.elements?.length && resolvedNets) {
+                return mergeDcConnectivityIssues(base, parsed, doc, resolvedNets);
+            }
+            return base;
+        }
         catch { return null; }
-    }, [doc, resolvedNets]);
+    }, [doc, resolvedNets, parsed]);
+
+    const canvasValidation = useMemo(
+        () => mergeSolverDiagnostic(validation, solverRunDiagnostic),
+        [validation, solverRunDiagnostic],
+    );
+
+    useEffect(() => {
+        setSolverRunDiagnostic(null);
+    }, [doc]);
 
     // Imperative helper passed to Canvas/Inspector — takes a function
     // (mutator) and applies it to a clone of the current doc.
@@ -595,6 +617,7 @@ function CircuitStudioPage() {
         }
         setRunning(true);
         setRunError('');
+        setSolverRunDiagnostic(null);
         setLiveStream(null);
         // Probe auto-select lives in the runResult useEffect so it
         // composes cleanly with the demo-suggested-signal logic there.
@@ -689,8 +712,24 @@ function CircuitStudioPage() {
                     setRunResult(dcResult);
                 }
             } catch (e) {
-                setRunError(e?.message || String(e));
+                const raw = e?.message || String(e);
+                setRunError(raw);
                 setRunResult(null);
+                try {
+                    if (parsed && resolvedNets && doc) {
+                        const ctxDiag = buildContext(parsed);
+                        const d = diagnoseSolverRunFailure(e, ctxDiag, parsed, doc, resolvedNets);
+                        if ((d.pinKeys?.size || 0) > 0 || (d.issues?.length || 0) > 0) {
+                            setSolverRunDiagnostic(d);
+                        } else {
+                            setSolverRunDiagnostic(null);
+                        }
+                    } else {
+                        setSolverRunDiagnostic(null);
+                    }
+                } catch {
+                    setSolverRunDiagnostic(null);
+                }
             } finally {
                 setRunning(false);
             }
@@ -1096,7 +1135,7 @@ function CircuitStudioPage() {
                         onCommand={handleCommand}
                         onDocChange={mutateDoc}
                         resolvedNets={resolvedNets}
-                        validation={validation}
+                        validation={canvasValidation}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
                         onEditComponent={setEditPopup}
@@ -1255,7 +1294,7 @@ function CircuitStudioPage() {
                                     mutateDoc((d) => removeComponent(d, selectedComp.id));
                                     setSelection(null);
                                 }}
-                                netWarnings={buildNetWarnings(resolvedNets, doc, validation)}
+                                netWarnings={buildNetWarnings(resolvedNets, doc, canvasValidation)}
                                 analysisPane={tourOpen && activeTour ? (
                                     <div className="cs-inspector-tour">
                                         <div className="cs-inspector-title">

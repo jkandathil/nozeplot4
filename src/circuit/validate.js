@@ -22,6 +22,12 @@
  *     same reference designator. Simulation still runs but stepping /
  *     probing gets ambiguous.
  *
+ * CircuitStudioPage may merge additional rows from dcDiagnostics.js:
+ *   • dc-disconnected-node    (error) — SPICE node has no DC path to
+ *     ground when capacitors are opens and I-sources don't short pins.
+ *   • solver-singular-matrix / solver-singular-branch (error) — pinned
+ *     after a failed Run so the canvas can highlight implicated nets.
+ *
  * The returned object also exposes ready-to-consume Sets / arrays so the
  * Canvas doesn't have to re-scan the issue list to decide how to render
  * each element.
