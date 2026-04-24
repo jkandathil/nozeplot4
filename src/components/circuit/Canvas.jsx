@@ -7,7 +7,7 @@ import { SYMBOLS } from '../../circuit/symbols.js';
 import {
     GRID, snap, componentPins,
     addWirePath, removeComponent, rotateComponent,
-    translateComponent, translateWire,
+    translateComponent, translateWire, translateGroup, findConnectedGroup,
     addLabel, removeWire,
 } from '../../circuit/schematicDoc.js';
 import { renderShape } from './renderShape.jsx';
@@ -205,10 +205,12 @@ export default function Canvas({
         const hit = componentAt(world);
         if (hit) {
             onSelect({ kind: 'component', id: hit.id });
+            const group = buildDragGroup(doc, { kind: 'component', id: hit.id }, ev);
             setDragState({
                 kind: 'drag-comp',
                 id: hit.id,
                 startWorld: world,
+                group,
             });
             setDragDelta({ dx: 0, dy: 0 });
             return;
@@ -216,10 +218,12 @@ export default function Canvas({
         const wireHit = wireAt(world);
         if (wireHit) {
             onSelect({ kind: 'wire', id: wireHit.id });
+            const group = buildDragGroup(doc, { kind: 'wire', id: wireHit.id }, ev);
             setDragState({
                 kind: 'drag-wire',
                 id: wireHit.id,
                 startWorld: world,
+                group,
             });
             setDragDelta({ dx: 0, dy: 0 });
             return;
@@ -254,18 +258,37 @@ export default function Canvas({
     const onPointerUp = (ev) => {
         try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
         // Commit drags — one history entry per drag, no matter how far
-        // the pointer travelled.
+        // the pointer travelled. When a connected group was captured at
+        // drag-start, every member moves by the same delta so nothing
+        // detaches (OrCAD / KiCad style). If the user held Ctrl/Cmd the
+        // group collapses to just the seed element and we fall back to
+        // the legacy single-element translate helpers, which preserve
+        // the "smart label" behaviour for components.
         if (dragState?.kind === 'drag-comp' && dragDelta) {
             const { dx, dy } = dragDelta;
             if (dx !== 0 || dy !== 0) {
-                const id = dragState.id;
-                onDocChange((d) => { translateComponent(d, id, dx, dy); });
+                const { id, group } = dragState;
+                const groupSize = group
+                    ? group.componentIds.size + group.wireIds.size + group.labelIds.size
+                    : 0;
+                if (group && groupSize > 1) {
+                    onDocChange((d) => { translateGroup(d, group, dx, dy); });
+                } else {
+                    onDocChange((d) => { translateComponent(d, id, dx, dy); });
+                }
             }
         } else if (dragState?.kind === 'drag-wire' && dragDelta) {
             const { dx, dy } = dragDelta;
             if (dx !== 0 || dy !== 0) {
-                const id = dragState.id;
-                onDocChange((d) => { translateWire(d, id, dx, dy); });
+                const { id, group } = dragState;
+                const groupSize = group
+                    ? group.componentIds.size + group.wireIds.size + group.labelIds.size
+                    : 0;
+                if (group && groupSize > 1) {
+                    onDocChange((d) => { translateGroup(d, group, dx, dy); });
+                } else {
+                    onDocChange((d) => { translateWire(d, id, dx, dy); });
+                }
             }
         }
         setDragState(null);
@@ -468,7 +491,7 @@ export default function Canvas({
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
-                    {tool === 'select' && (selectedId ? 'Drag to move. R to rotate. Del to delete.' : 'Drag parts from the palette. Click + drag a component or wire on the canvas to move it.')}
+                    {tool === 'select' && (selectedId ? 'Drag to move connected group. Hold Ctrl to move just this one. R rotate · Del delete.' : 'Drag parts from the palette. Drag a component or wire to move everything wired to it (Ctrl = just this one).')}
                     {tool === 'pan' && 'Drag to pan. Scroll wheel to zoom (Shift = finer).'}
                 </div>
             </div>
@@ -492,7 +515,11 @@ export default function Canvas({
                     {/* Wires */}
                     {doc.wires.map((w) => {
                         const selected = selectedId?.kind === 'wire' && selectedId.id === w.id;
-                        const dragging = dragState?.kind === 'drag-wire' && dragState.id === w.id && dragDelta;
+                        // A wire is "dragging" if it's inside the current
+                        // drag group — so group-mates stretch along with
+                        // the seed element and nothing detaches.
+                        const inGroup = !!(dragDelta && dragState?.group?.wireIds?.has(w.id));
+                        const dragging = inGroup;
                         const flagged = flaggedWireIds.has(w.id);
                         const tx = dragging ? dragDelta.dx : 0;
                         const ty = dragging ? dragDelta.dy : 0;
@@ -548,19 +575,25 @@ export default function Canvas({
                     ))}
 
                     {/* Visible net labels */}
-                    {doc.labels.filter((l) => l.visible).map((l) => (
-                        <g key={`lab-${l.id}`} transform={`translate(${l.x}, ${l.y})`}>
-                            <text
-                                x={8} y={-6} fontSize={10}
-                                fill="var(--cs-label)"
-                                fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-                            >{l.name}</text>
-                        </g>
-                    ))}
+                    {doc.labels.filter((l) => l.visible).map((l) => {
+                        const inGroup = !!(dragDelta && dragState?.group?.labelIds?.has(l.id));
+                        const tx = inGroup ? dragDelta.dx : 0;
+                        const ty = inGroup ? dragDelta.dy : 0;
+                        return (
+                            <g key={`lab-${l.id}`} transform={`translate(${l.x + tx}, ${l.y + ty})`} opacity={inGroup ? 0.85 : 1}>
+                                <text
+                                    x={8} y={-6} fontSize={10}
+                                    fill="var(--cs-label)"
+                                    fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                                >{l.name}</text>
+                            </g>
+                        );
+                    })}
 
                     {/* Components */}
                     {doc.components.map((c) => {
-                        const dragging = dragState?.kind === 'drag-comp' && dragState.id === c.id && dragDelta;
+                        const inGroup = !!(dragDelta && dragState?.group?.componentIds?.has(c.id));
+                        const dragging = inGroup;
                         return (
                             <CanvasComponent
                                 key={`comp-${c.id}`}
@@ -774,6 +807,35 @@ function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0,
  * lines up flush against the correct face of the symbol (start / middle /
  * end ≈ left / centered / right of the anchor point).
  */
+/**
+ * Resolve which elements should move together when the user starts a
+ * drag. By default every electrically-connected element travels in
+ * lock-step (OrCAD-style rubber band), so pulling on a wire also
+ * pulls every pin wired to it — nothing detaches.
+ *
+ * Holding Ctrl (or Cmd on macOS) is the documented escape hatch: it
+ * collapses the group to just the seed so the user can deliberately
+ * tear one element out of a connected network.
+ */
+function buildDragGroup(doc, seed, ev) {
+    if (ev && (ev.ctrlKey || ev.metaKey)) {
+        return {
+            componentIds: new Set(seed.kind === 'component' ? [seed.id] : []),
+            wireIds:      new Set(seed.kind === 'wire'      ? [seed.id] : []),
+            labelIds:     new Set(seed.kind === 'label'     ? [seed.id] : []),
+        };
+    }
+    try {
+        return findConnectedGroup(doc, seed);
+    } catch {
+        return {
+            componentIds: new Set(seed.kind === 'component' ? [seed.id] : []),
+            wireIds:      new Set(seed.kind === 'wire'      ? [seed.id] : []),
+            labelIds:     new Set(seed.kind === 'label'     ? [seed.id] : []),
+        };
+    }
+}
+
 function pickRefLabelPosition(sym, rot = 0) {
     const w = sym.width, h = sym.height;
     // Local-frame offset from the symbol's center. For tall symbols we place

@@ -264,6 +264,208 @@ export function translateWire(doc, wireId, dx, dy) {
     return true;
 }
 
+/* ------------------------------------------------------------------ */
+/* Group drag (OrCAD / KiCad style rubber-band)                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Find every element electrically connected to `seed` so the caller
+ * can move them as one rigid block. This preserves connectivity when
+ * the user drags anything that's already wired into a network — the
+ * behaviour people expect from OrCAD / Altium / KiCad.
+ *
+ * Connectivity is derived geometrically (and by label-name), so the
+ * result stays correct regardless of whether the doc came from an
+ * imported netlist or was drawn from scratch:
+ *
+ *   • Two elements at the same pixel coord are in the same group.
+ *   • A wire's vertices are all in the same group (rubber band).
+ *   • A pin mid-segment on a wire joins that wire's group.
+ *   • Labels with the same name are in the same group.
+ *
+ * Returns `{ componentIds, wireIds, labelIds }` as Sets. The seed
+ * element is always included. GND symbols are excluded unless the
+ * seed itself is a GND — dragging a wire shouldn't uproot the ground
+ * symbol from the whole schematic.
+ *
+ *   seed = { kind: 'component' | 'wire' | 'label', id: string }
+ */
+export function findConnectedGroup(doc, seed) {
+    const componentIds = new Set();
+    const wireIds = new Set();
+    const labelIds = new Set();
+    if (!seed) return { componentIds, wireIds, labelIds };
+
+    // --- 1. Build a union-find over every "vertex" in the schematic.
+    // Each vertex records where it came from so we can walk back from
+    // the union-find roots to component / wire / label IDs.
+    const vertices = [];
+    for (const comp of doc.components) {
+        for (const pin of componentPins(comp)) {
+            vertices.push({ kind: 'pin', x: pin.x, y: pin.y, compId: comp.id });
+        }
+    }
+    for (const wire of doc.wires) {
+        for (const [x, y] of wire.points) {
+            vertices.push({ kind: 'wire', x, y, wireId: wire.id });
+        }
+    }
+    for (const lab of doc.labels) {
+        vertices.push({ kind: 'label', x: lab.x, y: lab.y, labelId: lab.id, name: lab.name });
+    }
+
+    const p = ufMake(vertices.length);
+
+    // Coord-share: any two vertices at the same (x, y) are connected.
+    const byCoord = new Map();
+    for (let i = 0; i < vertices.length; i++) {
+        const k = coordKey(vertices[i].x, vertices[i].y);
+        if (byCoord.has(k)) ufUnion(p, i, byCoord.get(k));
+        else byCoord.set(k, i);
+    }
+
+    // Wire polylines: all vertices of the same wire share a net.
+    const firstIdxByWire = new Map();
+    for (let i = 0; i < vertices.length; i++) {
+        const v = vertices[i];
+        if (v.kind !== 'wire') continue;
+        if (!firstIdxByWire.has(v.wireId)) { firstIdxByWire.set(v.wireId, i); continue; }
+        ufUnion(p, i, firstIdxByWire.get(v.wireId));
+    }
+
+    // Pins crossed by a wire mid-segment count as T-junction connections.
+    for (const wire of doc.wires) {
+        const pts = wire.points;
+        for (let s = 1; s < pts.length; s++) {
+            const [x1, y1] = pts[s - 1];
+            const [x2, y2] = pts[s];
+            const horizontal = y1 === y2;
+            const vertical = x1 === x2;
+            if (!horizontal && !vertical) continue;
+            for (let i = 0; i < vertices.length; i++) {
+                const v = vertices[i];
+                if (v.kind !== 'pin') continue;
+                const onSeg = (horizontal && v.y === y1 && v.x > Math.min(x1, x2) && v.x < Math.max(x1, x2))
+                           || (vertical && v.x === x1 && v.y > Math.min(y1, y2) && v.y < Math.max(y1, y2));
+                if (!onSeg) continue;
+                const wireIdx = firstIdxByWire.get(wire.id);
+                if (wireIdx != null) ufUnion(p, i, wireIdx);
+            }
+        }
+    }
+
+    // Labels with identical names merge (authoritative in imported docs).
+    const nameToRep = new Map();
+    for (let i = 0; i < vertices.length; i++) {
+        const v = vertices[i];
+        if (v.kind !== 'label') continue;
+        if (nameToRep.has(v.name)) ufUnion(p, i, nameToRep.get(v.name));
+        else nameToRep.set(v.name, i);
+    }
+
+    // --- 2. Locate the seed vertices and find their union root.
+    const seedRoots = new Set();
+    for (let i = 0; i < vertices.length; i++) {
+        const v = vertices[i];
+        if (seed.kind === 'component' && v.kind === 'pin' && v.compId === seed.id) seedRoots.add(ufFind(p, i));
+        else if (seed.kind === 'wire' && v.kind === 'wire' && v.wireId === seed.id) seedRoots.add(ufFind(p, i));
+        else if (seed.kind === 'label' && v.kind === 'label' && v.labelId === seed.id) seedRoots.add(ufFind(p, i));
+    }
+    // Pin-less seed (e.g. GND symbol with a single "pin" that lives at
+    // the component centre): fall back to explicit containment.
+    if (seed.kind === 'component' && seedRoots.size === 0) componentIds.add(seed.id);
+    if (seed.kind === 'wire' && seedRoots.size === 0) wireIds.add(seed.id);
+    if (seed.kind === 'label' && seedRoots.size === 0) labelIds.add(seed.id);
+
+    // --- 2b. Transitive closure across components.
+    // Union-find only connects things that share a coordinate, so
+    // seedRoots so far covers exactly the *net* the seed sits on.
+    // But the user is dragging a circuit, not a net: dragging R
+    // should bring along the capacitor and source wired into R, and
+    // everything wired into those in turn. We treat each non-GND
+    // component as a "bridge" that, once its pins are in the group,
+    // pulls its remaining pins (and their nets) into the group too.
+    // GND is excluded from bridging so ground stays anchored.
+    const pinVerticesByComp = new Map();
+    for (let i = 0; i < vertices.length; i++) {
+        const v = vertices[i];
+        if (v.kind !== 'pin') continue;
+        if (!pinVerticesByComp.has(v.compId)) pinVerticesByComp.set(v.compId, []);
+        pinVerticesByComp.get(v.compId).push(i);
+    }
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const comp of doc.components) {
+            if (comp.elementType === 'GND') continue;
+            const indices = pinVerticesByComp.get(comp.id);
+            if (!indices || indices.length === 0) continue;
+            const roots = indices.map((i) => ufFind(p, i));
+            const anyIn = roots.some((r) => seedRoots.has(r));
+            if (!anyIn) continue;
+            for (const r of roots) {
+                if (!seedRoots.has(r)) { seedRoots.add(r); changed = true; }
+            }
+        }
+    }
+
+    // --- 3. Collect every element whose vertices share a seed root.
+    for (let i = 0; i < vertices.length; i++) {
+        if (!seedRoots.has(ufFind(p, i))) continue;
+        const v = vertices[i];
+        if (v.kind === 'pin') componentIds.add(v.compId);
+        else if (v.kind === 'wire') wireIds.add(v.wireId);
+        else if (v.kind === 'label') labelIds.add(v.labelId);
+    }
+
+    // GND symbols that are electrically part of the dragged circuit
+    // come along automatically (their pin coord is in seedRoots via the
+    // phase-1 coord-share). GNDs in unrelated sub-circuits never union
+    // with us, so they stay put. We deliberately don't treat GND as a
+    // bridge during the transitive closure (Phase 2b) so that a huge
+    // schematic sharing ground across many sub-circuits doesn't collapse
+    // into one giant drag group.
+
+    return { componentIds, wireIds, labelIds };
+}
+
+/**
+ * Translate every element in `group` (result of findConnectedGroup)
+ * by (dx, dy). Deltas are snapped to the grid so the final positions
+ * land on grid cells. Returns `true` if anything moved.
+ *
+ * We translate components, wires, and labels **directly** (bypassing
+ * translateComponent's per-part label book-keeping) because we've
+ * already decided every group member moves in lock-step; the ordinary
+ * "leave the label behind if another pin shares the coord" rule
+ * doesn't apply when both pins are in the group.
+ */
+export function translateGroup(doc, group, dx, dy) {
+    const gdx = snap(dx);
+    const gdy = snap(dy);
+    if (gdx === 0 && gdy === 0) return false;
+    if (!group) return false;
+
+    const compIds = group.componentIds || new Set();
+    const wireIds = group.wireIds || new Set();
+    const labelIds = group.labelIds || new Set();
+
+    for (const comp of doc.components) {
+        if (!compIds.has(comp.id)) continue;
+        comp.pos = { x: comp.pos.x + gdx, y: comp.pos.y + gdy };
+    }
+    for (const wire of doc.wires) {
+        if (!wireIds.has(wire.id)) continue;
+        wire.points = wire.points.map(([x, y]) => [x + gdx, y + gdy]);
+    }
+    for (const lab of doc.labels) {
+        if (!labelIds.has(lab.id)) continue;
+        lab.x += gdx;
+        lab.y += gdy;
+    }
+    return true;
+}
+
 /** Two-segment manhattan route: horizontal-then-vertical by default. */
 export function manhattanPath(x1, y1, x2, y2, bendFirst = 'H') {
     if (x1 === x2 || y1 === y2) return [[x1, y1], [x2, y2]];
