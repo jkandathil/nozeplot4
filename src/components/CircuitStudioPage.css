@@ -1370,3 +1370,90 @@ html[data-theme="light"] .cs-inspector-preview {
     background: #f8fafc;
     border-color: #e2e8f0;
 }
+
+/* ---- double-click property popup ---- */
+.cs-prop-popup {
+    position: fixed;
+    z-index: 90;
+    width: 280px;
+    background: var(--cs-panel, #0f172a);
+    color: var(--cs-text, #e2e8f0);
+    border: 1px solid var(--cs-border, #334155);
+    border-radius: 10px;
+    padding: 12px 12px 10px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    font-size: 0.82rem;
+    animation: cs-prop-pop-in 110ms ease-out;
+}
+@keyframes cs-prop-pop-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.cs-prop-popup-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 8px;
+}
+.cs-prop-popup-title {
+    font-weight: 600; font-size: 0.86rem;
+    color: var(--cs-text, #e2e8f0);
+}
+.cs-prop-popup-close {
+    background: transparent; border: none; color: var(--cs-text-dim, #94a3b8);
+    cursor: pointer; padding: 2px; border-radius: 4px;
+    display: inline-flex; align-items: center;
+}
+.cs-prop-popup-close:hover { background: var(--cs-panel-hover, #1e293b); color: inherit; }
+.cs-prop-popup-field {
+    display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;
+}
+.cs-prop-popup-field > span {
+    font-size: 0.72rem; color: var(--cs-text-dim, #94a3b8); letter-spacing: 0.02em;
+}
+.cs-prop-popup-field > input,
+.cs-prop-popup-field > select {
+    background: var(--cs-input-bg, #0b1220);
+    color: inherit;
+    border: 1px solid var(--cs-border, #334155);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    outline: none;
+}
+.cs-prop-popup-field > input:focus,
+.cs-prop-popup-field > select:focus {
+    border-color: var(--cs-accent, #38bdf8);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+}
+.cs-prop-popup-hint {
+    font-size: 0.74rem; color: var(--cs-text-dim, #94a3b8);
+    padding: 6px 0;
+}
+.cs-prop-popup-actions {
+    display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px;
+}
+.cs-prop-popup-btn {
+    border: 1px solid var(--cs-border, #334155);
+    background: var(--cs-panel-hover, #1e293b);
+    color: inherit;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    font: inherit; font-size: 0.78rem;
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.cs-prop-popup-btn:hover { filter: brightness(1.12); }
+.cs-prop-popup-ok {
+    background: var(--cs-accent, #38bdf8); color: #0f172a; border-color: transparent;
+    font-weight: 600;
+}
+html[data-theme="light"] .cs-prop-popup {
+    background: #ffffff; color: #0f172a;
+    border-color: #e2e8f0;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+html[data-theme="light"] .cs-prop-popup-field > input,
+html[data-theme="light"] .cs-prop-popup-field > select {
+    background: #f8fafc; border-color: #e2e8f0; color: #0f172a;
+}
+html[data-theme="light"] .cs-prop-popup-btn {
+    background: #f1f5f9; border-color: #e2e8f0; color: #0f172a;
+}

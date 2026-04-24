@@ -290,6 +290,46 @@ function mosSymbol(variant) {
 const M_NMOS_SYMBOL = mosSymbol('NMOS');
 const M_PMOS_SYMBOL = mosSymbol('PMOS');
 
+// ---------- Probes --------------------------------------------------
+//
+// Voltage probe — a single-pin "test clip" style symbol. Electrically
+// it's a no-op (not emitted to SPICE), but it serves as a visual
+// anchor that the post-run plumbing uses to auto-select V(node) for
+// its attached net on the plot.
+const VP_SYMBOL = {
+    width: 40, height: 40,
+    pins: [{ id: 'tip', x: 0, y: 20, side: 'B' }],
+    shapes: [
+        { kind: 'line', x1: 0, y1: 20, x2: 0, y2: 6 },
+        { kind: 'circle', cx: 0, cy: 0, r: 8, fill: 'none' },
+        { kind: 'text', x: 0, y: -12, text: 'V', fontSize: 10, anchor: 'middle', fontWeight: 700 },
+    ],
+    labelRef: { x: 12, y: 0, anchor: 'start', baseline: 'middle' },
+    labelVal: { x: 12, y: 12, anchor: 'start', baseline: 'middle' },
+};
+
+// Current probe — an inline ammeter symbol (two pins, bullet body with
+// an "A" glyph). Emitted to SPICE as a zero-volt voltage source so the
+// solver automatically tracks its branch current, which shows up on
+// the plot as I(Vprobe_<ref>).
+const IP_SYMBOL = {
+    // Pins at ±40 so the symbol sits on the same 20-px grid as the
+    // two-terminal passives — drop-in-inline-compatible with R / C / L
+    // without forcing the user to re-route the wire.
+    width: 80, height: 30,
+    pins: [
+        { id: 'n1', x: -40, y: 0, side: 'L' },
+        { id: 'n2', x:  40, y: 0, side: 'R' },
+    ],
+    shapes: [
+        ...leads(40, 14),
+        { kind: 'circle', cx: 0, cy: 0, r: 14, fill: 'none' },
+        { kind: 'text', x: 0, y: 1, text: 'A', fontSize: 11, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+    ],
+    labelRef: { x: 0, y: -20, anchor: 'middle', baseline: 'baseline' },
+    labelVal: { x: 0, y:  24, anchor: 'middle', baseline: 'hanging'  },
+};
+
 // ---------- Registry ----------------------------------------------
 
 export const SYMBOLS = {
@@ -300,6 +340,7 @@ export const SYMBOLS = {
     Q_NPN: Q_NPN_SYMBOL, Q_PNP: Q_PNP_SYMBOL,
     M:     M_NMOS_SYMBOL,
     M_NMOS: M_NMOS_SYMBOL, M_PMOS: M_PMOS_SYMBOL,
+    VP: VP_SYMBOL, IP: IP_SYMBOL,
 };
 
 /**

@@ -163,6 +163,12 @@ export function buildContext(parsed) {
         }
     }
     const size = interior + extra;
+    // Flat list of branch-unknown elements in the same order they were
+    // assigned branchIdx above. Consumers (e.g. buildStepResult) use
+    // this to produce named I(<ref>) signals without rescanning.
+    const branchElems = elems
+        .filter((e) => e.type === 'V' || e.type === 'L' || e.type === 'E' || e.type === 'O')
+        .map((e) => ({ name: e.name, type: e.type }));
     return {
         elems,
         models: parsed.models,
@@ -170,6 +176,7 @@ export function buildContext(parsed) {
         interior,
         size,
         nodeNames: parsed.nodeNames,
+        branchElems,
     };
 }
 
@@ -1222,6 +1229,9 @@ export function solveDCSweep(ctx, sweepDirective) {
     // nodeV[i] is a length-K array holding V(node_{i+1}) across the sweep.
     const nodeV = new Array(nNodes - 1);
     for (let i = 0; i < nNodes - 1; i++) nodeV[i] = new Array(values.length);
+    const nBranches = ctx.size - ctx.interior;
+    const branchI = new Array(nBranches);
+    for (let i = 0; i < nBranches; i++) branchI[i] = new Array(values.length);
     const converged = new Array(values.length);
 
     // Capture the source's original value so we can restore it.
@@ -1242,6 +1252,7 @@ export function solveDCSweep(ctx, sweepDirective) {
         const dc = solveDC(ctx, prevSol ? { initial: prevSol } : {});
         converged[k] = dc.converged;
         for (let i = 0; i < nNodes - 1; i++) nodeV[i][k] = dc.x[i];
+        for (let i = 0; i < nBranches; i++) branchI[i][k] = dc.x[ctx.interior + i];
         prevSol = dc.x;
     }
 
@@ -1251,6 +1262,7 @@ export function solveDCSweep(ctx, sweepDirective) {
         src,
         sweepValues: values,
         nodeV,
+        branchI,
         converged,
     };
 }

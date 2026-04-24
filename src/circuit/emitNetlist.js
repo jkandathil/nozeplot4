@@ -104,6 +104,9 @@ export function emitNetlist(doc, opts = {}) {
 
     for (const comp of doc.components) {
         if (comp.elementType === 'GND') continue; // just a marker
+        // Voltage probes are UI-only — they tag a node for the plot
+        // auto-selector but contribute nothing to the netlist.
+        if (comp.elementType === 'VP') continue;
 
         const ref = comp.ref;
         const pinOrder = pinOrderFor(comp.elementType);
@@ -173,6 +176,18 @@ export function emitNetlist(doc, opts = {}) {
                 lines.push(`${ref} ${nodes[0]} ${nodes[1]} ${nodes[2]} ${nodes[3]} ${formatValue(comp.value)}`);
                 break;
             }
+            case 'IP': {
+                // Current probe → zero-volt voltage source. The solver
+                // adds a branch for any V-type element so its current
+                // is automatically tracked and surfaces later as
+                // I(<probe-ref>) on the plot. Prefix with "V" so the
+                // parser sees it as a voltage source even if the user
+                // chose a custom IP ref; the leading letter is what
+                // netlist.js dispatches on.
+                const spiceName = ref.startsWith('V') ? ref : `V${ref}`;
+                lines.push(`${spiceName} ${nodes[0]} ${nodes[1]} DC 0`);
+                break;
+            }
             default:
                 warnings.push(`${ref}: unknown element type ${comp.elementType}`);
         }
@@ -235,6 +250,8 @@ function pinOrderFor(elementType) {
         case 'M': return ['nd', 'ng', 'ns', 'nbulk']; // drain, gate, source, body
         case 'O': return ['inp', 'inn', 'out'];
         case 'E': case 'G': return ['n1', 'n2', 'nc1', 'nc2'];
+        case 'IP': return ['n1', 'n2'];
+        case 'VP': return ['tip'];
         default: return [];
     }
 }

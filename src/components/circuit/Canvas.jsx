@@ -45,6 +45,7 @@ export default function Canvas({
     validation,
     onUndo,
     onRedo,
+    onEditComponent,
     fitNonce = 0,
 }) {
     const svgRef = useRef(null);
@@ -491,7 +492,7 @@ export default function Canvas({
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
-                    {tool === 'select' && (selectedId ? 'Drag to move connected group. Hold Ctrl to move just this one. R rotate · Del delete.' : 'Drag parts from the palette. Drag a component or wire to move everything wired to it (Ctrl = just this one).')}
+                    {tool === 'select' && (selectedId ? 'Drag to move connected group. Hold Ctrl to move just this one. Double-click to edit properties. R rotate · Del delete.' : 'Drag parts from the palette. Double-click any component for a quick property edit. Drag to move everything wired to it (Ctrl = just this one).')}
                     {tool === 'pan' && 'Drag to pan. Scroll wheel to zoom (Shift = finer).'}
                 </div>
             </div>
@@ -503,6 +504,21 @@ export default function Canvas({
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
+                onDoubleClick={(ev) => {
+                    if (!onEditComponent) return;
+                    const world = clientToWorld(ev);
+                    const hit = componentAt(world);
+                    if (!hit) return;
+                    // Skip fixed parts with nothing meaningful to edit.
+                    if (hit.elementType === 'GND' || hit.elementType === 'VP') return;
+                    onSelect({ kind: 'component', id: hit.id });
+                    onEditComponent({
+                        compId: hit.id,
+                        clientX: ev.clientX,
+                        clientY: ev.clientY,
+                    });
+                    ev.stopPropagation();
+                }}
             >
                 <defs>
                     <pattern id="cs-grid-minor" width={GRID} height={GRID} patternUnits="userSpaceOnUse" patternTransform={`scale(${zoom}) translate(${pan.x}, ${pan.y})`}>

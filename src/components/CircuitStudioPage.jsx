@@ -39,6 +39,7 @@ import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
 import Palette from './circuit/Palette.jsx';
 import Canvas from './circuit/Canvas.jsx';
+import PropertyPopup from './circuit/PropertyPopup.jsx';
 import { validateSchematic } from '../circuit/validate.js';
 import Inspector from './circuit/Inspector.jsx';
 import './CircuitStudioPage.css';
@@ -92,6 +93,9 @@ function CircuitStudioPage() {
     });
     const doc = docState.present;
     const [selection, setSelection] = useState(null); // { kind: 'component'|'wire', id }
+    // Inline property popup state: target component + screen-space anchor
+    // where the card renders. `null` when the popup is closed.
+    const [editPopup, setEditPopup] = useState(null); // { compId, clientX, clientY }
     const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
     const [showResults, setShowResults] = useState(true);
     const [netlistDraft, setNetlistDraft] = useState(''); // user-edited raw text when drawer open
@@ -343,6 +347,30 @@ function CircuitStudioPage() {
         }
         setRunning(true);
         setRunError('');
+
+        // Derive the "must-plot" signals from every probe in the doc
+        // so the plot auto-populates without the user having to tick
+        // chips by hand. Voltage probes resolve their tip's pin → net
+        // → node name (same lookup the netlist emitter uses); current
+        // probes expose I(<ref>), matching the branchName rule in
+        // buildStepResult.
+        const probeSignals = [];
+        if (doc && resolvedNets) {
+            for (const c of doc.components) {
+                if (c.elementType === 'VP') {
+                    const nodeId = resolvedNets.pinNode(c, 'tip');
+                    if (nodeId != null) {
+                        const name = nodeId === 0
+                            ? '0'
+                            : (parsed.nodeNames?.[nodeId] || `n${nodeId}`);
+                        // Skip ground — plotting a flat zero is useless.
+                        if (nodeId !== 0) probeSignals.push(`V(${name})`);
+                    }
+                } else if (c.elementType === 'IP') {
+                    probeSignals.push(`I(${c.ref})`);
+                }
+            }
+        }
         // Defer to next tick so the UI can update to "Running…" state.
         setTimeout(() => {
             try {
@@ -372,20 +400,31 @@ function CircuitStudioPage() {
                         tstep: 1e-6, tstop: 1e-3, tstart: 0,
                     };
                     const runs = runWithStep(ctx, stepDir, { tran: dir });
-                    setRunResult(buildStepResult('tran', runs, parsed, stepDir));
+                    setRunResult(buildStepResult('tran', runs, parsed, stepDir, ctx));
                 } else if (analysis === 'ac') {
                     const dir = parsed.directives.find((d) => d.kind === 'ac') || {
                         mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
                     };
                     const runs = runWithStep(ctx, stepDir, { ac: dir });
-                    setRunResult(buildStepResult('ac', runs, parsed, stepDir));
+                    setRunResult(buildStepResult('ac', runs, parsed, stepDir, ctx));
                 } else if (analysis === 'dc') {
                     const dir = parsed.directives.find((d) => d.kind === 'dc');
                     if (!dir) {
                         throw new Error('DC sweep needs a .dc directive — e.g. `.dc Vin 0 3.3 0.01`.');
                     }
                     const runs = runWithStep(ctx, stepDir, { dc: dir });
-                    setRunResult(buildStepResult('dc', runs, parsed, stepDir));
+                    setRunResult(buildStepResult('dc', runs, parsed, stepDir, ctx));
+                }
+                // If probes are present on the schematic, auto-tick
+                // their signals so the user sees something on the plot
+                // as soon as the run finishes. We union with the user's
+                // prior selection so manual choices aren't clobbered.
+                if (probeSignals.length > 0 && analysis !== 'op') {
+                    setSelectedSignals((prev) => {
+                        const set = new Set(prev);
+                        for (const name of probeSignals) set.add(name);
+                        return Array.from(set);
+                    });
                 }
             } catch (e) {
                 setRunError(e?.message || String(e));
@@ -394,7 +433,7 @@ function CircuitStudioPage() {
                 setRunning(false);
             }
         }, 30);
-    }, [parsed, analysis]);
+    }, [parsed, analysis, doc, resolvedNets]);
 
     const copyNetlist = useCallback(() => {
         if (!netlistText) return;
@@ -535,8 +574,24 @@ function CircuitStudioPage() {
                         validation={validation}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
+                        onEditComponent={setEditPopup}
                         fitNonce={fitNonce}
                     />
+
+                    {editPopup && (
+                        <PropertyPopup
+                            comp={doc?.components?.find((c) => c.id === editPopup.compId) || null}
+                            anchor={{ clientX: editPopup.clientX, clientY: editPopup.clientY }}
+                            onClose={() => setEditPopup(null)}
+                            onCommit={(patch) => {
+                                const id = editPopup.compId;
+                                mutateDoc((d) => {
+                                    const c = d.components.find((x) => x.id === id);
+                                    if (c) Object.assign(c, patch);
+                                });
+                            }}
+                        />
+                    )}
 
                     {/* Optional bottom drawer: results + netlist source */}
                     <div className={`cs-drawer${showResults ? ' is-open' : ''}`}>
@@ -1485,12 +1540,24 @@ const SIGNAL_COLORS = [
  *      just sees more signals and renders a family of curves. The
  *      x-axis (t or f) uses the last run, which is always identical
  *      across runs for the same analysis directive. */
-function buildStepResult(kind, runs, parsed, stepDir) {
+function buildStepResult(kind, runs, parsed, stepDir, ctx) {
     if (!runs || runs.length === 0) {
         throw new Error('Run returned no results.');
     }
     const isMulti = runs.length > 1;
     const signals = [];
+    // Branch-unknown elements in the same order the solver indexed
+    // them, so branchI[b] corresponds to branchElems[b]. Used to emit
+    // I(<ref>) signals for every V, L, E, O element — which naturally
+    // covers current probes (they're emitted as 0 V sources).
+    const branchElems = ctx?.branchElems || [];
+    const branchName = (el) => {
+        // Current probes are emitted as "V<ref>" (prefix enforced in
+        // emitNetlist). Strip the leading V so the plot just shows
+        // I(<user ref>), which matches the palette.
+        if (/^VIP\d+/i.test(el.name)) return el.name.slice(1);
+        return el.name;
+    };
 
     if (kind === 'tran') {
         const tRef = runs[0].tran.t;
@@ -1508,6 +1575,18 @@ function buildStepResult(kind, runs, parsed, stepDir) {
                     stepValue: runs[r].stepValue,
                     baseNode: parsed.nodeNames[i] || `n${i}`,
                 });
+            }
+            if (res.branchI) {
+                for (let b = 0; b < branchElems.length && b < res.branchI.length; b++) {
+                    signals.push({
+                        name: `I(${branchName(branchElems[b])})${suffix}`,
+                        kind: 'tran',
+                        t: res.t,
+                        y: res.branchI[b],
+                        stepValue: runs[r].stepValue,
+                        baseBranch: branchName(branchElems[b]),
+                    });
+                }
             }
         }
         return {
@@ -1537,6 +1616,20 @@ function buildStepResult(kind, runs, parsed, stepDir) {
                     baseNode: parsed.nodeNames[i] || `n${i}`,
                 });
             }
+            if (res.branchI) {
+                for (let b = 0; b < branchElems.length && b < res.branchI.length; b++) {
+                    const samples = res.branchI[b];
+                    signals.push({
+                        name: `I(${branchName(branchElems[b])})${suffix}`,
+                        kind: 'ac',
+                        f: res.freqs,
+                        mag: samples.map((s) => Math.hypot(s.re, s.im)),
+                        phase: samples.map((s) => Math.atan2(s.im, s.re) * 180 / Math.PI),
+                        stepValue: runs[r].stepValue,
+                        baseBranch: branchName(branchElems[b]),
+                    });
+                }
+            }
         }
         return {
             kind: 'ac',
@@ -1563,6 +1656,18 @@ function buildStepResult(kind, runs, parsed, stepDir) {
                     stepValue: runs[r].stepValue,
                     baseNode: parsed.nodeNames[i] || `n${i}`,
                 });
+            }
+            if (res.branchI) {
+                for (let b = 0; b < branchElems.length && b < res.branchI.length; b++) {
+                    signals.push({
+                        name: `I(${branchName(branchElems[b])})${suffix}`,
+                        kind: 'dc',
+                        x: res.sweepValues,
+                        y: res.branchI[b],
+                        stepValue: runs[r].stepValue,
+                        baseBranch: branchName(branchElems[b]),
+                    });
+                }
             }
         }
         return {

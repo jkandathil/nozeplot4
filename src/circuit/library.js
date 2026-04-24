@@ -309,6 +309,28 @@ export const LIBRARY = [
         valueUnit: 'A/V',
     },
 
+    // ---------- Probes ----------
+    {
+        id: 'VP',
+        name: 'Voltage probe',
+        short: 'V?',
+        category: 'Probe',
+        description: 'Single-pin probe. Snap onto any wire or pin to auto-plot its node voltage after Run.',
+        elementType: 'VP',
+        symbolKey: 'VP',
+        refPrefix: 'VP',
+    },
+    {
+        id: 'IP',
+        name: 'Current probe',
+        short: 'I?',
+        category: 'Probe',
+        description: 'Inline ammeter. Splice into a wire and Run to plot the branch current through it.',
+        elementType: 'IP',
+        symbolKey: 'IP',
+        refPrefix: 'IP',
+    },
+
     // ---------- Power & ground ----------
     {
         id: 'GND',
