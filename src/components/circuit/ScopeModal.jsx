@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Activity, Maximize2, Minimize2 } from 'lucide-react';
 
 /**
@@ -250,8 +251,20 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         return () => window.removeEventListener('resize', onResize);
     }, []);
 
-    return (
+    // Portal the modal straight into <body> so it escapes the
+    // CircuitStudio's stacking context. `.main-content` uses
+    // `position: relative; z-index: 1`, which creates a new stacking
+    // context — without a portal the modal's z-index:1200 is trapped
+    // inside that context and the app sidebar (z-index:50 in the
+    // parent context) paints on top.
+    if (typeof document === 'undefined') return null;
+    return createPortal(
         <div className={`cs-scope-modal${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true">
+            <div
+                className="cs-scope-backdrop"
+                onClick={onClose}
+                aria-hidden="true"
+            />
             <div className="cs-scope-card">
                 <div className="cs-scope-head">
                     <Activity size={14} />
@@ -294,7 +307,8 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
                     )}
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }
 

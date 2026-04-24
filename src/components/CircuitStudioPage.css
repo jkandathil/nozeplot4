@@ -1465,8 +1465,13 @@ html[data-theme="light"] .cs-inspector-preview {
 /* ---- double-click property popup ---- */
 .cs-prop-popup {
     position: fixed;
-    z-index: 90;
-    width: 280px;
+    /* Portal-mounted to <body> (see PropertyPopup.jsx). 2100 puts it
+       above the scope modal (2000) in case the user opens a popup
+       while a scope is visible. */
+    z-index: 2100;
+    width: 300px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
     background: var(--cs-panel, #0f172a);
     color: var(--cs-text, #e2e8f0);
     border: 1px solid var(--cs-border, #334155);
@@ -1549,17 +1554,71 @@ html[data-theme="light"] .cs-prop-popup-btn {
     background: #f1f5f9; border-color: #e2e8f0; color: #0f172a;
 }
 
+/* Compact two-column layout for multi-field editors (pulse/sin). */
+.cs-prop-popup-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 8px;
+    margin-bottom: 6px;
+}
+.cs-prop-popup-field-compact {
+    margin-bottom: 0;
+    gap: 2px;
+}
+.cs-prop-popup-field-compact > span {
+    font-size: 0.68rem;
+}
+.cs-prop-popup-field-compact > input {
+    padding: 4px 6px;
+    font-size: 0.78rem;
+}
+
+.cs-prop-popup-details {
+    border-top: 1px dashed var(--cs-border, #334155);
+    margin-top: 4px;
+    padding-top: 6px;
+    margin-bottom: 6px;
+}
+.cs-prop-popup-details > summary {
+    cursor: pointer;
+    font-size: 0.75rem;
+    color: var(--cs-text-dim, #94a3b8);
+    padding: 4px 0;
+    list-style: none;
+    user-select: none;
+}
+.cs-prop-popup-details > summary::-webkit-details-marker { display: none; }
+.cs-prop-popup-details[open] > summary {
+    color: var(--cs-text, #e2e8f0);
+    margin-bottom: 4px;
+}
+.cs-prop-popup-details > summary::before {
+    content: '▸'; display: inline-block; margin-right: 6px;
+    transition: transform 120ms ease;
+}
+.cs-prop-popup-details[open] > summary::before { transform: rotate(90deg); }
+
 /* ---------- Oscilloscope modal ---------- */
 .cs-scope-modal {
     position: fixed;
     inset: 0;
-    z-index: 1200;
+    /* Portal-mounted to <body>, so it sits in the root stacking
+       context. 2000 is comfortably above the app sidebar (z-index:50),
+       any page overlays, and the generic .modal-overlay (1500). */
+    z-index: 2000;
     display: flex;
     align-items: center;
     justify-content: center;
+    animation: cs-scope-fade 140ms ease;
+}
+.cs-scope-backdrop {
+    position: absolute;
+    inset: 0;
     background: rgba(2, 6, 15, 0.6);
     backdrop-filter: blur(3px);
-    animation: cs-scope-fade 140ms ease;
+}
+.cs-scope-modal > .cs-scope-card {
+    position: relative;
 }
 @keyframes cs-scope-fade {
     from { opacity: 0; }

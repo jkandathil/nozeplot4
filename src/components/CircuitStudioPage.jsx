@@ -34,7 +34,7 @@ import {
     riseTime, fallTime, settlingTime, overshoot, peakToPeak, steadyStateEst,
     corner3dB, peakGain, unityGainFreq, phaseMargin, sampleAt,
 } from '../circuit/measurements.js';
-import { emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent, removeComponent } from '../circuit/schematicDoc.js';
+import { emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent, removeComponent, componentPins } from '../circuit/schematicDoc.js';
 import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
 import Palette from './circuit/Palette.jsx';
@@ -299,19 +299,30 @@ function CircuitStudioPage() {
         // 1) Probe-driven preferences — derived from the schematic, not
         //    the demo catalog.
         //    VP / SCOPE → V(<tip node label>); IP → I(<ref>).
+        //
+        // We prefer the run-time pinSignalMap (stashed on runResult by
+        // handleRun) over the live resolvedNets: the probe's
+        // electrical attachment is what matters, and that snapshot is
+        // guaranteed to match whatever `signals` actually contains.
         const probeWanted = [];
-        if (doc && resolvedNets) {
+        if (doc) {
+            const pinMap = runResult.pinSignalMap;
             for (const c of doc.components) {
                 if (c.elementType === 'VP' || c.elementType === 'SCOPE') {
-                    const nodeId = resolvedNets.pinNode(c, 'tip');
-                    if (nodeId != null && nodeId !== 0) {
-                        const lab = resolvedNets.nodeLabels?.get(nodeId);
-                        // Mirror emitNetlist's naming rule so the chip
-                        // name matches a signal in `result.signals`.
-                        const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd')
-                            ? lab
-                            : `n${nodeId}`;
-                        probeWanted.push(`V(${label})`);
+                    const fromSnap = pinMap?.get(`${c.id}|tip`);
+                    if (fromSnap) {
+                        probeWanted.push(fromSnap);
+                        continue;
+                    }
+                    if (resolvedNets) {
+                        const nodeId = resolvedNets.pinNode(c, 'tip');
+                        if (nodeId != null && nodeId !== 0) {
+                            const lab = resolvedNets.nodeLabels?.get(nodeId);
+                            const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd')
+                                ? lab
+                                : `n${nodeId}`;
+                            probeWanted.push(`V(${label})`);
+                        }
                     }
                 } else if (c.elementType === 'IP') {
                     probeWanted.push(`I(${c.ref})`);
@@ -450,6 +461,13 @@ function CircuitStudioPage() {
                 const ctx = buildContext(parsed);
                 const stepDir = parsed.directives.find((d) => d.kind === 'step') || null;
 
+                // Snapshot the pin → signal mapping that the run was
+                // actually computed against. We stash this on the
+                // result so scope / probe modals keep working after
+                // the user drags components (which otherwise changes
+                // geometric net numbering and breaks V(n3) lookups).
+                const pinSignalMap = buildPinSignalMap(doc, resolvedNets);
+
                 if (analysis === 'op') {
                     // .step doesn't really make sense for a DC op-point
                     // "plot", so treat op as single-run regardless.
@@ -467,6 +485,7 @@ function CircuitStudioPage() {
                         iters: dc.iters,
                         converged: dc.converged,
                         signals: nodeVals.map((n) => ({ name: `V(${n.name})`, kind: 'op', value: n.value })),
+                        pinSignalMap,
                     });
                 } else if (analysis === 'tran') {
                     const parsedDir = parsed.directives.find((d) => d.kind === 'tran');
@@ -484,6 +503,7 @@ function CircuitStudioPage() {
                     };
                     const runs = runWithStep(ctx, stepDir, { tran: dir });
                     const finalResult = buildStepResult('tran', runs, parsed, stepDir, ctx);
+                    finalResult.pinSignalMap = pinSignalMap;
                     if (liveMode) {
                         // Animate the plot: stream samples into
                         // `liveStream` in chunks, firing rAF between
@@ -502,14 +522,18 @@ function CircuitStudioPage() {
                         mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
                     };
                     const runs = runWithStep(ctx, stepDir, { ac: dir });
-                    setRunResult(buildStepResult('ac', runs, parsed, stepDir, ctx));
+                    const acResult = buildStepResult('ac', runs, parsed, stepDir, ctx);
+                    acResult.pinSignalMap = pinSignalMap;
+                    setRunResult(acResult);
                 } else if (analysis === 'dc') {
                     const dir = parsed.directives.find((d) => d.kind === 'dc');
                     if (!dir) {
                         throw new Error('DC sweep needs a .dc directive — e.g. `.dc Vin 0 3.3 0.01`.');
                     }
                     const runs = runWithStep(ctx, stepDir, { dc: dir });
-                    setRunResult(buildStepResult('dc', runs, parsed, stepDir, ctx));
+                    const dcResult = buildStepResult('dc', runs, parsed, stepDir, ctx);
+                    dcResult.pinSignalMap = pinSignalMap;
+                    setRunResult(dcResult);
                 }
             } catch (e) {
                 setRunError(e?.message || String(e));
@@ -518,7 +542,7 @@ function CircuitStudioPage() {
                 setRunning(false);
             }
         }, 30);
-    }, [parsed, analysis, tranOverride, liveMode]);
+    }, [parsed, analysis, tranOverride, liveMode, doc, resolvedNets]);
 
     const copyNetlist = useCallback(() => {
         if (!netlistText) return;
@@ -742,7 +766,7 @@ function CircuitStudioPage() {
 
                     {scopeModal && (() => {
                         const comp = doc?.components?.find((c) => c.id === scopeModal.compId) || null;
-                        const { signalName, nodeLabel } = scopeSignalFor(comp, resolvedNets);
+                        const { signalName, nodeLabel } = scopeSignalFor(comp, resolvedNets, runResult);
                         const livePartial = (liveStream && signalName)
                             ? {
                                 t: liveStream.t,
@@ -981,13 +1005,66 @@ function streamTranResult(result, setLiveStream, onDone) {
 }
 
 /**
+ * Build a snapshot mapping of `"<compId>|<pinId>"` → `V(<nodeLabel>)`
+ * for every pin in the doc, using whatever net resolution was in force
+ * when the simulation ran. We stash this on the run result so that
+ * subsequent edits (drag, rotate, net re-number) don't break the scope
+ * / probe modal's ability to find its signal — a pin that was attached
+ * to net "n3" at sim time is still attached to the same electrical net,
+ * even if the doc now calls it "n5" after a renumber.
+ */
+function buildPinSignalMap(doc, nets) {
+    const map = new Map();
+    if (!doc || !nets) return map;
+    const labelFor = (nodeId) => {
+        if (nodeId == null || nodeId === 0) return null;
+        const lab = nets.nodeLabels?.get(nodeId);
+        return (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
+    };
+    for (const c of doc.components) {
+        // Skip pure-UI-only parts that don't own any pins we care
+        // about in the signal namespace (SCOPE still goes through —
+        // its `tip` pin is exactly what we look up later).
+        if (c.elementType === 'GND') continue;
+        try {
+            const pins = componentPins(c) || [];
+            for (const p of pins) {
+                const nid = nets.pinNode(c, p.id);
+                const lab = labelFor(nid);
+                if (lab) map.set(`${c.id}|${p.id}`, `V(${lab})`);
+            }
+        } catch { /* tolerate malformed / unregistered parts */ }
+    }
+    return map;
+}
+
+/**
  * Resolve a SCOPE component's tip-pin to a (signalName, nodeLabel)
  * pair the way the plot names it. Mirrors the probe auto-select rule.
+ *
+ * When a `runResult` is supplied, we first consult the pin-signal
+ * snapshot captured at run time. That keeps the modal working after
+ * the user has edited the doc (drags, rotations, net re-number) —
+ * the electrical attachment of the scope's tip pin to a simulated
+ * net is stable even if the doc's auto-numbering has since drifted.
+ *
  * Returns { signalName: null } when the scope is dangling / connected
  * only to ground, so the modal can render its "no connection" state.
  */
-function scopeSignalFor(comp, nets) {
+function scopeSignalFor(comp, nets, runResult) {
     if (!comp || !nets) return { signalName: null, nodeLabel: null };
+
+    // First, consult the run-time snapshot (if we have one).
+    const pinKey = `${comp.id}|tip`;
+    const snap = runResult?.pinSignalMap?.get(pinKey);
+    if (snap) {
+        const lab = snap.replace(/^V\((.*)\)$/, '$1');
+        return { signalName: snap, nodeLabel: lab };
+    }
+
+    // Otherwise fall back to the current doc's net resolution. The
+    // modal will still render its "Hit Run" empty state until the
+    // user re-simulates.
     const nodeId = nets.pinNode(comp, 'tip');
     if (nodeId == null || nodeId === 0) return { signalName: null, nodeLabel: 'ground / floating' };
     const lab = nets.nodeLabels?.get(nodeId);
