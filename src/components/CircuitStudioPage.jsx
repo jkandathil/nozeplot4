@@ -23,18 +23,23 @@ import {
     ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts';
 import {
-    Cpu, Play, Home, RefreshCw, ChevronRight, ChevronLeft,
+    Cpu, Play, Home, RefreshCw, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
     BookOpen, Copy, Plus, FileText, Activity,
-    SlidersHorizontal,
+    SlidersHorizontal, LayoutGrid, Terminal,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
-import { buildContext, solveDC, solveTran, solveAC, runWithStep } from '../circuit/solver.js';
-import { layoutSchematic } from '../circuit/schematic.js';
+import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
 import { DEMOS } from '../circuit/demos.js';
 import {
     riseTime, fallTime, settlingTime, overshoot, peakToPeak, steadyStateEst,
     corner3dB, peakGain, unityGainFreq, phaseMargin, sampleAt,
 } from '../circuit/measurements.js';
+import { emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent, removeComponent } from '../circuit/schematicDoc.js';
+import { emitNetlist } from '../circuit/emitNetlist.js';
+import { importNetlistToDoc } from '../circuit/importNetlist.js';
+import Palette from './circuit/Palette.jsx';
+import Canvas from './circuit/Canvas.jsx';
+import Inspector from './circuit/Inspector.jsx';
 import './CircuitStudioPage.css';
 
 const ANALYSIS_TYPES = [
@@ -73,11 +78,26 @@ C1 vout 0 100n
 .end`;
 
 function CircuitStudioPage() {
-    const [netlistText, setNetlistText] = useState(() => {
-        const saved = localStorage.getItem('circuitStudio:netlist');
-        return saved || '';
+    // Phase 3: the SchematicDoc is the source of truth. netlistText
+    // is derived via emitNetlist(); we only store raw text for the
+    // optional "source view" drawer and for home-page loads (demos).
+    const [doc, setDoc] = useState(() => {
+        try {
+            const saved = localStorage.getItem('circuitStudio:doc');
+            if (saved) return JSON.parse(saved);
+        } catch { /* ignore */ }
+        return emptyDoc();
     });
-    const [view, setView] = useState(() => (localStorage.getItem('circuitStudio:netlist') ? 'workspace' : 'home'));
+    const [selection, setSelection] = useState(null); // { kind: 'component'|'wire', id }
+    const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
+    const [showResults, setShowResults] = useState(true);
+    const [netlistDraft, setNetlistDraft] = useState(''); // user-edited raw text when drawer open
+    const [view, setView] = useState(() => {
+        try {
+            const saved = localStorage.getItem('circuitStudio:doc');
+            return saved ? 'workspace' : 'home';
+        } catch { return 'home'; }
+    });
     const [analysis, setAnalysis] = useState('tran');
     const [runResult, setRunResult] = useState(null);
     const [runError, setRunError] = useState('');
@@ -87,8 +107,6 @@ function CircuitStudioPage() {
     const [activeTour, setActiveTour] = useState(null);
     const [loadedDemoId, setLoadedDemoId] = useState(null);
     const [selectedSignals, setSelectedSignals] = useState([]);
-    // Schematic zoom/pan (phase 1: zoom only — pan lands with the editor in phase 2)
-    const [schematicZoom, setSchematicZoom] = useState(1);
     // Phase-2 measurement cursors: two draggable verticals on tran / AC plots.
     // Values live in data space (seconds for tran, Hz for AC); null until a
     // simulation completes. Re-initialised whenever new results arrive.
@@ -97,15 +115,26 @@ function CircuitStudioPage() {
     const [activeCursor, setActiveCursor] = useState(null); // 'A' | 'B' | null
     const [showMeasure, setShowMeasure] = useState(true);
 
-    // Persist the netlist so the user doesn't lose their work across
-    // tab navigations. (Multi-tasking: this page stays mounted in the
-    // background like every other major page, but refresh should also
-    // survive — hence the localStorage dance.)
+    // Persist the schematic doc across sessions.
     useEffect(() => {
-        if (netlistText && netlistText.length > 0) {
-            localStorage.setItem('circuitStudio:netlist', netlistText);
+        if (doc && doc.components.length > 0) {
+            try { localStorage.setItem('circuitStudio:doc', JSON.stringify(doc)); }
+            catch { /* storage may be full; ignore */ }
         }
-    }, [netlistText]);
+    }, [doc]);
+
+    // Emit SPICE netlist from the doc. This is what the solver runs,
+    // what "Copy" copies, and what the source drawer shows when closed.
+    const netlistText = useMemo(() => {
+        if (!doc || doc.components.length === 0) return '';
+        try { return emitNetlist(doc); }
+        catch (e) { return `* emit error: ${e?.message || e}`; }
+    }, [doc]);
+
+    // Sync netlist draft when drawer is shown (or doc changes).
+    useEffect(() => {
+        if (showNetlistDrawer) setNetlistDraft(netlistText);
+    }, [showNetlistDrawer, netlistText]);
 
     const parsed = useMemo(() => {
         if (!netlistText || !netlistText.trim()) return null;
@@ -113,10 +142,34 @@ function CircuitStudioPage() {
         catch (e) { return { errors: [String(e?.message || e)], elements: [], directives: [], models: {}, nNodes: 1, nodeNames: ['0'] }; }
     }, [netlistText]);
 
-    const schematic = useMemo(() => {
-        if (!parsed || parsed.elements.length === 0) return null;
-        try { return layoutSchematic(parsed); } catch { return null; }
-    }, [parsed]);
+    // Run net resolution once per doc change — Canvas + Inspector share it.
+    const resolvedNets = useMemo(() => {
+        try { return resolveNets(doc); }
+        catch { return null; }
+    }, [doc]);
+
+    // Imperative helper passed to Canvas/Inspector — takes a function
+    // (mutator) and applies it to a clone of the current doc.
+    const mutateDoc = useCallback((mutator) => {
+        setDoc((d) => {
+            const copy = JSON.parse(JSON.stringify(d));
+            mutator(copy);
+            return copy;
+        });
+    }, []);
+
+    const handleCommand = useCallback((cmd) => {
+        if (cmd.type === 'addPart') {
+            mutateDoc((d) => { addComponent(d, cmd.partId, cmd.x, cmd.y, 0); });
+        }
+    }, [mutateDoc]);
+
+    // Currently-selected component snapshot (for the inspector).
+    const selectedComp = useMemo(() => {
+        if (selection?.kind !== 'component') return null;
+        return doc.components.find((c) => c.id === selection.id) || null;
+    }, [selection, doc.components]);
+
 
     // Auto-detect default signals when results arrive. With .step
     // active, suggestions like "V(vout)" fan out into the family
@@ -173,11 +226,18 @@ function CircuitStudioPage() {
     }, [runResult]);
 
     const loadDemo = useCallback((demo) => {
-        setNetlistText(demo.netlist);
+        try {
+            const { doc: imported } = importNetlistToDoc(demo.netlist);
+            setDoc(imported);
+        } catch (e) {
+            setRunError(`Failed to import demo: ${e?.message || e}`);
+            return;
+        }
         setAnalysis(demo.defaultAnalysis || 'tran');
         setLoadedDemoId(demo.id);
         setRunResult(null);
         setRunError('');
+        setSelection(null);
         setView('workspace');
         setActiveTour(demo.tour || null);
         setTourStep(0);
@@ -185,15 +245,30 @@ function CircuitStudioPage() {
     }, []);
 
     const loadBlank = useCallback(() => {
-        setNetlistText(BLANK_NETLIST);
+        setDoc(emptyDoc());
         setLoadedDemoId(null);
         setRunResult(null);
         setRunError('');
+        setSelection(null);
         setActiveTour(null);
         setTourOpen(false);
         setAnalysis('tran');
         setView('workspace');
     }, []);
+
+    // When the user edits the raw netlist drawer and hits "Apply",
+    // re-import the text into the doc. This is the one-way escape
+    // hatch for power users who prefer typing SPICE.
+    const applyNetlistDraft = useCallback(() => {
+        try {
+            const { doc: imported } = importNetlistToDoc(netlistDraft);
+            setDoc(imported);
+            setSelection(null);
+            setRunError('');
+        } catch (e) {
+            setRunError(`Netlist parse failed: ${e?.message || e}`);
+        }
+    }, [netlistDraft]);
 
     const goHome = useCallback(() => {
         setView('home');
@@ -286,7 +361,7 @@ function CircuitStudioPage() {
                     <button className="cs-home-action cs-home-action-primary" onClick={loadBlank}>
                         <Plus size={18} /> New blank circuit
                     </button>
-                    {netlistText && netlistText.trim().length > 0 && (
+                    {doc.components.length > 0 && (
                         <button className="cs-home-action" onClick={() => setView('workspace')}>
                             <FileText size={18} /> Continue last session
                         </button>
@@ -373,140 +448,150 @@ function CircuitStudioPage() {
                 )}
             </div>
 
-            <div className="cs-body">
-                <div className="cs-pane cs-pane-editor">
+            <div className="cs-body cs-body-phase3">
+                <div className="cs-pane cs-pane-palette">
                     <div className="cs-pane-title">
-                        <FileText size={13} /> Netlist
-                        {parsed?.errors?.length > 0 && (
-                            <span className="cs-pane-err">· {parsed.errors.length} error{parsed.errors.length > 1 ? 's' : ''}</span>
-                        )}
+                        <LayoutGrid size={13} /> Components
                     </div>
-                    <textarea
-                        className="cs-netlist-editor"
-                        spellCheck={false}
-                        value={netlistText}
-                        onChange={(e) => setNetlistText(e.target.value)}
-                        placeholder="Type a SPICE netlist here…"
+                    <Palette onPick={(partId) => {
+                        // Click-to-place centres the new part near the
+                        // middle of the current canvas.
+                        mutateDoc((d) => { addComponent(d, partId, 200, 160, 0); });
+                    }} />
+                </div>
+
+                <div className="cs-pane cs-pane-stage">
+                    <Canvas
+                        doc={doc}
+                        selectedId={selection}
+                        onSelect={setSelection}
+                        onCommand={handleCommand}
+                        onDocChange={mutateDoc}
+                        resolvedNets={resolvedNets}
                     />
-                    {parsed?.errors?.length > 0 && (
-                        <div className="cs-err-block">
-                            {parsed.errors.map((err, i) => <div key={i}>{err}</div>)}
-                        </div>
-                    )}
-                </div>
 
-                <div className="cs-pane cs-pane-viz">
-                    <div className="cs-viz-top">
-                        <div className="cs-pane-title">
-                            <Cpu size={13} /> Schematic preview
-                            <span className="cs-pane-subtle">(auto-laid out — drag editor in Phase 2)</span>
-                            <div className="cs-zoom-group">
-                                <button
-                                    className="cs-zoom-btn"
-                                    onClick={() => setSchematicZoom((z) => Math.max(0.4, z - 0.2))}
-                                    title="Zoom out"
-                                >−</button>
-                                <span className="cs-zoom-val">{Math.round(schematicZoom * 100)}%</span>
-                                <button
-                                    className="cs-zoom-btn"
-                                    onClick={() => setSchematicZoom((z) => Math.min(2.5, z + 0.2))}
-                                    title="Zoom in"
-                                >+</button>
-                            </div>
-                        </div>
-                        <div className="cs-schematic-wrap">
-                            {schematic ? (
-                                <SchematicSvg layout={schematic} zoom={schematicZoom} />
-                            ) : (
-                                <div className="cs-empty">Type a netlist to preview the circuit.</div>
+                    {/* Optional bottom drawer: results + netlist source */}
+                    <div className={`cs-drawer${showResults ? ' is-open' : ''}`}>
+                        <div className="cs-drawer-tabs">
+                            <button
+                                type="button"
+                                className="cs-drawer-tab is-active"
+                                onClick={() => setShowResults(!showResults)}
+                            >
+                                <Activity size={12} /> Results
+                                {showResults ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                            </button>
+                            <button
+                                type="button"
+                                className={`cs-drawer-tab${showNetlistDrawer ? ' is-on' : ''}`}
+                                onClick={() => setShowNetlistDrawer((s) => !s)}
+                                title="View / edit the raw SPICE netlist"
+                            >
+                                <Terminal size={12} /> Netlist source
+                            </button>
+                            {parsed?.errors?.length > 0 && (
+                                <span className="cs-pane-err">· {parsed.errors.length} parse error{parsed.errors.length > 1 ? 's' : ''}</span>
                             )}
                         </div>
-                    </div>
-
-                    <div className="cs-viz-bot">
-                        <div className="cs-pane-title">
-                            <Activity size={13} /> Results
-                            {runResult?.kind === 'op' && <span className="cs-pane-subtle">DC operating point</span>}
-                            {runResult?.kind === 'tran' && (
-                                <span className="cs-pane-subtle">
-                                    Transient · {runResult.t?.length || 0} samples
-                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
-                                </span>
-                            )}
-                            {runResult?.kind === 'ac' && (
-                                <span className="cs-pane-subtle">
-                                    AC sweep · {runResult.f?.length || 0} samples
-                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
-                                </span>
-                            )}
-                            {runResult?.kind === 'dc' && (
-                                <span className="cs-pane-subtle">
-                                    DC sweep of {runResult.xSource} · {runResult.x?.length || 0} points
-                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
-                                </span>
-                            )}
-                        </div>
-                        {runError && (
-                            <div className="cs-err-block">
-                                {String(runError).split('\n').map((l, i) => <div key={i}>{l}</div>)}
+                        {showResults && (
+                            <div className="cs-drawer-body">
+                                {runError && (
+                                    <div className="cs-err-block">
+                                        {String(runError).split('\n').map((l, i) => <div key={i}>{l}</div>)}
+                                    </div>
+                                )}
+                                {!runError && runResult && (
+                                    <ResultsPanel
+                                        result={runResult}
+                                        selectedSignals={selectedSignals}
+                                        onSignalsChange={setSelectedSignals}
+                                        cursorA={cursorA}
+                                        cursorB={cursorB}
+                                        onCursorAChange={setCursorA}
+                                        onCursorBChange={setCursorB}
+                                        activeCursor={activeCursor}
+                                        onActiveCursorChange={setActiveCursor}
+                                        showMeasure={showMeasure}
+                                        onShowMeasureChange={setShowMeasure}
+                                    />
+                                )}
+                                {!runError && !runResult && (
+                                    <div className="cs-empty">
+                                        Hit <b>Run</b> to solve. DC gives node voltages; AC gives a Bode plot; Transient plots V(node) vs. time.
+                                    </div>
+                                )}
                             </div>
                         )}
-                        {!runError && runResult && (
-                            <ResultsPanel
-                                result={runResult}
-                                selectedSignals={selectedSignals}
-                                onSignalsChange={setSelectedSignals}
-                                cursorA={cursorA}
-                                cursorB={cursorB}
-                                onCursorAChange={setCursorA}
-                                onCursorBChange={setCursorB}
-                                activeCursor={activeCursor}
-                                onActiveCursorChange={setActiveCursor}
-                                showMeasure={showMeasure}
-                                onShowMeasureChange={setShowMeasure}
-                            />
-                        )}
-                        {!runError && !runResult && (
-                            <div className="cs-empty">
-                                Hit <b>Run</b> to solve. DC gives node voltages; AC gives a Bode plot; Transient plots V(node) vs. time.
+                        {showNetlistDrawer && (
+                            <div className="cs-source-drawer">
+                                <div className="cs-source-drawer-top">
+                                    <span>SPICE netlist (editable — hit Apply to re-import)</span>
+                                    <button className="cs-topbtn" onClick={applyNetlistDraft}>
+                                        <RefreshCw size={12} /> Apply
+                                    </button>
+                                </div>
+                                <textarea
+                                    className="cs-netlist-editor"
+                                    spellCheck={false}
+                                    value={netlistDraft}
+                                    onChange={(e) => setNetlistDraft(e.target.value)}
+                                />
                             </div>
                         )}
                     </div>
                 </div>
 
-                {tourOpen && activeTour && (
-                    <div className="cs-pane cs-pane-tour">
-                        <div className="cs-pane-title">
-                            <BookOpen size={13} /> Guided tour
-                            <span className="cs-pane-subtle">Step {tourStep + 1} of {activeTour.length}</span>
-                        </div>
-                        <div className="cs-tour-body">
-                            <div className="cs-tour-step-title">{activeTour[tourStep]?.title}</div>
-                            <div className="cs-tour-step-body">{activeTour[tourStep]?.body}</div>
-                        </div>
-                        <div className="cs-tour-nav">
-                            <button
-                                className="cs-topbtn"
-                                onClick={() => setTourStep((s) => Math.max(0, s - 1))}
-                                disabled={tourStep === 0}
-                            >
-                                <ChevronLeft size={12} /> Back
-                            </button>
-                            <button
-                                className="cs-topbtn cs-topbtn-primary"
-                                onClick={() => {
-                                    if (tourStep + 1 < activeTour.length) setTourStep(tourStep + 1);
-                                    else setTourOpen(false);
-                                }}
-                            >
-                                {tourStep + 1 >= activeTour.length ? 'Finish' : <>Next <ChevronRight size={12} /></>}
-                            </button>
-                        </div>
+                <div className="cs-pane cs-pane-inspector">
+                    <div className="cs-pane-title">
+                        <SlidersHorizontal size={13} /> Inspector
                     </div>
-                )}
+                    <Inspector
+                        selectedComp={selectedComp}
+                        onUpdate={(patch) => selectedComp && mutateDoc((d) => updateComponent(d, selectedComp.id, patch))}
+                        onRotate={() => selectedComp && mutateDoc((d) => rotateComponent(d, selectedComp.id, 90))}
+                        onDelete={() => {
+                            if (!selectedComp) return;
+                            mutateDoc((d) => removeComponent(d, selectedComp.id));
+                            setSelection(null);
+                        }}
+                        netWarnings={buildNetWarnings(resolvedNets, doc)}
+                        analysisPane={tourOpen && activeTour ? (
+                            <div className="cs-inspector-tour">
+                                <div className="cs-inspector-title">
+                                    <BookOpen size={12} /> Guided tour · Step {tourStep + 1}/{activeTour.length}
+                                </div>
+                                <div className="cs-tour-step-title">{activeTour[tourStep]?.title}</div>
+                                <div className="cs-tour-step-body">{activeTour[tourStep]?.body}</div>
+                                <div className="cs-tour-nav">
+                                    <button className="cs-topbtn" onClick={() => setTourStep((s) => Math.max(0, s - 1))} disabled={tourStep === 0}>
+                                        <ChevronLeft size={12} /> Back
+                                    </button>
+                                    <button className="cs-topbtn cs-topbtn-primary"
+                                        onClick={() => {
+                                            if (tourStep + 1 < activeTour.length) setTourStep(tourStep + 1);
+                                            else setTourOpen(false);
+                                        }}>
+                                        {tourStep + 1 >= activeTour.length ? 'Finish' : <>Next <ChevronRight size={12} /></>}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : null}
+                    />
+                </div>
             </div>
         </div>
     );
+}
+
+function buildNetWarnings(nets, doc) {
+    if (!nets) return [];
+    const out = [];
+    for (const fp of nets.floatingPins || []) {
+        const comp = doc.components.find((c) => c.id === fp.comp.id);
+        if (!comp) continue;
+        out.push(`Pin ${fp.pinId} of ${comp.ref} is floating — connect it or it'll cause a singular matrix.`);
+    }
+    return out;
 }
 
 /* ============================================================ */
