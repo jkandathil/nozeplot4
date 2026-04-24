@@ -90,23 +90,39 @@ export default function Canvas({
     };
 
     /* ---------------------- wheel / zoom ----------------------- */
-    const onWheel = (ev) => {
-        if (!ev.ctrlKey && !ev.metaKey && !ev.shiftKey && tool !== 'pan') return;
-        ev.preventDefault();
-        const rect = svgRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const cx = ev.clientX - rect.left;
-        const cy = ev.clientY - rect.top;
-        const dz = Math.exp(-ev.deltaY * 0.001);
-        const newZoom = Math.min(4, Math.max(0.25, zoom * dz));
-        // keep the point under the cursor fixed
-        const worldX = cx / zoom - pan.x;
-        const worldY = cy / zoom - pan.y;
-        const newPanX = cx / newZoom - worldX;
-        const newPanY = cy / newZoom - worldY;
-        setZoom(newZoom);
-        setPan({ x: newPanX, y: newPanY });
-    };
+    // Wheel zooms the canvas around the cursor position. Holding Shift
+    // gives finer (slower) zoom steps for precise positioning. Modifier-
+    // free scroll is intentional: it's the de-facto standard in KiCad /
+    // LTspice / Eagle, and matches how most users expect a CAD-like
+    // canvas to behave.
+    //
+    // The listener is attached as a native, non-passive event so we can
+    // call preventDefault() and stop the page behind the canvas from
+    // scrolling — React's synthetic onWheel is passive by default.
+    useEffect(() => {
+        const el = wrapperRef.current;
+        if (!el) return undefined;
+        const handler = (ev) => {
+            ev.preventDefault();
+            const rect = svgRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const cx = ev.clientX - rect.left;
+            const cy = ev.clientY - rect.top;
+            const speed = ev.shiftKey ? 0.0003 : 0.001;
+            const dz = Math.exp(-ev.deltaY * speed);
+            const newZoom = Math.min(8, Math.max(0.1, zoom * dz));
+            if (newZoom === zoom) return;
+            // Keep the point under the cursor fixed in world space.
+            const worldX = cx / zoom - pan.x;
+            const worldY = cy / zoom - pan.y;
+            const newPanX = cx / newZoom - worldX;
+            const newPanY = cy / newZoom - worldY;
+            setZoom(newZoom);
+            setPan({ x: newPanX, y: newPanY });
+        };
+        el.addEventListener('wheel', handler, { passive: false });
+        return () => el.removeEventListener('wheel', handler);
+    }, [zoom, pan.x, pan.y]);
 
     /* ---------------------- mouse handlers --------------------- */
 
@@ -289,7 +305,7 @@ export default function Canvas({
         const h = bb.maxY - bb.minY + 200;
         const zx = rect.width / w;
         const zy = rect.height / h;
-        const z = Math.min(4, Math.max(0.25, Math.min(zx, zy)));
+        const z = Math.min(8, Math.max(0.1, Math.min(zx, zy)));
         setZoom(z);
         setPan({
             x: -bb.minX + (rect.width / z - w) / 2 + 100,
@@ -326,8 +342,8 @@ export default function Canvas({
             if (key === 'w') { setTool('wire'); return; }
             if (key === 'h') { setTool('pan'); return; }
             if (key === '0') { fitToContent(); return; }
-            if (key === '+' || key === '=') { setZoom((z) => Math.min(4, z * 1.2)); return; }
-            if (key === '-') { setZoom((z) => Math.max(0.25, z / 1.2)); return; }
+            if (key === '+' || key === '=') { setZoom((z) => Math.min(8, z * 1.2)); return; }
+            if (key === '-') { setZoom((z) => Math.max(0.1, z / 1.2)); return; }
             if (!selectedId) return;
             if (key === 'r' && selectedId.kind === 'component') {
                 ev.preventDefault();
@@ -387,7 +403,6 @@ export default function Canvas({
             tabIndex={0}
             onDragOver={onDragOver}
             onDrop={onDrop}
-            onWheel={onWheel}
         >
             <div className="cs-canvas-toolbar">
                 <ToolButton active={tool === 'select'} onClick={() => setTool('select')} title="Select / move (V)">
@@ -419,11 +434,11 @@ export default function Canvas({
                     <Trash2 size={14} />
                 </ToolButton>
                 <div className="cs-canvas-toolbar-sep" />
-                <ToolButton onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))} title="Zoom out (-)">
+                <ToolButton onClick={() => setZoom((z) => Math.max(0.1, z / 1.2))} title="Zoom out (- or scroll down)">
                     <ZoomOut size={14} />
                 </ToolButton>
                 <span className="cs-canvas-zoomlabel">{Math.round(zoom * 100)}%</span>
-                <ToolButton onClick={() => setZoom((z) => Math.min(4, z * 1.2))} title="Zoom in (+)">
+                <ToolButton onClick={() => setZoom((z) => Math.min(8, z * 1.2))} title="Zoom in (+ or scroll up)">
                     <ZoomIn size={14} />
                 </ToolButton>
                 <ToolButton onClick={fitToContent} title="Fit to view (0)">
@@ -433,7 +448,7 @@ export default function Canvas({
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
                     {tool === 'select' && (selectedId ? 'Drag to move. R to rotate. Del to delete.' : 'Drag parts from the palette. Click + drag a component or wire on the canvas to move it.')}
-                    {tool === 'pan' && 'Drag to pan. Wheel to zoom.'}
+                    {tool === 'pan' && 'Drag to pan. Scroll wheel to zoom (Shift = finer).'}
                 </div>
             </div>
 
