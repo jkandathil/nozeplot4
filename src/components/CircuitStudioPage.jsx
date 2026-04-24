@@ -125,11 +125,22 @@ function CircuitStudioPage() {
 
     // Emit SPICE netlist from the doc. This is what the solver runs,
     // what "Copy" copies, and what the source drawer shows when closed.
-    const netlistText = useMemo(() => {
-        if (!doc || doc.components.length === 0) return '';
+    // emitNetlist returns { text, nets, warnings } — we only surface the
+    // rendered SPICE text here; warnings feed the inspector separately.
+    const emitResult = useMemo(() => {
+        if (!doc || doc.components.length === 0) {
+            return { text: '', nets: null, warnings: [] };
+        }
         try { return emitNetlist(doc); }
-        catch (e) { return `* emit error: ${e?.message || e}`; }
+        catch (e) {
+            return {
+                text: `* emit error: ${e?.message || e}`,
+                nets: null,
+                warnings: [String(e?.message || e)],
+            };
+        }
     }, [doc]);
+    const netlistText = typeof emitResult?.text === 'string' ? emitResult.text : '';
 
     // Sync netlist draft when drawer is shown (or doc changes).
     useEffect(() => {
