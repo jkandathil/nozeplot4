@@ -287,14 +287,20 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
     }
 
     // -------- 4. Compute world pin positions --------
+    // NOTE: component centres (c.x, c.y) are already snapped to the
+    // grid. We deliberately do NOT re-snap the rotated pin offsets —
+    // capacitors have pins at ±30 px and inductors at ±38 px, neither
+    // of which is a multiple of GRID=20. Snapping here would shift
+    // the pin coord away from where `componentPins()` returns it,
+    // which leaves downstream wires dangling in the SchematicDoc.
     for (const c of components) {
         c.pinWorld = c.sym.pins.map((p) => {
             const r = rotateXY(p.x, p.y, c.rot);
             return {
                 id: p.id,
                 node: c.p2n[p.id],
-                x: snap(c.x + r.x),
-                y: snap(c.y + r.y),
+                x: c.x + r.x,
+                y: c.y + r.y,
                 side: rotateSide(p.side, c.rot),
             };
         });

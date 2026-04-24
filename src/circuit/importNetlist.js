@@ -211,8 +211,13 @@ export function importNetlistToDoc(netlistText) {
     // connectivity is carried by the pin labels stamped above, so
     // the auto-router's crossings and intermediate bends never
     // cause spurious net merges.
+    //
+    // We deliberately do NOT snap individual wire vertices here:
+    // off-grid coordinates (capacitor pins at ±30 px, inductor pins
+    // at ±38 px) are the whole reason for this fix — re-snapping
+    // would push the endpoint back off its pin and leave a dangle.
     for (const w of layout.wires) {
-        const pts = w.points.map(([x, y]) => [snap(x + ox), snap(y + oy)]);
+        const pts = w.points.map(([x, y]) => [Math.round(x + ox), Math.round(y + oy)]);
         doc.wires.push({
             id: `u${doc.meta.nextUid++}`,
             points: pts,
