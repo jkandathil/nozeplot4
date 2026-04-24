@@ -578,7 +578,7 @@ function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = 
     }
     const sym = SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
     if (!sym) return null;
-    const labelRef = pickRefAnchor(sym);
+    const labelPos = pickRefLabelPosition(sym, comp.rot);
     const valueText = formatValueLabel(comp);
     const pins = componentPins(comp);
     const cx = comp.pos.x + dx;
@@ -597,11 +597,13 @@ function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = 
                     />
                 )}
             </g>
-            {/* ref + value text */}
+            {/* Ref + value text. Anchor position rotates with the part so the
+                labels stay next to the same face of the symbol, but the text
+                itself is drawn upright in screen space (no flipped text). */}
             <text
-                x={cx + labelRef.dx}
-                y={cy + labelRef.dy}
-                textAnchor={labelRef.anchor}
+                x={cx + labelPos.dx}
+                y={cy + labelPos.dy}
+                textAnchor={labelPos.anchor}
                 fontSize={11} fontWeight={600}
                 fill="var(--sch-label)"
                 fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -611,9 +613,9 @@ function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = 
             </text>
             {valueText ? (
                 <text
-                    x={cx + labelRef.dx}
-                    y={cy + labelRef.dy + 13}
-                    textAnchor={labelRef.anchor}
+                    x={cx + labelPos.dx}
+                    y={cy + labelPos.dy + 12}
+                    textAnchor={labelPos.anchor}
                     fontSize={10}
                     fill="var(--sch-label-dim)"
                     fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -641,11 +643,48 @@ function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = 
     );
 }
 
-function pickRefAnchor(sym) {
-    // Put the ref label to the right of tall symbols, above short ones.
+/**
+ * Decide where the ref / value text block should sit, given the symbol's
+ * natural orientation and the component's current rotation.
+ *
+ * We compute the anchor in the symbol's local frame (unrotated) and then
+ * rotate that offset into world space, so the labels follow the part as it
+ * spins. The text itself is NOT rotated — it always reads left-to-right so
+ * values like "10k" stay legible at every orientation.
+ *
+ * `textAnchor` is picked from the sign of the rotated offset so the text
+ * lines up flush against the correct face of the symbol (start / middle /
+ * end ≈ left / centered / right of the anchor point).
+ */
+function pickRefLabelPosition(sym, rot = 0) {
     const w = sym.width, h = sym.height;
-    if (h >= w) return { dx: w / 2 + 6, dy: -4, anchor: 'start' };
-    return { dx: 0, dy: -h / 2 - 8, anchor: 'middle' };
+    // Local-frame offset from the symbol's center. For tall symbols we place
+    // labels to the right of the body; for wide symbols, above it. A small
+    // margin (pad) keeps text off the stroke.
+    const pad = 8;
+    let lx;
+    let ly;
+    if (h >= w) {
+        lx = w / 2 + pad;
+        ly = -4;
+    } else {
+        lx = 0;
+        ly = -h / 2 - pad;
+    }
+    // Rotate the anchor offset into world space.
+    const r = ((rot % 360) + 360) % 360;
+    const rad = (r * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const dx = lx * cos - ly * sin;
+    const dy = lx * sin + ly * cos;
+    // Pick the SVG text-anchor based on where we landed relative to the
+    // symbol center. A tiny epsilon avoids flip-flop at exact verticals.
+    const eps = 0.5;
+    let anchor = 'middle';
+    if (dx > eps) anchor = 'start';
+    else if (dx < -eps) anchor = 'end';
+    return { dx, dy, anchor };
 }
 
 function formatValueLabel(comp) {
