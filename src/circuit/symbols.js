@@ -181,13 +181,146 @@ function dependentSource(kindTag) {
 const E_SYMBOL = dependentSource('E');
 const G_SYMBOL = dependentSource('G');
 
+// ---------- BJT (NPN / PNP) ---------------------------------------
+//
+// Classic transistor glyph: a circle enclosing the base vertical line,
+// collector (top) and emitter (bottom) leads angling out at ~45°. The
+// emitter arrow points OUT of the device for NPN ("Not Pointing iN"),
+// INTO the device for PNP. Base pin is on the left so the schematic
+// router can feed it naturally; C is "up", E is "down".
+//
+// Pin ids match the solver's netlist order: nc (collector), nb (base),
+// ne (emitter).
+
+function bjtSymbol(variant) {
+    const isNPN = variant === 'NPN';
+    // Arrow pointing TOWARD the junction? For NPN: arrow points from
+    // junction → emitter (i.e., "out of the base"). For PNP: arrow
+    // points from emitter → junction ("into the base").
+    const arrowNPN = {
+        kind: 'path',
+        d: 'M 6 18 L 14 26 L 2 26 Z', // filled arrow head near the emitter lead
+        fill: 'var(--sch-stroke)',
+    };
+    const arrowPNP = {
+        kind: 'path',
+        d: 'M -4 10 L 4 18 L -4 18 Z',
+        fill: 'var(--sch-stroke)',
+    };
+    return {
+        width: 60,
+        height: 80,
+        pins: [
+            // Collector on top, base on the left (body-wall), emitter on bottom
+            { id: 'nc', x:  14, y: -38, side: 'T' },
+            { id: 'nb', x: -30, y:   0, side: 'L' },
+            { id: 'ne', x:  14, y:  38, side: 'B' },
+        ],
+        shapes: [
+            { kind: 'circle', cx: 0, cy: 0, r: 20, fill: 'var(--sch-body)' },
+            // Base vertical bar (inside circle)
+            { kind: 'line', x1: -8, y1: -12, x2: -8, y2: 12, strokeWidth: 2 },
+            // Base lead (from body wall out to pin)
+            { kind: 'line', x1: -30, y1: 0, x2: -8, y2: 0 },
+            // Collector slant + lead
+            { kind: 'line', x1: -8, y1: -6, x2:  14, y2: -18 },
+            { kind: 'line', x1: 14, y1: -18, x2:  14, y2: -38 },
+            // Emitter slant + lead
+            { kind: 'line', x1: -8, y1:  6, x2:  14, y2:  18 },
+            { kind: 'line', x1: 14, y1:  18, x2:  14, y2:  38 },
+            // Emitter arrow
+            isNPN ? arrowNPN : arrowPNP,
+        ],
+        labelRef: { x: 28, y: -16, anchor: 'start', baseline: 'middle' },
+        labelVal: { x: 28, y:  18, anchor: 'start', baseline: 'middle' },
+    };
+}
+
+const Q_NPN_SYMBOL = bjtSymbol('NPN');
+const Q_PNP_SYMBOL = bjtSymbol('PNP');
+
+// ---------- MOSFET (NMOS / PMOS) ----------------------------------
+//
+// IEEE-style enhancement MOSFET: gate on the left (separated from
+// channel by a vertical gap — emphasising the oxide), channel drawn as
+// two short horizontal stubs (broken in the middle = enhancement mode),
+// drain on top, source on bottom. Body arrow on the source for NMOS
+// (arrow-in), PMOS (arrow-out) — the canonical "what-type-is-it"
+// indicator.
+
+function mosSymbol(variant) {
+    const isN = variant === 'NMOS';
+    // Body-effect arrow on source for quick N/P identification.
+    const bodyArrow = isN
+        ? { kind: 'path', d: 'M 6 18 L 14 22 L 14 14 Z', fill: 'var(--sch-stroke)' }   // inward
+        : { kind: 'path', d: 'M 14 18 L 6  22 L 6  14 Z', fill: 'var(--sch-stroke)' };  // outward
+    return {
+        width: 64,
+        height: 80,
+        pins: [
+            // Drain top, Gate left, Source bottom, Bulk also bottom (merged w/ source usually)
+            { id: 'nd', x:  14, y: -38, side: 'T' },
+            { id: 'ng', x: -30, y:   0, side: 'L' },
+            { id: 'ns', x:  14, y:  38, side: 'B' },
+            { id: 'nbulk', x: -30, y:  22, side: 'L' },
+        ],
+        shapes: [
+            // Gate lead in from the left pin to the gate bar
+            { kind: 'line', x1: -30, y1: 0, x2: -14, y2: 0 },
+            // Gate bar (vertical)
+            { kind: 'line', x1: -14, y1: -16, x2: -14, y2: 16, strokeWidth: 2 },
+            // Oxide gap — the channel bar
+            { kind: 'line', x1: -8, y1: -16, x2: -8, y2: -4, strokeWidth: 2 },
+            { kind: 'line', x1: -8, y1:   4, x2: -8, y2: 16, strokeWidth: 2 },  // enhancement-mode break
+            // Drain side
+            { kind: 'line', x1: -8,  y1: -14, x2: 14, y2: -14 },
+            { kind: 'line', x1: 14,  y1: -14, x2: 14, y2: -38 },
+            // Source side
+            { kind: 'line', x1: -8,  y1:  14, x2: 14, y2:  14 },
+            { kind: 'line', x1: 14,  y1:  14, x2: 14, y2:  38 },
+            // Bulk line (short stub, not routed — most schematics tie bulk to source)
+            { kind: 'line', x1: -30, y1: 22, x2: -8, y2: 22, strokeDasharray: '3 3' },
+            bodyArrow,
+        ],
+        labelRef: { x: 28, y: -16, anchor: 'start', baseline: 'middle' },
+        labelVal: { x: 28, y:  18, anchor: 'start', baseline: 'middle' },
+    };
+}
+
+const M_NMOS_SYMBOL = mosSymbol('NMOS');
+const M_PMOS_SYMBOL = mosSymbol('PMOS');
+
 // ---------- Registry ----------------------------------------------
 
 export const SYMBOLS = {
     R: R_SYMBOL, C: C_SYMBOL, L: L_SYMBOL,
     V: V_SYMBOL, I: I_SYMBOL, D: D_SYMBOL,
     O: O_SYMBOL, E: E_SYMBOL, G: G_SYMBOL,
+    Q:     Q_NPN_SYMBOL,    // plain Q defaults to NPN (resolved by pickSymbol below)
+    Q_NPN: Q_NPN_SYMBOL, Q_PNP: Q_PNP_SYMBOL,
+    M:     M_NMOS_SYMBOL,
+    M_NMOS: M_NMOS_SYMBOL, M_PMOS: M_PMOS_SYMBOL,
 };
+
+/**
+ * Resolve the right symbol variant for a given element, consulting the
+ * model table to disambiguate Q → NPN/PNP and M → NMOS/PMOS. Always
+ * falls back to the plain type key so symbol lookups never crash even
+ * if the model reference is missing.
+ */
+export function pickSymbol(element, models) {
+    if (element.type === 'Q') {
+        const mdl = models?.[element.model];
+        const t = (mdl?.type || 'NPN').toUpperCase();
+        return SYMBOLS[`Q_${t === 'PNP' ? 'PNP' : 'NPN'}`] || SYMBOLS.Q;
+    }
+    if (element.type === 'M') {
+        const mdl = models?.[element.model];
+        const t = (mdl?.type || 'NMOS').toUpperCase();
+        return SYMBOLS[`M_${t === 'PMOS' ? 'PMOS' : 'NMOS'}`] || SYMBOLS.M;
+    }
+    return SYMBOLS[element.type] || null;
+}
 
 /** Returns the pin descriptor inside SYMBOLS[type] matching `pinId`. */
 export function symbolPin(type, pinId) {

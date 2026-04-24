@@ -151,4 +151,215 @@ D2 0 vout DMOD
             },
         ],
     },
+    {
+        id: 'ce-bjt-amp',
+        title: 'Common-emitter BJT amplifier',
+        tagline: 'Textbook voltage amplifier — single NPN, coupling caps, emitter degeneration.',
+        category: 'Active devices',
+        netlist: `* Common-emitter NPN amplifier with emitter degeneration.
+*
+* DC bias: voltage divider (R1,R2) sets Vb ≈ 3 V ⇒ Ve ≈ 2.3 V,
+*          Ie ≈ 2.3 mA through Re = 1 kΩ. Rc = 3.3 kΩ drops
+*          ~7.6 V giving Vc ≈ 4.4 V (mid-rail — good swing headroom).
+* Small-signal gain ≈ -Rc / Re ≈ -3.3 with full degeneration,
+*          or -gm·Rc ≈ -300 if Ce shorts the emitter at high freq.
+
+Vcc  vcc 0 12
+R1   vcc vb  47k
+R2   vb  0   10k
+Rc   vcc vc  3.3k
+Re   ve  0   1k
+Ce   ve  0   100u
+Cin  vin vb  10u
+Cout vc  vout 10u
+RL   vout 0  100k
+
+Q1   vc vb ve QN
+
+V1   vin 0 AC 1m SIN(0 5m 1k)
+
+.model QN NPN(Is=1e-15 Bf=200 Vaf=100)
+
+.op
+.ac dec 20 10 10meg
+.tran 10u 5m
+.end`,
+        defaultAnalysis: 'ac',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+            ac:   ['V(vout)'],
+            op:   ['V(vb)', 'V(vc)', 'V(ve)'],
+        },
+        tour: [
+            {
+                title: 'DC bias network',
+                body: 'R1/R2 divides Vcc down to set the base voltage. The emitter sits a Vbe (~0.7 V) below the base, and the emitter current through Re sets the collector current. Hit Run with DC op-point selected — V(vb) should be ~3 V and V(vc) somewhere near the middle of the supply.',
+            },
+            {
+                title: 'Small-signal gain',
+                body: 'Switch to AC analysis. The gain from V(vin) to V(vout) has a plateau set by −gm·Rc||RL (~−300) bracketed by low-frequency roll-off from Cin/Cout and high-frequency roll-off from the BJT′s Early-effect output conductance. Read the mid-band gain off the magnitude trace.',
+            },
+            {
+                title: 'Experiment',
+                body: 'Try shorting the emitter capacitor (set Ce to 10µ → 10f): mid-band gain collapses to the resistor-ratio value −Rc/Re ≈ −3.3 because full emitter degeneration is restored. This is the classic gain vs. linearity trade-off.',
+            },
+        ],
+    },
+    {
+        id: 'diff-pair',
+        title: 'BJT differential pair',
+        tagline: 'Input stage of every op-amp. Watch common-mode rejection in action.',
+        category: 'Active devices',
+        netlist: `* NPN differential pair biased by a tail current source.
+*
+* Ideal long-tailed pair: V(vout) follows the differential
+* input (vin+ − vin−) linearly until the tail current gets
+* fully switched to one side. Common-mode rejection depends on
+* the finite output impedance of the tail — use a real current
+* mirror later to see this improve further.
+
+Vcc vcc 0 12
+Vee vee 0 -12
+
+* SPICE convention: current flows + → − through the source; here the
+* source drains 1 mA from the tail node (that's what a real tail-source
+* does — it sinks Ie1 + Ie2). Polarity is tail → vee.
+It   tail vee 1m
+Rc1  vcc out1 10k
+Rc2  vcc out2 10k
+
+Q1   out1 inp tail QN
+Q2   out2 inn tail QN
+
+Vinp inp 0 AC 0.5 SIN(0 5m 1k)
+Vinn inn 0 AC -0.5 SIN(0 -5m 1k)
+
+.model QN NPN(Is=1e-15 Bf=200 Vaf=100)
+
+.op
+.ac dec 20 1 1meg
+.tran 2u 3m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(out1)', 'V(out2)'],
+            ac:   ['V(out1)', 'V(out2)'],
+            op:   ['V(out1)', 'V(out2)', 'V(tail)'],
+        },
+        tour: [
+            {
+                title: 'The topology',
+                body: 'Two matched NPNs share an emitter tail node, fed by a 1 mA current source. When Vinp = Vinn the tail current splits evenly and V(out1) = V(out2). Any differential input steers more of the 1 mA to one side.',
+            },
+            {
+                title: 'Transient — differential mode',
+                body: 'The two inputs are driven 180° out-of-phase (+5 mV and −5 mV). Transient should show V(out1) and V(out2) swinging in opposite directions around their DC operating point — each with a gain of about gm·Rc/2 ≈ 200 to the differential input.',
+            },
+            {
+                title: 'Try common-mode',
+                body: 'Change Vinn to the same sign (+5m) so both inputs rise together — the outputs barely twitch (common-mode gain ≈ 1/gmTail, essentially the tail′s output impedance ratio). That′s CMRR in action.',
+            },
+        ],
+    },
+    {
+        id: 'cmos-inverter',
+        title: 'CMOS inverter — swept VTC',
+        tagline: 'Classical transfer curve — .step sweeps VDD to show family of VTCs.',
+        category: 'Active devices',
+        netlist: `* CMOS inverter — voltage transfer characteristic with .step
+*
+* PMOS source at VDD, NMOS source at ground. Output switches
+* midway through the input sweep (ideally at VDD/2 when Kp·W/L
+* matches between devices). The .step directive sweeps VDD so
+* we can see how the VTC scales with supply voltage.
+
+Vdd  vdd 0 3.3
+Vin  vin 0 0
+
+M1   vout vin 0   0   MN
+M2   vout vin vdd vdd MP
+
+.model MN NMOS(Vto=0.5  Kp=200u Lambda=0.02)
+.model MP PMOS(Vto=-0.5 Kp=100u Lambda=0.02)
+
+.op
+.dc Vin 0 3.3 0.05
+.step Vdd 1.8 3.3 0.5
+.end`,
+        defaultAnalysis: 'dc',
+        signals: {
+            dc: ['V(vout)'],
+            op: ['V(vout)'],
+        },
+        tour: [
+            {
+                title: 'The inverter',
+                body: 'An NMOS pulls the output to ground when Vin is high; a PMOS pulls it to VDD when Vin is low. Matched β ratios (Kp·W/L) make the switching point symmetric at VDD/2.',
+            },
+            {
+                title: 'Run DC sweep',
+                body: 'Pick DC analysis and run. Vin is swept from 0 to 3.3 V; watch V(vout) swing sharply from VDD to 0 as you cross the switching threshold. Steeper = higher small-signal gain in the transition region.',
+            },
+            {
+                title: 'Family of curves',
+                body: 'The .step Vdd directive re-runs the sweep at VDD = 1.8, 2.3, 2.8, 3.3 V. Each curve is a different supply; the switching point tracks VDD/2 and the "gain" (slope of the transition) scales with overdrive.',
+            },
+        ],
+    },
+    {
+        id: 'astable',
+        title: 'BJT astable multivibrator',
+        tagline: 'Two transistors, two caps — no external clock, just relaxation oscillation.',
+        category: 'Active devices',
+        netlist: `* Classic BJT astable (2-transistor RC oscillator).
+*
+* Each transistor′s collector is coupled to the other′s base by
+* a capacitor. When one Q turns on, it yanks the other′s base
+* negative through the cross-coupling cap; the base relaxes back
+* through Rb (base resistor) until the transistor turns on again.
+* Period ≈ 2·Rb·C·ln(2) → with 47 k and 10 µF gives ~650 ms / 2 Hz.
+
+Vcc  vcc 0 5
+
+Rc1  vcc c1 1k
+Rc2  vcc c2 1k
+Rb1  vcc b1 22k
+Rb2  vcc b2 22k
+
+* Series base stoppers: limit the reverse-Vbe spike during the
+* regenerative flip so Newton-Raphson stays well-conditioned.
+Rs1  b1 bq1 1k
+Rs2  b2 bq2 1k
+
+* Initial-condition asymmetry (50 mV on C1) breaks the perfectly
+* symmetric metastable DC state so the astable actually starts up.
+C1   c1 b2 47n IC=0.05
+C2   c2 b1 47n IC=0
+
+Q1   c1 bq1 0 QN
+Q2   c2 bq2 0 QN
+
+.model QN NPN(Is=1e-15 Bf=100 Vaf=50 Cje=10p Cjc=5p)
+
+.tran 1u 4m 0 UIC
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(c1)', 'V(c2)'],
+        },
+        tour: [
+            {
+                title: 'Why it oscillates',
+                body: 'Neither device is stable when both are on or both are off. Once one Q is a tiny bit on, it pulls its collector toward ground and — via the cross-coupling cap — yanks the other Q′s base negative, forcing it OFF. The off Q′s base then slowly climbs back through its Rb until the process reverses. The half-period is set by Rb·C·ln(2).',
+            },
+            {
+                title: 'Run transient',
+                body: 'Half-period ≈ 22k · 47n · ln(2) ≈ 0.72 ms, so the oscillator runs near 1.4 kHz. The 4 ms transient captures ~5 full cycles. Expect V(c1) and V(c2) as square-ish pulses, 180° out-of-phase. Rise edges are fast (Q turning on), fall edges slope more gently (cap charging through Rb).',
+            },
+            {
+                title: 'Tune the frequency',
+                body: 'Halve both cap values (47n → 22n) to double the frequency. Or reduce Rb1/Rb2 to 10 k to do the same. The duty cycle is only 50 % when both halves are symmetric — try making one Rb bigger than the other to see it skew.',
+            },
+        ],
+    },
 ];

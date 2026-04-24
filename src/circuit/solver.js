@@ -27,6 +27,50 @@ const NEWTON_MAX_ITER = 200;
 const NEWTON_ABSTOL = 1e-9;
 const NEWTON_RELTOL = 1e-4;
 const NEWTON_VNTOL  = 1e-6;
+const EXP_CLAMP = 40;               // exp(V/Vt) clamp — anything above is effectively "on", keeps NR stable
+
+/**
+ * Limit a forward junction voltage step so exp(Vj/Vt) doesn't blow the
+ * Jacobian off the rails. Classic SPICE pnjlim: once Vj exceeds vcrit
+ * (the exponential's knee), switch to a log step. Returns a damped Vj
+ * that preserves convergence direction.
+ */
+function pnjlim(vj, vjOld, vt, vcrit) {
+    if (vj <= vcrit || Math.abs(vj - vjOld) <= 2 * vt) return vj;
+    if (vjOld <= 0) return vcrit + vt * Math.log(Math.max(vj, vt) / vt);
+    const arg = 1 + (vj - vjOld) / vt;
+    if (arg > 0) return vjOld + vt * Math.log(arg);
+    return vcrit;
+}
+
+/**
+ * Reverse-breakdown limiter (for zener). Symmetric to pnjlim but on
+ * the other side of the characteristic. Keeps the NR step from
+ * overshooting -BV by more than a thermal voltage.
+ */
+function bvlim(vj, vjOld, vt, bv) {
+    // Only engage when we're past -bv+2vt AND moving deeper in reverse.
+    const knee = -bv;
+    if (vj >= knee + 3 * vt || Math.abs(vj - vjOld) <= 2 * vt) return vj;
+    if (vjOld >= knee) return knee - vt * Math.log(Math.max(knee - vj, vt) / vt);
+    const arg = 1 + (vjOld - vj) / vt;
+    if (arg > 0) return vjOld - vt * Math.log(arg);
+    return knee;
+}
+
+/**
+ * Apply both forward-on and reverse-breakdown limiting to a diode
+ * junction, using the previous iteration's value (vjOld) as the
+ * reference. Simplifies the call sites in stamp code.
+ */
+function limitDiode(vj, vjOld, params) {
+    const vt = (params.n ?? 1) * VT;
+    const Is = params.is ?? 1e-14;
+    const vcrit = vt * Math.log(vt / (Math.SQRT2 * Is));
+    let v = pnjlim(vj, vjOld, vt, vcrit);
+    if (params.bv && params.bv > 0) v = bvlim(v, vjOld, vt, params.bv);
+    return v;
+}
 
 /**
  * Evaluate a parsed source spec at time t (for transient / DC).
@@ -156,6 +200,237 @@ function stampVSrc(A, z, a, b, k, e) {
 }
 
 /**
+ * Evaluate a diode companion at junction voltage vd (volts).
+ * Handles the normal Shockley term AND a Zener reverse-breakdown term
+ * (activated when BV > 0 and IBV > 0). The reverse-bias region blows
+ * up exponentially below -BV — same functional form as ngspice's
+ * "bv/ibv" diode model.
+ */
+function diodeEval(vd, params) {
+    const Is = params.is ?? 1e-14;
+    const n = params.n ?? 1;
+    const vt = n * VT;
+    const bv = params.bv ?? 0;
+    const ibv = params.ibv ?? 1e-3;
+    const eexp = Math.exp(Math.min(vd / vt, EXP_CLAMP));
+    let Id = Is * (eexp - 1) + GMIN * vd;
+    let Geq = (Is / vt) * eexp + GMIN;
+    // Reverse-breakdown (Zener/avalanche): kicks in when Vd becomes very negative.
+    if (bv > 0) {
+        // Shift origin to -bv and use exp() of the excess in reverse direction.
+        const vbr = -bv;                      // breakdown point
+        if (vd < vbr + 3 * vt) {
+            const eexpR = Math.exp(Math.min(-(vd - vbr) / vt, EXP_CLAMP));
+            Id  += -ibv * (eexpR - 1);
+            Geq +=  (ibv / vt) * eexpR;
+        }
+    }
+    const Ieq = Id - Geq * vd;
+    return { Id, Geq, Ieq };
+}
+
+/**
+ * Ebers-Moll BJT evaluation in the "NPN-equivalent" junction frame.
+ * vbe and vbc are already polarity-adjusted (p·(Vb-Ve) and p·(Vb-Vc))
+ * and optionally voltage-limited by the caller. Returns port currents
+ * (enter-device convention) and the Jacobian entries the stamp code
+ * needs. PNP polarity is reapplied by the caller when converting back
+ * into node-space KCL contributions.
+ */
+function bjtEval(vbe, vbc, mdl) {
+    const Is  = mdl.params.is  ?? 1e-16;
+    const Bf  = Math.max(mdl.params.bf  ?? 100, 1e-3);
+    const Br  = Math.max(mdl.params.br  ?? 1,   1e-3);
+    const Vaf = mdl.params.vaf;  // Early voltage — undefined/0 ⇒ disabled
+    const Nf  = mdl.params.nf  ?? 1;
+    const Nr  = mdl.params.nr  ?? 1;
+    const Vtf = Nf * VT, Vtr = Nr * VT;
+
+    const ebe = Math.exp(Math.min(vbe / Vtf, EXP_CLAMP));
+    const ebc = Math.exp(Math.min(vbc / Vtr, EXP_CLAMP));
+
+    // Core Ebers-Moll injection currents (NPN-equivalent)
+    const Icc_F = Is * (ebe - 1);            // forward BE injection
+    const Icc_R = Is * (ebc - 1);            // reverse BC injection
+
+    // Early-effect modulator: (1 + Vcb/Vaf) clamped to a sane range.
+    let early = 1;
+    if (Vaf && Vaf > 0) {
+        early = 1 + (-vbc) / Vaf;            // Vcb = -Vbc
+        if (early < 0.25) early = 0.25;      // keep matrix well-conditioned
+    }
+
+    const Ic = Icc_F * early - Icc_R * (early + 1 / Br);
+    const Ib = Icc_F / Bf + Icc_R / Br;
+
+    // Partial derivatives wrt effective Vbe / Vbc (NPN frame)
+    const dIF = (Is / Vtf) * ebe;            // ∂Icc_F / ∂Vbe
+    const dIR = (Is / Vtr) * ebc;            // ∂Icc_R / ∂Vbc
+
+    // Jacobian (ignoring ∂early/∂Vbc for simplicity; that term is O(Ic/Vaf) ≪ gm)
+    const J_be_c =  dIF * early;                   // ∂Ic/∂Vbe
+    const J_bc_c = -dIR * (early + 1 / Br);        // ∂Ic/∂Vbc
+    const J_be_b =  dIF / Bf;                      // ∂Ib/∂Vbe
+    const J_bc_b =  dIR / Br;                      // ∂Ib/∂Vbc
+
+    return { Ic, Ib, Ie: -(Ic + Ib),
+             J_be_c, J_bc_c, J_be_b, J_bc_b };
+}
+
+/**
+ * Stamp a BJT (type 'Q') at the current NR iterate into the MNA
+ * system. `history` is a mutable {vbe, vbc} object (one per BJT
+ * instance) that remembers the previous NR iterate's limited junction
+ * voltages — without this, exp(Vbe/Vt) blows up the first time a
+ * fresh DC solve sees a 12 V base voltage and the solver never
+ * recovers.
+ */
+function stampBJT(A, z, el, mdl, x, isNPN, history) {
+    const p = isNPN ? +1 : -1;
+    const iC = ri(el.nc), iB = ri(el.nb), iE = ri(el.ne);
+    const vC = iC >= 0 ? x[iC] : 0;
+    const vB = iB >= 0 ? x[iB] : 0;
+    const vE = iE >= 0 ? x[iE] : 0;
+
+    const Vtf = (mdl.params.nf ?? 1) * VT;
+    const Is  = mdl.params.is ?? 1e-16;
+    const vcrit = Vtf * Math.log(Vtf / (Math.SQRT2 * Is));
+
+    let vbe = p * (vB - vE);
+    let vbc = p * (vB - vC);
+    if (history) {
+        vbe = pnjlim(vbe, history.vbe ?? vbe, Vtf, vcrit);
+        vbc = pnjlim(vbc, history.vbc ?? vbc, Vtf, vcrit);
+        history.vbe = vbe;
+        history.vbc = vbc;
+    }
+
+    const r = bjtEval(vbe, vbc, mdl);
+
+    // Constant ("companion source") part per terminal, in real frame.
+    const Kc = p * (r.Ic - (r.J_be_c * vbe + r.J_bc_c * vbc));
+    const Kb = p * (r.Ib - (r.J_be_b * vbe + r.J_bc_b * vbc));
+    const Ke = -(Kc + Kb);
+
+    const { J_be_c, J_bc_c, J_be_b, J_bc_b } = r;
+    const J_be_e = -(J_be_c + J_be_b);
+    const J_bc_e = -(J_bc_c + J_bc_b);
+
+    /* Row nc (terminal current = Ic enters collector):
+         LHS += (J_be_c)·Vbe + (J_bc_c)·Vbc    with  Vbe=Vb-Ve, Vbc=Vb-Vc */
+    const add = (row, nb, ne, nc_, Jbe, Jbc) => {
+        if (row < 0) return;
+        if (nb  >= 0) A[row][nb]  += (Jbe + Jbc);
+        if (ne  >= 0) A[row][ne]  += (-Jbe);
+        if (nc_ >= 0) A[row][nc_] += (-Jbc);
+    };
+    add(iC, iB, iE, iC, J_be_c, J_bc_c);
+    add(iB, iB, iE, iC, J_be_b, J_bc_b);
+    add(iE, iB, iE, iC, J_be_e, J_bc_e);
+
+    if (iC >= 0) z[iC] += -Kc;
+    if (iB >= 0) z[iB] += -Kb;
+    if (iE >= 0) z[iE] += -Ke;
+
+    // Convergence floor between each junction.
+    stampG(A, el.nb, el.ne, GMIN);
+    stampG(A, el.nb, el.nc, GMIN);
+    return r;
+}
+
+/**
+ * Level-1 Shichman-Hodges MOSFET evaluation. Returns drain current,
+ * transconductances gm (wrt Vgs), go (wrt Vds), gmb (wrt Vbs).
+ * Body effect is enabled only when gamma > 0.
+ */
+function mosEval(vG, vD, vS, vB, el, mdl, isN) {
+    const p     = isN ? +1 : -1;
+    const Vto   = mdl.params.vto    ?? 1.0;
+    const Kp    = mdl.params.kp     ?? 50e-6;
+    const lam   = mdl.params.lambda ?? 0;
+    const gamma = mdl.params.gamma  ?? 0;
+    const phi   = mdl.params.phi    ?? 0.6;
+    const W     = el.W ?? mdl.params.w ?? 10e-6;
+    const L     = el.L ?? mdl.params.l ?? 1e-6;
+    const beta  = Kp * (W / L);
+
+    const vgs = p * (vG - vS);
+    const vds = p * (vD - vS);
+    const vbs = p * (vB - vS);
+
+    // Body-effect threshold; guard against negative argument.
+    let Vth = Vto;
+    let dVthdVbs = 0;
+    if (gamma > 0) {
+        const phiVbs = Math.max(phi - vbs, 0);
+        const sqrtArg = Math.sqrt(phiVbs);
+        Vth = Vto + gamma * (sqrtArg - Math.sqrt(phi));
+        dVthdVbs = phiVbs > 0 ? -gamma / (2 * sqrtArg) : 0;
+    }
+
+    let Id = 0, gm = 0, go = 0, gmb = 0;
+    const vov = vgs - Vth;
+    if (vov <= 0) {
+        // Cutoff — leave at zero, nothing to stamp except GMIN floor.
+    } else if (vds < vov) {
+        // Triode
+        Id = beta * (vov - vds / 2) * vds * (1 + lam * vds);
+        gm = beta * vds * (1 + lam * vds);
+        go = beta * ((vov - vds) * (1 + lam * vds) + (vov * vds - vds * vds / 2) * lam);
+        gmb = -gm * dVthdVbs;
+    } else {
+        // Saturation
+        Id = 0.5 * beta * vov * vov * (1 + lam * vds);
+        gm = beta * vov * (1 + lam * vds);
+        go = 0.5 * beta * vov * vov * lam;
+        gmb = -gm * dVthdVbs;
+    }
+    return { Id, gm, go, gmb, vgs, vds, vbs };
+}
+
+/**
+ * Stamp a MOSFET ('M') into MNA at the current NR iterate. Gate and
+ * bulk pins carry no DC current in this model, so only D and S get
+ * conductance/current contributions. Adding GMIN between D and S keeps
+ * the Jacobian well-conditioned when the device is cutoff.
+ */
+function stampMOSFET(A, z, el, mdl, x, isN) {
+    const p  = isN ? +1 : -1;
+    const iD = ri(el.nd), iG = ri(el.ng), iS = ri(el.ns), iB = ri(el.nbulk);
+    const vG = iG >= 0 ? x[iG] : 0;
+    const vD = iD >= 0 ? x[iD] : 0;
+    const vS = iS >= 0 ? x[iS] : 0;
+    const vB = iB >= 0 ? x[iB] : 0;
+
+    const r = mosEval(vG, vD, vS, vB, el, mdl, isN);
+
+    /* Linearisation: I_d_real = p·Id + gm·(Vg-Vs) + go·(Vd-Vs) + gmb·(Vb-Vs)
+       where the gm/go/gmb numbers are computed in the "effective" frame
+       so squaring with p² keeps magnitudes (signs carried by the const). */
+    const Kd = p * (r.Id - (r.gm * r.vgs + r.go * r.vds + r.gmb * r.vbs));
+
+    // Jacobian stamps — row iD
+    if (iD >= 0) {
+        if (iG >= 0) A[iD][iG] += r.gm;
+        if (iS >= 0) A[iD][iS] -= (r.gm + r.go + r.gmb);
+        if (iD >= 0) A[iD][iD] += r.go;
+        if (iB >= 0) A[iD][iB] += r.gmb;
+    }
+    // Row iS — current leaves drain equals current enters source (plus any gate/bulk cap leakage, zero here)
+    if (iS >= 0) {
+        if (iG >= 0) A[iS][iG] -= r.gm;
+        if (iD >= 0) A[iS][iD] -= r.go;
+        if (iS >= 0) A[iS][iS] += (r.gm + r.go + r.gmb);
+        if (iB >= 0) A[iS][iB] -= r.gmb;
+    }
+    if (iD >= 0) z[iD] += -Kd;
+    if (iS >= 0) z[iS] +=  Kd;
+
+    stampG(A, el.nd, el.ns, GMIN);
+    return r;
+}
+
+/**
  * DC operating point. Iterates Newton-Raphson until diodes converge,
  * or returns the linear solution directly when the circuit has none.
  * Initial guess: all node voltages = 0.
@@ -169,8 +444,15 @@ export function solveDC(ctx, opts = {}) {
     if (initX.length === ctx.size) {
         for (let i = 0; i < ctx.size; i++) prevX[i] = initX[i];
     }
-    const hasNonlinear = ctx.elems.some((e) => e.type === 'D');
+    const hasNonlinear = ctx.elems.some((e) => e.type === 'D' || e.type === 'Q' || e.type === 'M');
     const maxIter = hasNonlinear ? NEWTON_MAX_ITER : 1;
+
+    /* Per-element NR history: last-accepted junction voltage per
+       non-linear device. Seeded at iteration 0 with the raw initial
+       guess so pnjlim becomes a no-op (which is the right behavior —
+       pnjlim needs a real previous step to damp toward). */
+    const bjtHist = new Map();
+    const diodeHist = new Map();
 
     let x = prevX;
     for (let iter = 0; iter < maxIter; iter++) {
@@ -209,30 +491,30 @@ export function solveDC(ctx, opts = {}) {
                     break;
                 }
                 case 'D': {
-                    // Non-linear diode: companion = Geq + Ieq (parallel).
-                    //   Id  = Is · (exp(Vd / (n·VT)) − 1) + GMIN·Vd
-                    //   Geq = dId/dVd   (evaluated at guess Vd_prev)
-                    //   Ieq = Id(Vd_prev) − Geq·Vd_prev
                     const mdl = ctx.models[el.model] || ctx.models.default;
-                    const Is = mdl.params.is ?? 1e-14;
-                    const n = mdl.params.n ?? 1;
-                    const vt = n * VT;
                     const vaIdx = ri(el.n1), vbIdx = ri(el.n2);
                     const vA = vaIdx >= 0 ? prevX[vaIdx] : 0;
                     const vB = vbIdx >= 0 ? prevX[vbIdx] : 0;
-                    let vd = vA - vB;
-                    // Voltage limiting so the exp doesn't explode early in NR.
-                    const vcrit = vt * Math.log(vt / (Math.SQRT2 * Is));
-                    if (vd > vcrit && Math.abs(vd - 0) > 2 * vt) {
-                        // Sub-step limit: clamp Δvd between iterations.
-                        vd = vcrit + vt * Math.log(1 + (vd - vcrit) / vt);
-                    }
-                    const eexp = Math.exp(Math.min(vd / vt, 40));
-                    const Id = Is * (eexp - 1) + GMIN * vd;
-                    const Geq = (Is / vt) * eexp + GMIN;
-                    const Ieq = Id - Geq * vd;
+                    const vdRaw = vA - vB;
+                    const vdOld = diodeHist.get(el.name);
+                    const vd = limitDiode(vdRaw, vdOld ?? vdRaw, mdl.params);
+                    diodeHist.set(el.name, vd);
+                    const { Geq, Ieq } = diodeEval(vd, mdl.params);
                     stampG(A, el.n1, el.n2, Geq);
                     stampI(z, el.n1, el.n2, Ieq);
+                    break;
+                }
+                case 'Q': {
+                    const mdl = ctx.models[el.model] || ctx.models.qdefault;
+                    const isNPN = (mdl.type || 'NPN').toUpperCase() !== 'PNP';
+                    if (!bjtHist.has(el.name)) bjtHist.set(el.name, {});
+                    stampBJT(A, z, el, mdl, prevX, isNPN, bjtHist.get(el.name));
+                    break;
+                }
+                case 'M': {
+                    const mdl = ctx.models[el.model] || ctx.models.mdefault;
+                    const t = (mdl.type || 'NMOS').toUpperCase();
+                    stampMOSFET(A, z, el, mdl, prevX, t === 'NMOS');
                     break;
                 }
                 case 'E': {
@@ -326,7 +608,11 @@ export function solveTran(ctx, options) {
     if (!(tstep > 0) || !(tstop > 0) || tstop <= tstart) {
         throw new Error('.tran tstep and tstop must be positive with tstop > tstart');
     }
-    const maxSamples = Math.ceil((tstop - tstart) / tstep) + 2;
+    /* Size the output buffer generously — the adaptive step halver may
+       drop dt by up to 256× on pathological events. If we run out of
+       slots we silently bail out (the tIdx guard below), which is far
+       preferable to re-allocating mid-sim. */
+    const maxSamples = Math.ceil((tstop - tstart) / tstep) * 8 + 16;
     const tArr = new Float64Array(maxSamples);
     const interior = ctx.interior;
     const size = ctx.size;
@@ -335,37 +621,39 @@ export function solveTran(ctx, options) {
     const branchHist = [];
     for (let i = 0; i < size - interior; i++) branchHist.push(new Float64Array(maxSamples));
 
-    // Initial state: DC op-point (unless UIC).
+    /* Initial state.
+       Non-UIC: run a DC op-point first — caps are open, inductors are
+       shorts, and the result gives us a consistent starting node
+       vector.
+       UIC: skip DC and seed each storage element's history directly
+       from its IC= clause. Node voltages stay at zero; the first
+       transient step will resolve them via NR once it has cap
+       currents to work with. IC is correctly interpreted as the
+       *voltage across the cap* (or *current through the inductor*),
+       not as an absolute node voltage. */
     let prev = new Float64Array(size);
     if (!options.uic) {
         const dc = solveDC(ctx);
         for (let i = 0; i < size; i++) prev[i] = dc.x[i];
-    } else {
-        for (const el of ctx.elems) {
-            if (el.type === 'C' && el.ic) {
-                // Approximate: just use it for the first companion step.
-                // (Proper UIC would clamp the cap voltage, but a one-step
-                // relaxation converges in practice.)
-                const a = ri(el.n1), b = ri(el.n2);
-                if (a >= 0) prev[a] = el.ic;
-                if (b >= 0) prev[b] = 0;
-            }
-            if (el.type === 'L' && el.ic && el.branchIdx != null) prev[el.branchIdx] = el.ic;
-        }
     }
-    // We also need a per-storage element "last known" (v_prev, i_prev) pair
-    // for the companion source. For caps we use terminal-voltage history,
-    // for inductors we use branch-current history.
     const vCapPrev = new Map();
     const iLPrev = new Map();
     for (const el of ctx.elems) {
         if (el.type === 'C') {
-            const a = ri(el.n1), b = ri(el.n2);
-            const vA = a >= 0 ? prev[a] : 0;
-            const vB = b >= 0 ? prev[b] : 0;
-            vCapPrev.set(el.name, vA - vB);
+            if (options.uic) {
+                vCapPrev.set(el.name, el.ic || 0);
+            } else {
+                const a = ri(el.n1), b = ri(el.n2);
+                const vA = a >= 0 ? prev[a] : 0;
+                const vB = b >= 0 ? prev[b] : 0;
+                vCapPrev.set(el.name, vA - vB);
+            }
         } else if (el.type === 'L') {
-            iLPrev.set(el.name, prev[el.branchIdx] || 0);
+            if (options.uic) {
+                iLPrev.set(el.name, el.ic || 0);
+            } else {
+                iLPrev.set(el.name, prev[el.branchIdx] || 0);
+            }
         }
     }
 
@@ -374,7 +662,9 @@ export function solveTran(ctx, options) {
     for (let i = 0; i < interior; i++) nodeHist[i][0] = prev[i];
     for (let i = 0; i < size - interior; i++) branchHist[i][0] = prev[interior + i];
 
-    const dt = tstep;
+    const dtBase = tstep;
+    let dtNow = tstep;
+    const dtMin = tstep / 256;   // don't halve forever — bail out after this
     let t = tstart;
     // Companion conductance terms (depend only on dt).
     //   Cap:    Geq = 2C/dt ; Ieq = Geq·V_n + I_n (stored I from prior step)
@@ -383,13 +673,19 @@ export function solveTran(ctx, options) {
     const vLPrev = new Map();     // last voltage across inductor
 
     while (t < tstop - 1e-15) {
-        const tNext = Math.min(tstop, t + dt);
+        const tNext = Math.min(tstop, t + dtNow);
         const h = tNext - t;
 
         let xIter = new Float64Array(prev);
         let converged = false;
-        const hasNonlinear = ctx.elems.some((e) => e.type === 'D');
+        const hasNonlinear = ctx.elems.some((e) => e.type === 'D' || e.type === 'Q' || e.type === 'M');
         const innerMax = hasNonlinear ? NEWTON_MAX_ITER : 1;
+
+        /* Per-step NR history — reset at the start of every time step
+           so each Newton iteration's limiter reference is the
+           current step's converging state, not the previous step's. */
+        const bjtHist = new Map();
+        const diodeHist = new Map();
 
         for (let it = 0; it < innerMax; it++) {
             const A = zerosMat(size);
@@ -438,19 +734,60 @@ export function solveTran(ctx, options) {
                     }
                     case 'D': {
                         const mdl = ctx.models[el.model] || ctx.models.default;
-                        const Is = mdl.params.is ?? 1e-14;
-                        const n = mdl.params.n ?? 1;
-                        const vt = n * VT;
                         const vaIdx = ri(el.n1), vbIdx = ri(el.n2);
                         const vA = vaIdx >= 0 ? xIter[vaIdx] : 0;
                         const vB = vbIdx >= 0 ? xIter[vbIdx] : 0;
-                        const vd = vA - vB;
-                        const eexp = Math.exp(Math.min(vd / vt, 40));
-                        const Id = Is * (eexp - 1) + GMIN * vd;
-                        const Geq = (Is / vt) * eexp + GMIN;
-                        const Ieq = Id - Geq * vd;
+                        const vdRaw = vA - vB;
+                        const vdOld = diodeHist.get(el.name);
+                        const vd = limitDiode(vdRaw, vdOld ?? vdRaw, mdl.params);
+                        diodeHist.set(el.name, vd);
+                        const { Geq, Ieq } = diodeEval(vd, mdl.params);
                         stampG(A, el.n1, el.n2, Geq);
                         stampI(z, el.n1, el.n2, Ieq);
+                        break;
+                    }
+                    case 'Q': {
+                        const mdl = ctx.models[el.model] || ctx.models.qdefault;
+                        const isNPN = (mdl.type || 'NPN').toUpperCase() !== 'PNP';
+                        if (!bjtHist.has(el.name)) bjtHist.set(el.name, {});
+                        stampBJT(A, z, el, mdl, xIter, isNPN, bjtHist.get(el.name));
+                        // Parasitic junction caps — treated as linear Cs in parallel
+                        // with the junctions. Stored history piggybacks on the cap
+                        // code below by injecting synthetic names into the maps.
+                        const cje = mdl.params.cje || 0;
+                        const cjc = mdl.params.cjc || 0;
+                        if (cje > 0 || cjc > 0) {
+                            const stampParasitic = (tag, n1, n2, C) => {
+                                if (!(C > 0)) return;
+                                const Geq = (2 * C) / h;
+                                const vp = vCapPrev.get(tag) || 0;
+                                const ip = iCapPrev.get(tag) || 0;
+                                stampG(A, n1, n2, Geq);
+                                stampI(z, n1, n2, -(Geq * vp + ip));
+                            };
+                            stampParasitic(`${el.name}__cje`, el.nb, el.ne, cje);
+                            stampParasitic(`${el.name}__cjc`, el.nb, el.nc, cjc);
+                        }
+                        break;
+                    }
+                    case 'M': {
+                        const mdl = ctx.models[el.model] || ctx.models.mdefault;
+                        const isN = (mdl.type || 'NMOS').toUpperCase() === 'NMOS';
+                        stampMOSFET(A, z, el, mdl, xIter, isN);
+                        const cgso = mdl.params.cgso || 0;
+                        const cgdo = mdl.params.cgdo || 0;
+                        if (cgso > 0 || cgdo > 0) {
+                            const stampParasitic = (tag, n1, n2, C) => {
+                                if (!(C > 0)) return;
+                                const Geq = (2 * C) / h;
+                                const vp = vCapPrev.get(tag) || 0;
+                                const ip = iCapPrev.get(tag) || 0;
+                                stampG(A, n1, n2, Geq);
+                                stampI(z, n1, n2, -(Geq * vp + ip));
+                            };
+                            stampParasitic(`${el.name}__cgs`, el.ng, el.ns, cgso);
+                            stampParasitic(`${el.name}__cgd`, el.ng, el.nd, cgdo);
+                        }
                         break;
                     }
                     case 'E': {
@@ -502,22 +839,38 @@ export function solveTran(ctx, options) {
             if (dmax < NEWTON_ABSTOL) { converged = true; break; }
         }
         if (!converged) {
+            /* Adaptive timestep fallback. Halve the step and retry the
+               same t → tNext range. This transparently handles stiff
+               regenerative events (e.g. a BJT astable snap) where the
+               user's nominal step is too coarse for NR. If we hit dtMin
+               we give up with a proper error. Successful "retry"
+               attempts don't leak into future steps — we restore
+               dtBase on the NEXT successful step below. */
+            if (dtNow > dtMin) {
+                dtNow = dtNow / 2;
+                continue;
+            }
             throw new Error(`Transient: Newton-Raphson failed to converge at t=${tNext.toExponential(3)} s`);
         }
 
-        // Commit new step: update companion histories for caps and inductors.
+        // Commit new step: update companion histories for caps, inductors,
+        // and transistor parasitic caps (BJT Cje/Cjc, MOSFET Cgso/Cgdo).
+        const commitCap = (tag, n1, n2, C) => {
+            if (!(C > 0)) return;
+            const a = ri(n1), b = ri(n2);
+            const vA = a >= 0 ? xIter[a] : 0;
+            const vB = b >= 0 ? xIter[b] : 0;
+            const vNew = vA - vB;
+            const vPrev = vCapPrev.get(tag) || 0;
+            const iPrev = iCapPrev.get(tag) || 0;
+            const Geq = (2 * C) / h;
+            const iNew = Geq * (vNew - vPrev) - iPrev;
+            vCapPrev.set(tag, vNew);
+            iCapPrev.set(tag, iNew);
+        };
         for (const el of ctx.elems) {
             if (el.type === 'C') {
-                const a = ri(el.n1), b = ri(el.n2);
-                const vA = a >= 0 ? xIter[a] : 0;
-                const vB = b >= 0 ? xIter[b] : 0;
-                const vNew = vA - vB;
-                const vPrev = vCapPrev.get(el.name) || 0;
-                const iPrev = iCapPrev.get(el.name) || 0;
-                const Geq = (2 * el.value) / h;
-                const iNew = Geq * (vNew - vPrev) - iPrev;
-                vCapPrev.set(el.name, vNew);
-                iCapPrev.set(el.name, iNew);
+                commitCap(el.name, el.n1, el.n2, el.value);
             } else if (el.type === 'L') {
                 const a = ri(el.n1), b = ri(el.n2);
                 const vA = a >= 0 ? xIter[a] : 0;
@@ -525,15 +878,26 @@ export function solveTran(ctx, options) {
                 const vNew = vA - vB;
                 iLPrev.set(el.name, xIter[el.branchIdx] || 0);
                 vLPrev.set(el.name, vNew);
+            } else if (el.type === 'Q') {
+                const mdl = ctx.models[el.model] || ctx.models.qdefault;
+                commitCap(`${el.name}__cje`, el.nb, el.ne, mdl.params.cje || 0);
+                commitCap(`${el.name}__cjc`, el.nb, el.nc, mdl.params.cjc || 0);
+            } else if (el.type === 'M') {
+                const mdl = ctx.models[el.model] || ctx.models.mdefault;
+                commitCap(`${el.name}__cgs`, el.ng, el.ns, mdl.params.cgso || 0);
+                commitCap(`${el.name}__cgd`, el.ng, el.nd, mdl.params.cgdo || 0);
             }
         }
 
         prev = xIter;
         tIdx++;
+        if (tIdx >= tArr.length) break;      // array capacity — paranoid stop
         tArr[tIdx] = tNext;
         for (let i = 0; i < interior; i++) nodeHist[i][tIdx] = prev[i];
         for (let i = 0; i < size - interior; i++) branchHist[i][tIdx] = prev[interior + i];
         t = tNext;
+        // Slowly grow the step back toward the user's nominal after a retry.
+        if (dtNow < dtBase) dtNow = Math.min(dtBase, dtNow * 1.4);
     }
 
     // Trim trailing unused slots.
@@ -641,17 +1005,77 @@ export function solveAC(ctx, directive) {
                     break;
                 }
                 case 'D': {
-                    // Small-signal diode conductance at DC op-point.
+                    // Small-signal diode conductance at DC op-point
+                    // (includes the reverse-breakdown contribution via diodeEval).
                     const mdl = ctx.models[el.model] || ctx.models.default;
-                    const Is = mdl.params.is ?? 1e-14;
-                    const nC = mdl.params.n ?? 1;
-                    const vt = nC * VT;
                     const a = ri(el.n1), b = ri(el.n2);
                     const vA = a >= 0 ? dc.x[a] : 0;
                     const vB = b >= 0 ? dc.x[b] : 0;
-                    const vd = vA - vB;
-                    const Geq = (Is / vt) * Math.exp(Math.min(vd / vt, 40)) + GMIN;
+                    const { Geq } = diodeEval(vA - vB, mdl.params);
                     cG(el.n1, el.n2, Geq, 0);
+                    break;
+                }
+                case 'Q': {
+                    /* Hybrid-π small-signal stamp at the DC op-point:
+                         gπ = dIb/dVbe   (base–emitter admittance)
+                         gm = dIc/dVbe   (transconductance)
+                         go = |dIc/dVbc| (output conductance, from Early)
+                         gμ = dIb/dVbc   (feedback, often negligible)
+                       Plus Cje (B-E), Cjc (B-C) as jωC admittances.         */
+                    const mdl = ctx.models[el.model] || ctx.models.qdefault;
+                    const isNPN = (mdl.type || 'NPN').toUpperCase() !== 'PNP';
+                    const p = isNPN ? +1 : -1;
+                    const iC = ri(el.nc), iB = ri(el.nb), iE = ri(el.ne);
+                    const vC = iC >= 0 ? dc.x[iC] : 0;
+                    const vB = iB >= 0 ? dc.x[iB] : 0;
+                    const vE = iE >= 0 ? dc.x[iE] : 0;
+                    const r = bjtEval(p * (vB - vE), p * (vB - vC), mdl);
+                    const gPi = r.J_be_b + GMIN;
+                    const gM  = r.J_be_c;
+                    const gMu = r.J_bc_b + GMIN;
+                    const gO  = -r.J_bc_c;     // flip sign → positive output conductance
+                    const cje = mdl.params.cje || 0;
+                    const cjc = mdl.params.cjc || 0;
+                    // gπ + jωCje between B-E
+                    cG(el.nb, el.ne, gPi, w * cje);
+                    // gμ + jωCjc between B-C
+                    cG(el.nb, el.nc, gMu, w * cjc);
+                    // Output conductance go between C-E
+                    cG(el.nc, el.ne, gO, 0);
+                    // Transconductance: Ic = gm · Vbe  ≡ a VCCS from B→E driving C→E.
+                    // Stamp: A[nc][nb] += gm, A[nc][ne] -= gm, A[ne][nb] -= gm, A[ne][ne] += gm.
+                    if (iC >= 0 && iB >= 0) Are[iC][iB] += gM;
+                    if (iC >= 0 && iE >= 0) Are[iC][iE] -= gM;
+                    if (iE >= 0 && iB >= 0) Are[iE][iB] -= gM;
+                    if (iE >= 0 && iE >= 0) Are[iE][iE] += gM;
+                    break;
+                }
+                case 'M': {
+                    const mdl = ctx.models[el.model] || ctx.models.mdefault;
+                    const isN = (mdl.type || 'NMOS').toUpperCase() === 'NMOS';
+                    const iD = ri(el.nd), iG = ri(el.ng), iS = ri(el.ns), iB = ri(el.nbulk);
+                    const vG = iG >= 0 ? dc.x[iG] : 0;
+                    const vD = iD >= 0 ? dc.x[iD] : 0;
+                    const vS = iS >= 0 ? dc.x[iS] : 0;
+                    const vB = iB >= 0 ? dc.x[iB] : 0;
+                    const r = mosEval(vG, vD, vS, vB, el, mdl, isN);
+                    const cgs = mdl.params.cgso || 0;
+                    const cgd = mdl.params.cgdo || 0;
+                    cG(el.ng, el.ns, 0, w * cgs);
+                    cG(el.ng, el.nd, 0, w * cgd);
+                    cG(el.nd, el.ns, r.go + GMIN, 0);
+                    // gm: VCCS from G→S driving D→S
+                    if (iD >= 0 && iG >= 0) Are[iD][iG] += r.gm;
+                    if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gm;
+                    if (iS >= 0 && iG >= 0) Are[iS][iG] -= r.gm;
+                    if (iS >= 0)            Are[iS][iS] += r.gm;
+                    if (r.gmb && iB >= 0) {
+                        // Body transconductance (minor for most sims)
+                        if (iD >= 0) Are[iD][iB] += r.gmb;
+                        if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gmb;
+                        if (iS >= 0) Are[iS][iB] -= r.gmb;
+                        if (iS >= 0) Are[iS][iS] += r.gmb;
+                    }
                     break;
                 }
                 case 'E': {
@@ -693,4 +1117,140 @@ export function solveAC(ctx, directive) {
         }
     }
     return { freqs: Float64Array.from(freqs), V: results, branchI: branchResults };
+}
+
+/**
+ * Override a single element's primary value in a solver context,
+ * in place. Returns true if the override was applied.
+ *
+ * This is the bolt-on `.step` hook: the page-level code clones the
+ * context (shallow-copy of `elems`) once, then calls `setElementValue`
+ * before each sweep step. Supported element kinds are anything with a
+ * scalar `value` field (R, C, L), plus V and I where the DC level of
+ * the first 'dc' source-spec is overridden. Anything else returns
+ * false so the caller can surface a sensible error.
+ */
+export function setElementValue(ctx, elementName, value) {
+    const target = String(elementName).toLowerCase();
+    for (const el of ctx.elems) {
+        if (String(el.name).toLowerCase() !== target) continue;
+        switch (el.type) {
+            case 'R': case 'C': case 'L':
+                el.value = value;
+                return true;
+            case 'V': case 'I': {
+                // Replace or inject a 'dc' spec while preserving any AC/PULSE/SIN.
+                const hasDc = el.source.find((s) => s.kind === 'dc');
+                if (hasDc) hasDc.v = value;
+                else el.source.unshift({ kind: 'dc', v: value });
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+/**
+ * Convenience wrapper that runs DC / AC / Transient once per `.step`
+ * iteration and returns the full family-of-curves. If no `.step`
+ * directive exists it runs exactly once with stepValue = null.
+ *
+ *   runs: Array<{ stepValue: number|null, op?, ac?, tran? }>
+ *
+ * The caller decides which analysis to read from each run; this keeps
+ * the driver agnostic to downstream plotting.
+ */
+export function runWithStep(ctx, stepDirective, analyses) {
+    const runs = [];
+    if (!stepDirective) {
+        runs.push({ stepValue: null, ...runAnalyses(ctx, analyses) });
+        return runs;
+    }
+    const { target, start, stop, step } = stepDirective;
+    if (!(Math.abs(step) > 0) || !(Math.sign(stop - start) === Math.sign(step))) {
+        throw new Error(`.step: invalid sweep (${start} → ${stop} by ${step})`);
+    }
+    // Snap total iteration count to (stop-start)/step rounded with a
+    // tiny tolerance — avoids off-by-one from floating-point drift.
+    const tol = Math.abs(step) * 1e-6;
+    for (let v = start; step > 0 ? v <= stop + tol : v >= stop - tol; v += step) {
+        const applied = setElementValue(ctx, target, v);
+        if (!applied) throw new Error(`.step: element ${target} has no sweepable value`);
+        runs.push({ stepValue: v, ...runAnalyses(ctx, analyses) });
+    }
+    return runs;
+}
+
+function runAnalyses(ctx, analyses) {
+    const out = {};
+    if (analyses.op)   out.op   = solveDC(ctx);
+    if (analyses.ac)   out.ac   = solveAC(ctx, analyses.ac);
+    if (analyses.tran) out.tran = solveTran(ctx, analyses.tran);
+    if (analyses.dc)   out.dc   = solveDCSweep(ctx, analyses.dc);
+    return out;
+}
+
+/**
+ * DC sweep (".dc Vin start stop step") — solves the operating point
+ * at every value of a source between [start, stop] in increments of
+ * step. Returns node voltages across the sweep as a family indexed by
+ * the sweep variable, enabling VTC (voltage-transfer-characteristic)
+ * plots without needing a transient envelope.
+ *
+ *   sweepDirective: { kind:'dc', src, start, stop, step }
+ *   returns: { sweepValues, nodeV[node-1][k], converged: bool[] }
+ *
+ * The sweep source is assumed to be a V or I with a DC level. We
+ * mutate it through `setElementValue`; after the sweep we restore the
+ * final value (callers shouldn't need to care, but .tran following
+ * .dc in the same netlist would otherwise see a shifted bias).
+ */
+export function solveDCSweep(ctx, sweepDirective) {
+    const { src, start, stop, step } = sweepDirective;
+    if (!(Math.abs(step) > 0) || !(Math.sign(stop - start) === Math.sign(step))) {
+        throw new Error(`.dc: invalid sweep (${start} → ${stop} by ${step})`);
+    }
+    const tol = Math.abs(step) * 1e-6;
+    const values = [];
+    for (let v = start; step > 0 ? v <= stop + tol : v >= stop - tol; v += step) {
+        values.push(v);
+    }
+
+    const nNodes = ctx.nNodes;
+    // nodeV[i] is a length-K array holding V(node_{i+1}) across the sweep.
+    const nodeV = new Array(nNodes - 1);
+    for (let i = 0; i < nNodes - 1; i++) nodeV[i] = new Array(values.length);
+    const converged = new Array(values.length);
+
+    // Capture the source's original value so we can restore it.
+    const targetEl = ctx.elems.find((e) => String(e.name).toLowerCase() === String(src).toLowerCase());
+    const originalDc = targetEl && targetEl.source
+        ? targetEl.source.find((s) => s.kind === 'dc')?.v
+        : (targetEl?.value);
+
+    // Use "continuation": seed each step's Newton-Raphson with the
+    // previous step's solution. For smooth VTCs this dramatically
+    // improves convergence and prevents the solver from jumping to
+    // spurious operating points (which otherwise shows up as weird
+    // vertical jumps mid-sweep, e.g. a −50 V artefact in a CMOS VTC).
+    let prevSol = null;
+    for (let k = 0; k < values.length; k++) {
+        const applied = setElementValue(ctx, src, values[k]);
+        if (!applied) throw new Error(`.dc: source ${src} has no sweepable value`);
+        const dc = solveDC(ctx, prevSol ? { initial: prevSol } : {});
+        converged[k] = dc.converged;
+        for (let i = 0; i < nNodes - 1; i++) nodeV[i][k] = dc.x[i];
+        prevSol = dc.x;
+    }
+
+    if (originalDc !== undefined) setElementValue(ctx, src, originalDc);
+
+    return {
+        src,
+        sweepValues: values,
+        nodeV,
+        converged,
+    };
 }

@@ -493,6 +493,120 @@
     font-weight: 600;
 }
 
+/* Plot header — signal chips + measure toggle on one row */
+.cs-plot-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 0 2px;
+}
+
+.cs-plot-header > .cs-signal-chips {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.cs-chart-outer {
+    position: relative;
+    flex: 0 0 auto;
+    cursor: crosshair;
+    user-select: none;
+}
+
+.cs-chart-outer.is-dragging {
+    cursor: ew-resize;
+}
+
+.cs-chart-bode {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+}
+
+.cs-chart-bode .cs-bode-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* Measurement panel — cursor readouts + auto-measurements */
+.cs-measure-panel {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 4px 2px 2px;
+    min-width: 0;
+}
+
+.cs-measure-col {
+    flex: 1 1 360px;
+    min-width: 0;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 8px;
+    padding: 8px 10px;
+    overflow-x: auto;
+}
+
+.cs-measure-title {
+    color: #94a3b8;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+
+.cs-measure-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+
+.cs-measure-table th {
+    color: #64748b;
+    font-weight: 600;
+    font-size: 0.68rem;
+    text-align: left;
+    padding: 4px 8px 4px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.cs-measure-table td {
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px dotted rgba(148, 163, 184, 0.1);
+    color: #cbd5e1;
+}
+
+.cs-measure-table tr.cs-measure-delta {
+    background: rgba(251, 191, 36, 0.06);
+}
+
+.cs-measure-table tr.cs-measure-delta td {
+    font-weight: 600;
+    color: #fbbf24;
+}
+
+.cs-measure-table tr.cs-measure-delta td:first-child {
+    color: #f59e0b;
+    font-weight: 700;
+}
+
+.cs-cursor-tag {
+    font-weight: 800;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9rem;
+}
+
+.cs-empty-cell {
+    text-align: center;
+    color: #64748b;
+    font-style: italic;
+    padding: 10px 0;
+}
+
 /* DC op-point table */
 .cs-op-results {
     padding: 12px 14px;
@@ -669,4 +783,27 @@ html[data-theme="light"] .cs-home-tagline,
 html[data-theme="light"] .cs-demo-card-tagline,
 html[data-theme="light"] .cs-tour-step-body {
     color: #475569;
+}
+
+html[data-theme="light"] .cs-measure-col {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+}
+
+html[data-theme="light"] .cs-measure-table td {
+    color: #334155;
+    border-bottom-color: rgba(15, 23, 42, 0.07);
+}
+
+html[data-theme="light"] .cs-measure-table th {
+    color: #64748b;
+    border-bottom-color: #cbd5e1;
+}
+
+html[data-theme="light"] .cs-mono {
+    color: #b45309;
+}
+
+html[data-theme="light"] .cs-measure-table tr.cs-measure-delta td {
+    color: #b45309;
 }

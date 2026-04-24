@@ -28,13 +28,18 @@ import {
     SlidersHorizontal,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
-import { buildContext, solveDC, solveTran, solveAC } from '../circuit/solver.js';
+import { buildContext, solveDC, solveTran, solveAC, runWithStep } from '../circuit/solver.js';
 import { layoutSchematic } from '../circuit/schematic.js';
 import { DEMOS } from '../circuit/demos.js';
+import {
+    riseTime, fallTime, settlingTime, overshoot, peakToPeak, steadyStateEst,
+    corner3dB, peakGain, unityGainFreq, phaseMargin, sampleAt,
+} from '../circuit/measurements.js';
 import './CircuitStudioPage.css';
 
 const ANALYSIS_TYPES = [
     { id: 'op', label: 'DC op-point' },
+    { id: 'dc', label: 'DC sweep' },
     { id: 'ac', label: 'AC sweep' },
     { id: 'tran', label: 'Transient' },
 ];
@@ -84,6 +89,13 @@ function CircuitStudioPage() {
     const [selectedSignals, setSelectedSignals] = useState([]);
     // Schematic zoom/pan (phase 1: zoom only — pan lands with the editor in phase 2)
     const [schematicZoom, setSchematicZoom] = useState(1);
+    // Phase-2 measurement cursors: two draggable verticals on tran / AC plots.
+    // Values live in data space (seconds for tran, Hz for AC); null until a
+    // simulation completes. Re-initialised whenever new results arrive.
+    const [cursorA, setCursorA] = useState(null);
+    const [cursorB, setCursorB] = useState(null);
+    const [activeCursor, setActiveCursor] = useState(null); // 'A' | 'B' | null
+    const [showMeasure, setShowMeasure] = useState(true);
 
     // Persist the netlist so the user doesn't lose their work across
     // tab navigations. (Multi-tasking: this page stays mounted in the
@@ -106,17 +118,59 @@ function CircuitStudioPage() {
         try { return layoutSchematic(parsed); } catch { return null; }
     }, [parsed]);
 
-    // Auto-detect default signals when results arrive.
+    // Auto-detect default signals when results arrive. With .step
+    // active, suggestions like "V(vout)" fan out into the family
+    // "V(vout) @R1=1k", "V(vout) @R1=2k", … so we match by name prefix.
     useEffect(() => {
         if (!runResult || !runResult.signals) return;
-        const all = runResult.signals.map((s) => s.name);
-        // Prefer demo-recommended signals if they exist in the results.
+        const allSignals = runResult.signals;
+        const all = allSignals.map((s) => s.name);
         const demo = DEMOS.find((d) => d.id === loadedDemoId);
         const suggested = demo?.signals?.[analysis] || [];
-        const preferred = suggested.filter((s) => all.includes(s));
-        if (preferred.length > 0) setSelectedSignals(preferred);
-        else setSelectedSignals(all.slice(0, Math.min(4, all.length)));
+        const preferred = [];
+        for (const want of suggested) {
+            const exact = all.filter((n) => n === want);
+            if (exact.length > 0) {
+                preferred.push(...exact);
+                continue;
+            }
+            const family = all.filter((n) => n.startsWith(`${want} `) || n === want);
+            preferred.push(...family);
+        }
+        if (preferred.length > 0) {
+            setSelectedSignals(preferred);
+        } else if (runResult.step) {
+            // Pick the first node's whole family of curves so users see
+            // the point of .step at a glance.
+            const firstBase = allSignals[0]?.baseNode;
+            const family = allSignals.filter((s) => s.baseNode === firstBase).map((s) => s.name);
+            setSelectedSignals(family.slice(0, Math.min(8, family.length)));
+        } else {
+            setSelectedSignals(all.slice(0, Math.min(4, all.length)));
+        }
     }, [runResult, loadedDemoId, analysis]);
+
+    // Re-seed measurement cursors whenever a new result arrives. Placing
+    // them at the 25th and 75th percentile of the x-axis puts them inside
+    // the interesting part of most plots while being visually separated.
+    useEffect(() => {
+        if (!runResult) { setCursorA(null); setCursorB(null); return; }
+        if (runResult.kind === 'tran' && runResult.t?.length > 1) {
+            const t = runResult.t;
+            setCursorA(t[Math.floor(t.length * 0.25)]);
+            setCursorB(t[Math.floor(t.length * 0.75)]);
+        } else if (runResult.kind === 'ac' && runResult.f?.length > 1) {
+            const f = runResult.f;
+            setCursorA(f[Math.floor(f.length * 0.25)]);
+            setCursorB(f[Math.floor(f.length * 0.75)]);
+        } else if (runResult.kind === 'dc' && runResult.x?.length > 1) {
+            const x = runResult.x;
+            setCursorA(x[Math.floor(x.length * 0.25)]);
+            setCursorB(x[Math.floor(x.length * 0.75)]);
+        } else {
+            setCursorA(null); setCursorB(null);
+        }
+    }, [runResult]);
 
     const loadDemo = useCallback((demo) => {
         setNetlistText(demo.netlist);
@@ -160,10 +214,12 @@ function CircuitStudioPage() {
         setTimeout(() => {
             try {
                 const ctx = buildContext(parsed);
-                const signals = [];
+                const stepDir = parsed.directives.find((d) => d.kind === 'step') || null;
+
                 if (analysis === 'op') {
+                    // .step doesn't really make sense for a DC op-point
+                    // "plot", so treat op as single-run regardless.
                     const dc = solveDC(ctx);
-                    // Show a single-sample "bar-chart" of every node voltage.
                     const nodeVals = [];
                     for (let i = 1; i < parsed.nNodes; i++) {
                         nodeVals.push({
@@ -182,40 +238,21 @@ function CircuitStudioPage() {
                     const dir = parsed.directives.find((d) => d.kind === 'tran') || {
                         tstep: 1e-6, tstop: 1e-3, tstart: 0,
                     };
-                    const res = solveTran(ctx, dir);
-                    for (let i = 1; i < parsed.nNodes; i++) {
-                        signals.push({
-                            name: `V(${parsed.nodeNames[i] || 'n' + i})`,
-                            kind: 'tran',
-                            t: res.t,
-                            y: res.nodeV[i - 1],
-                        });
-                    }
-                    setRunResult({
-                        kind: 'tran',
-                        t: res.t,
-                        signals,
-                    });
+                    const runs = runWithStep(ctx, stepDir, { tran: dir });
+                    setRunResult(buildStepResult('tran', runs, parsed, stepDir));
                 } else if (analysis === 'ac') {
                     const dir = parsed.directives.find((d) => d.kind === 'ac') || {
                         mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
                     };
-                    const ac = solveAC(ctx, dir);
-                    for (let i = 1; i < parsed.nNodes; i++) {
-                        const samples = ac.V[i - 1];
-                        signals.push({
-                            name: `V(${parsed.nodeNames[i] || 'n' + i})`,
-                            kind: 'ac',
-                            f: ac.freqs,
-                            mag: samples.map((s) => Math.hypot(s.re, s.im)),
-                            phase: samples.map((s) => Math.atan2(s.im, s.re) * 180 / Math.PI),
-                        });
+                    const runs = runWithStep(ctx, stepDir, { ac: dir });
+                    setRunResult(buildStepResult('ac', runs, parsed, stepDir));
+                } else if (analysis === 'dc') {
+                    const dir = parsed.directives.find((d) => d.kind === 'dc');
+                    if (!dir) {
+                        throw new Error('DC sweep needs a .dc directive — e.g. `.dc Vin 0 3.3 0.01`.');
                     }
-                    setRunResult({
-                        kind: 'ac',
-                        f: ac.freqs,
-                        signals,
-                    });
+                    const runs = runWithStep(ctx, stepDir, { dc: dir });
+                    setRunResult(buildStepResult('dc', runs, parsed, stepDir));
                 }
             } catch (e) {
                 setRunError(e?.message || String(e));
@@ -390,8 +427,24 @@ function CircuitStudioPage() {
                         <div className="cs-pane-title">
                             <Activity size={13} /> Results
                             {runResult?.kind === 'op' && <span className="cs-pane-subtle">DC operating point</span>}
-                            {runResult?.kind === 'tran' && <span className="cs-pane-subtle">Transient · {runResult.t?.length || 0} samples</span>}
-                            {runResult?.kind === 'ac' && <span className="cs-pane-subtle">AC sweep · {runResult.f?.length || 0} samples</span>}
+                            {runResult?.kind === 'tran' && (
+                                <span className="cs-pane-subtle">
+                                    Transient · {runResult.t?.length || 0} samples
+                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
+                                </span>
+                            )}
+                            {runResult?.kind === 'ac' && (
+                                <span className="cs-pane-subtle">
+                                    AC sweep · {runResult.f?.length || 0} samples
+                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
+                                </span>
+                            )}
+                            {runResult?.kind === 'dc' && (
+                                <span className="cs-pane-subtle">
+                                    DC sweep of {runResult.xSource} · {runResult.x?.length || 0} points
+                                    {runResult.step && ` · .step ${runResult.step.target} × ${runResult.step.values.length}`}
+                                </span>
+                            )}
                         </div>
                         {runError && (
                             <div className="cs-err-block">
@@ -403,6 +456,14 @@ function CircuitStudioPage() {
                                 result={runResult}
                                 selectedSignals={selectedSignals}
                                 onSignalsChange={setSelectedSignals}
+                                cursorA={cursorA}
+                                cursorB={cursorB}
+                                onCursorAChange={setCursorA}
+                                onCursorBChange={setCursorB}
+                                activeCursor={activeCursor}
+                                onActiveCursorChange={setActiveCursor}
+                                showMeasure={showMeasure}
+                                onShowMeasureChange={setShowMeasure}
                             />
                         )}
                         {!runError && !runResult && (
@@ -647,7 +708,12 @@ function renderShape(s, key) {
     }
 }
 
-function ResultsPanel({ result, selectedSignals, onSignalsChange }) {
+function ResultsPanel({
+    result, selectedSignals, onSignalsChange,
+    cursorA, cursorB, onCursorAChange, onCursorBChange,
+    activeCursor, onActiveCursorChange,
+    showMeasure, onShowMeasureChange,
+}) {
     const toggle = (name) => {
         onSignalsChange(selectedSignals.includes(name)
             ? selectedSignals.filter((s) => s !== name)
@@ -675,8 +741,115 @@ function ResultsPanel({ result, selectedSignals, onSignalsChange }) {
         );
     }
 
+    // ---- Click-and-drag cursors: recharts' onMouseDown/Move give us
+    // `activeLabel` in data-space directly, which dodges the pain of
+    // computing plot-area pixel offsets for log-scale AC plots. ----
+
+    const pickNearest = (x) => {
+        if (cursorA == null) return 'A';
+        if (cursorB == null) return 'B';
+        const scale = (v) => (result.kind === 'ac' ? Math.log10(Math.max(v, 1e-18)) : v);
+        return Math.abs(scale(x) - scale(cursorA)) <= Math.abs(scale(x) - scale(cursorB)) ? 'A' : 'B';
+    };
+    const handleMouseDown = (ev) => {
+        if (!ev || typeof ev.activeLabel !== 'number') return;
+        const x = ev.activeLabel;
+        const which = pickNearest(x);
+        if (which === 'A') onCursorAChange(x); else onCursorBChange(x);
+        onActiveCursorChange(which);
+    };
+    const handleMouseMove = (ev) => {
+        if (!activeCursor) return;
+        if (!ev || typeof ev.activeLabel !== 'number') return;
+        if (activeCursor === 'A') onCursorAChange(ev.activeLabel);
+        else onCursorBChange(ev.activeLabel);
+    };
+    const handleMouseUp = () => onActiveCursorChange(null);
+
+    const cursorStroke = { A: '#f59e0b', B: '#22d3ee' };
+
+    if (result.kind === 'dc') {
+        const x = result.x;
+        const data = new Array(x.length);
+        for (let i = 0; i < x.length; i++) {
+            const row = { x: x[i] };
+            for (const s of result.signals) row[s.name] = s.y[i];
+            data[i] = row;
+        }
+        return (
+            <div className="cs-plot-wrap">
+                <div className="cs-plot-header">
+                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
+                    <button
+                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                        onClick={() => onShowMeasureChange(!showMeasure)}
+                        title="Toggle cursor readouts"
+                    >
+                        <SlidersHorizontal size={12} /> Measure
+                    </button>
+                </div>
+                <div
+                    className={`cs-chart-outer${activeCursor ? ' is-dragging' : ''}`}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                >
+                    <ResponsiveContainer width="100%" height={260}>
+                        <LineChart
+                            data={data}
+                            margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
+                            onMouseDown={handleMouseDown}
+                            onMouseMove={handleMouseMove}
+                        >
+                            <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                            <XAxis
+                                dataKey="x" type="number" scale="linear" domain={['auto', 'auto']}
+                                tickFormatter={(v) => formatSIValue(v, 'V')}
+                                label={{ value: result.xSource, position: 'insideBottom', dy: 12, fontSize: 11 }}
+                            />
+                            <YAxis
+                                tickFormatter={(v) => formatSIValue(v, 'V')}
+                                label={{ value: 'V(node)', angle: -90, position: 'insideLeft', fontSize: 11 }}
+                            />
+                            <Tooltip
+                                formatter={(v) => formatSIValue(v, 'V')}
+                                labelFormatter={(v) => `${result.xSource} = ${formatSIValue(v, 'V')}`}
+                            />
+                            <Legend />
+                            {showMeasure && cursorA != null && (
+                                <ReferenceLine x={cursorA} stroke={cursorStroke.A} strokeDasharray="4 4" strokeWidth={1.5}
+                                    label={{ value: 'A', position: 'top', fill: cursorStroke.A, fontSize: 11, fontWeight: 700 }} />
+                            )}
+                            {showMeasure && cursorB != null && (
+                                <ReferenceLine x={cursorB} stroke={cursorStroke.B} strokeDasharray="4 4" strokeWidth={1.5}
+                                    label={{ value: 'B', position: 'top', fill: cursorStroke.B, fontSize: 11, fontWeight: 700 }} />
+                            )}
+                            {selectedSignals.map((name, i) => (
+                                <Line
+                                    key={name}
+                                    type="monotone"
+                                    dataKey={name}
+                                    stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                                    dot={false}
+                                    strokeWidth={1.5}
+                                    isAnimationActive={false}
+                                />
+                            ))}
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+                {showMeasure && (
+                    <DcMeasurePanel
+                        result={result}
+                        selectedSignals={selectedSignals}
+                        cursorA={cursorA}
+                        cursorB={cursorB}
+                    />
+                )}
+            </div>
+        );
+    }
+
     if (result.kind === 'tran') {
-        // Rebuild recharts series.
         const t = result.t;
         const data = new Array(t.length);
         for (let i = 0; i < t.length; i++) {
@@ -686,37 +859,73 @@ function ResultsPanel({ result, selectedSignals, onSignalsChange }) {
         }
         return (
             <div className="cs-plot-wrap">
-                <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
-                <ResponsiveContainer width="100%" height={260}>
-                    <LineChart data={data} margin={{ top: 6, right: 24, left: 6, bottom: 6 }}>
-                        <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                        <XAxis
-                            dataKey="t" type="number" scale="linear" domain={['auto', 'auto']}
-                            tickFormatter={(v) => formatSIValue(v, 's')}
-                            label={{ value: 'time', position: 'insideBottom', dy: 12, fontSize: 11 }}
-                        />
-                        <YAxis
-                            tickFormatter={(v) => formatSIValue(v, 'V')}
-                            label={{ value: 'V(node)', angle: -90, position: 'insideLeft', fontSize: 11 }}
-                        />
-                        <Tooltip
-                            formatter={(v) => formatSIValue(v, 'V')}
-                            labelFormatter={(v) => `t = ${formatSIValue(v, 's')}`}
-                        />
-                        <Legend />
-                        {selectedSignals.map((name, i) => (
-                            <Line
-                                key={name}
-                                type="monotone"
-                                dataKey={name}
-                                stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
-                                dot={false}
-                                strokeWidth={1.5}
-                                isAnimationActive={false}
+                <div className="cs-plot-header">
+                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
+                    <button
+                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                        onClick={() => onShowMeasureChange(!showMeasure)}
+                        title="Toggle cursor & auto-measure panel"
+                    >
+                        <SlidersHorizontal size={12} /> Measure
+                    </button>
+                </div>
+                <div
+                    className={`cs-chart-outer${activeCursor ? ' is-dragging' : ''}`}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                >
+                    <ResponsiveContainer width="100%" height={260}>
+                        <LineChart
+                            data={data}
+                            margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
+                            onMouseDown={handleMouseDown}
+                            onMouseMove={handleMouseMove}
+                        >
+                            <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                            <XAxis
+                                dataKey="t" type="number" scale="linear" domain={['auto', 'auto']}
+                                tickFormatter={(v) => formatSIValue(v, 's')}
+                                label={{ value: 'time', position: 'insideBottom', dy: 12, fontSize: 11 }}
                             />
-                        ))}
-                    </LineChart>
-                </ResponsiveContainer>
+                            <YAxis
+                                tickFormatter={(v) => formatSIValue(v, 'V')}
+                                label={{ value: 'V(node)', angle: -90, position: 'insideLeft', fontSize: 11 }}
+                            />
+                            <Tooltip
+                                formatter={(v) => formatSIValue(v, 'V')}
+                                labelFormatter={(v) => `t = ${formatSIValue(v, 's')}`}
+                            />
+                            <Legend />
+                            {showMeasure && cursorA != null && (
+                                <ReferenceLine x={cursorA} stroke={cursorStroke.A} strokeDasharray="4 4" strokeWidth={1.5}
+                                    label={{ value: 'A', position: 'top', fill: cursorStroke.A, fontSize: 11, fontWeight: 700 }} />
+                            )}
+                            {showMeasure && cursorB != null && (
+                                <ReferenceLine x={cursorB} stroke={cursorStroke.B} strokeDasharray="4 4" strokeWidth={1.5}
+                                    label={{ value: 'B', position: 'top', fill: cursorStroke.B, fontSize: 11, fontWeight: 700 }} />
+                            )}
+                            {selectedSignals.map((name, i) => (
+                                <Line
+                                    key={name}
+                                    type="monotone"
+                                    dataKey={name}
+                                    stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                                    dot={false}
+                                    strokeWidth={1.5}
+                                    isAnimationActive={false}
+                                />
+                            ))}
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+                {showMeasure && (
+                    <MeasurePanel
+                        result={result}
+                        selectedSignals={selectedSignals}
+                        cursorA={cursorA}
+                        cursorB={cursorB}
+                    />
+                )}
             </div>
         );
     }
@@ -735,67 +944,349 @@ function ResultsPanel({ result, selectedSignals, onSignalsChange }) {
         }
         return (
             <div className="cs-plot-wrap">
-                <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
-                <div className="cs-bode-wrap">
-                    <ResponsiveContainer width="100%" height={160}>
-                        <LineChart data={mag} margin={{ top: 6, right: 24, left: 6, bottom: 6 }}>
-                            <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                            <XAxis
-                                dataKey="f" type="number" scale="log" domain={['auto', 'auto']}
-                                tickFormatter={(v) => formatSIValue(v, 'Hz')}
-                            />
-                            <YAxis
-                                tickFormatter={(v) => `${v.toFixed(0)}`}
-                                label={{ value: 'Mag (dB)', angle: -90, position: 'insideLeft', fontSize: 10 }}
-                            />
-                            <Tooltip
-                                formatter={(v) => `${Number(v).toFixed(2)} dB`}
-                                labelFormatter={(v) => `f = ${formatSIValue(v, 'Hz')}`}
-                            />
-                            <Legend />
-                            <ReferenceLine y={-3} stroke="#f59e0b" strokeDasharray="3 3" opacity={0.4} />
-                            {selectedSignals.map((name, i) => (
-                                <Line
-                                    key={name}
-                                    type="monotone"
-                                    dataKey={name}
-                                    stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
-                                    dot={false} strokeWidth={1.5} isAnimationActive={false}
-                                />
-                            ))}
-                        </LineChart>
-                    </ResponsiveContainer>
-                    <ResponsiveContainer width="100%" height={130}>
-                        <LineChart data={phase} margin={{ top: 6, right: 24, left: 6, bottom: 6 }}>
-                            <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                            <XAxis
-                                dataKey="f" type="number" scale="log" domain={['auto', 'auto']}
-                                tickFormatter={(v) => formatSIValue(v, 'Hz')}
-                            />
-                            <YAxis
-                                tickFormatter={(v) => `${v.toFixed(0)}°`}
-                                label={{ value: 'Phase', angle: -90, position: 'insideLeft', fontSize: 10 }}
-                            />
-                            <Tooltip
-                                formatter={(v) => `${Number(v).toFixed(1)}°`}
-                                labelFormatter={(v) => `f = ${formatSIValue(v, 'Hz')}`}
-                            />
-                            {selectedSignals.map((name, i) => (
-                                <Line
-                                    key={`p-${name}`}
-                                    type="monotone"
-                                    dataKey={name}
-                                    stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
-                                    dot={false} strokeWidth={1.2} isAnimationActive={false}
-                                />
-                            ))}
-                        </LineChart>
-                    </ResponsiveContainer>
+                <div className="cs-plot-header">
+                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
+                    <button
+                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                        onClick={() => onShowMeasureChange(!showMeasure)}
+                        title="Toggle cursor & auto-measure panel"
+                    >
+                        <SlidersHorizontal size={12} /> Measure
+                    </button>
                 </div>
+                <div
+                    className={`cs-chart-outer cs-chart-bode${activeCursor ? ' is-dragging' : ''}`}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                >
+                    <div className="cs-bode-wrap">
+                        <ResponsiveContainer width="100%" height={160}>
+                            <LineChart
+                                data={mag}
+                                margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
+                                onMouseDown={handleMouseDown}
+                                onMouseMove={handleMouseMove}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                                <XAxis
+                                    dataKey="f" type="number" scale="log" domain={['auto', 'auto']}
+                                    tickFormatter={(v) => formatSIValue(v, 'Hz')}
+                                />
+                                <YAxis
+                                    tickFormatter={(v) => `${v.toFixed(0)}`}
+                                    label={{ value: 'Mag (dB)', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                                />
+                                <Tooltip
+                                    formatter={(v) => `${Number(v).toFixed(2)} dB`}
+                                    labelFormatter={(v) => `f = ${formatSIValue(v, 'Hz')}`}
+                                />
+                                <Legend />
+                                <ReferenceLine y={-3} stroke="#f59e0b" strokeDasharray="3 3" opacity={0.4} />
+                                {showMeasure && cursorA != null && (
+                                    <ReferenceLine x={cursorA} stroke={cursorStroke.A} strokeDasharray="4 4" strokeWidth={1.5}
+                                        label={{ value: 'A', position: 'top', fill: cursorStroke.A, fontSize: 11, fontWeight: 700 }} />
+                                )}
+                                {showMeasure && cursorB != null && (
+                                    <ReferenceLine x={cursorB} stroke={cursorStroke.B} strokeDasharray="4 4" strokeWidth={1.5}
+                                        label={{ value: 'B', position: 'top', fill: cursorStroke.B, fontSize: 11, fontWeight: 700 }} />
+                                )}
+                                {selectedSignals.map((name, i) => (
+                                    <Line
+                                        key={name}
+                                        type="monotone"
+                                        dataKey={name}
+                                        stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                                        dot={false} strokeWidth={1.5} isAnimationActive={false}
+                                    />
+                                ))}
+                            </LineChart>
+                        </ResponsiveContainer>
+                        <ResponsiveContainer width="100%" height={130}>
+                            <LineChart
+                                data={phase}
+                                margin={{ top: 6, right: 24, left: 6, bottom: 6 }}
+                                onMouseDown={handleMouseDown}
+                                onMouseMove={handleMouseMove}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                                <XAxis
+                                    dataKey="f" type="number" scale="log" domain={['auto', 'auto']}
+                                    tickFormatter={(v) => formatSIValue(v, 'Hz')}
+                                />
+                                <YAxis
+                                    tickFormatter={(v) => `${v.toFixed(0)}°`}
+                                    label={{ value: 'Phase', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                                />
+                                <Tooltip
+                                    formatter={(v) => `${Number(v).toFixed(1)}°`}
+                                    labelFormatter={(v) => `f = ${formatSIValue(v, 'Hz')}`}
+                                />
+                                {showMeasure && cursorA != null && (
+                                    <ReferenceLine x={cursorA} stroke={cursorStroke.A} strokeDasharray="4 4" strokeWidth={1.5} />
+                                )}
+                                {showMeasure && cursorB != null && (
+                                    <ReferenceLine x={cursorB} stroke={cursorStroke.B} strokeDasharray="4 4" strokeWidth={1.5} />
+                                )}
+                                {selectedSignals.map((name, i) => (
+                                    <Line
+                                        key={`p-${name}`}
+                                        type="monotone"
+                                        dataKey={name}
+                                        stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                                        dot={false} strokeWidth={1.2} isAnimationActive={false}
+                                    />
+                                ))}
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+                {showMeasure && (
+                    <MeasurePanel
+                        result={result}
+                        selectedSignals={selectedSignals}
+                        cursorA={cursorA}
+                        cursorB={cursorB}
+                    />
+                )}
             </div>
         );
     }
     return null;
+}
+
+/** Δ-cursor readout + per-signal auto-measurements, shown below the
+ *  main plot. Transient gets rise/fall/settling/overshoot; AC gets
+ *  peak gain / −3 dB corner / unity-gain freq / phase margin. */
+function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
+    const isAC = result.kind === 'ac';
+    const xUnit = isAC ? 'Hz' : 's';
+    const xOf = (sig) => (isAC ? sig.f : sig.t);
+    const yOf = (sig) => (isAC ? sig.mag : sig.y);
+    const yUnit = isAC ? '' : 'V';
+
+    const sigs = result.signals.filter((s) => selectedSignals.includes(s.name));
+
+    // ---- Cursor readouts ----
+    const aRow = cursorA != null;
+    const bRow = cursorB != null;
+    const dx = (aRow && bRow) ? (cursorB - cursorA) : null;
+    const absDx = dx != null ? Math.abs(dx) : null;
+
+    return (
+        <div className="cs-measure-panel">
+            <div className="cs-measure-col">
+                <div className="cs-measure-title">Cursors</div>
+                <table className="cs-measure-table">
+                    <thead>
+                        <tr>
+                            <th style={{ width: 42 }}></th>
+                            <th>x</th>
+                            {sigs.map((s, i) => (
+                                <th key={s.name} style={{ color: SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}>{s.name}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td className="cs-cursor-tag" style={{ color: '#f59e0b' }}>A</td>
+                            <td className="cs-mono">{aRow ? formatSIValue(cursorA, xUnit) : '—'}</td>
+                            {sigs.map((s) => (
+                                <td key={s.name} className="cs-mono">
+                                    {aRow ? formatYAtX(xOf(s), yOf(s), cursorA, yUnit, isAC) : '—'}
+                                </td>
+                            ))}
+                        </tr>
+                        <tr>
+                            <td className="cs-cursor-tag" style={{ color: '#22d3ee' }}>B</td>
+                            <td className="cs-mono">{bRow ? formatSIValue(cursorB, xUnit) : '—'}</td>
+                            {sigs.map((s) => (
+                                <td key={s.name} className="cs-mono">
+                                    {bRow ? formatYAtX(xOf(s), yOf(s), cursorB, yUnit, isAC) : '—'}
+                                </td>
+                            ))}
+                        </tr>
+                        <tr className="cs-measure-delta">
+                            <td>Δ</td>
+                            <td className="cs-mono">{dx != null ? formatSIValue(dx, xUnit) : '—'}</td>
+                            {sigs.map((s) => {
+                                if (!aRow || !bRow) return <td key={s.name}>—</td>;
+                                const yA = sampleAt(xOf(s), yOf(s), cursorA);
+                                const yB = sampleAt(xOf(s), yOf(s), cursorB);
+                                const dy = yB - yA;
+                                return (
+                                    <td key={s.name} className="cs-mono">
+                                        {isAC ? formatDbDelta(yA, yB) : formatSIValue(dy, yUnit)}
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                        {!isAC && absDx && absDx > 0 && (
+                            <tr className="cs-measure-delta">
+                                <td>1/Δx</td>
+                                <td className="cs-mono" colSpan={1 + sigs.length}>{formatSIValue(1 / absDx, 'Hz')}</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            <div className="cs-measure-col">
+                <div className="cs-measure-title">Auto-measure</div>
+                <table className="cs-measure-table">
+                    <thead>
+                        {isAC ? (
+                            <tr>
+                                <th>Signal</th>
+                                <th>Peak</th>
+                                <th>−3 dB</th>
+                                <th>Unity f</th>
+                                <th>Phase margin</th>
+                            </tr>
+                        ) : (
+                            <tr>
+                                <th>Signal</th>
+                                <th>Steady</th>
+                                <th>Vpp</th>
+                                <th>Rise</th>
+                                <th>Settle 5%</th>
+                                <th>Over%</th>
+                            </tr>
+                        )}
+                    </thead>
+                    <tbody>
+                        {sigs.map((s, i) => (
+                            <tr key={s.name}>
+                                <td style={{ color: SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}>{s.name}</td>
+                                {isAC ? <AcMeasureCells sig={s} /> : <TranMeasureCells sig={s} />}
+                            </tr>
+                        ))}
+                        {sigs.length === 0 && (
+                            <tr><td colSpan={isAC ? 5 : 6} className="cs-empty-cell">Pick a signal above.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+/** DC-sweep variant of the measurement panel — cursors read X (sweep
+ *  voltage) and Y values for each signal; no auto-measurement yet
+ *  because "interesting" DC metrics (switching threshold, gain at
+ *  midpoint) are device-specific. */
+function DcMeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
+    const sigs = result.signals.filter((s) => selectedSignals.includes(s.name));
+    const aRow = cursorA != null;
+    const bRow = cursorB != null;
+    const dx = (aRow && bRow) ? (cursorB - cursorA) : null;
+
+    return (
+        <div className="cs-measure-panel">
+            <div className="cs-measure-col">
+                <div className="cs-measure-title">Cursors ({result.xSource})</div>
+                <table className="cs-measure-table">
+                    <thead>
+                        <tr>
+                            <th style={{ width: 42 }}></th>
+                            <th>{result.xSource}</th>
+                            {sigs.map((s, i) => (
+                                <th key={s.name} style={{ color: SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}>{s.name}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td className="cs-cursor-tag" style={{ color: '#f59e0b' }}>A</td>
+                            <td className="cs-mono">{aRow ? formatSIValue(cursorA, 'V') : '—'}</td>
+                            {sigs.map((s) => (
+                                <td key={s.name} className="cs-mono">
+                                    {aRow ? formatSIValue(sampleAt(s.x, s.y, cursorA), 'V') : '—'}
+                                </td>
+                            ))}
+                        </tr>
+                        <tr>
+                            <td className="cs-cursor-tag" style={{ color: '#22d3ee' }}>B</td>
+                            <td className="cs-mono">{bRow ? formatSIValue(cursorB, 'V') : '—'}</td>
+                            {sigs.map((s) => (
+                                <td key={s.name} className="cs-mono">
+                                    {bRow ? formatSIValue(sampleAt(s.x, s.y, cursorB), 'V') : '—'}
+                                </td>
+                            ))}
+                        </tr>
+                        <tr className="cs-measure-delta">
+                            <td>Δ</td>
+                            <td className="cs-mono">{dx != null ? formatSIValue(dx, 'V') : '—'}</td>
+                            {sigs.map((s) => {
+                                if (!aRow || !bRow) return <td key={s.name}>—</td>;
+                                const yA = sampleAt(s.x, s.y, cursorA);
+                                const yB = sampleAt(s.x, s.y, cursorB);
+                                const dy = yB - yA;
+                                const gain = dx ? dy / dx : null;
+                                return (
+                                    <td key={s.name} className="cs-mono" title={gain != null ? `slope = ${gain.toFixed(3)} V/V` : ''}>
+                                        {formatSIValue(dy, 'V')}{gain != null ? ` (${gain.toPrecision(3)} V/V)` : ''}
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+function TranMeasureCells({ sig }) {
+    const ss = steadyStateEst(sig.y);
+    const pp = peakToPeak(sig.y);
+    const rt = riseTime(sig.t, sig.y);
+    const ft = fallTime(sig.t, sig.y);
+    const st = settlingTime(sig.t, sig.y, 0.05);
+    const os = overshoot(sig.y);
+    return (
+        <>
+            <td className="cs-mono">{Number.isFinite(ss) ? formatSIValue(ss, 'V') : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(pp) ? formatSIValue(pp, 'V') : '—'}</td>
+            <td className="cs-mono">
+                {Number.isFinite(rt) ? formatSIValue(rt, 's')
+                    : Number.isFinite(ft) ? `↓ ${formatSIValue(ft, 's')}` : '—'}
+            </td>
+            <td className="cs-mono">{Number.isFinite(st) ? formatSIValue(st, 's') : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(os) ? `${os.toFixed(1)}%` : '—'}</td>
+        </>
+    );
+}
+
+function AcMeasureCells({ sig }) {
+    const pg = peakGain(sig.mag);
+    const c3 = corner3dB(sig.f, sig.mag);
+    const ug = unityGainFreq(sig.f, sig.mag);
+    const pm = phaseMargin(sig.f, sig.mag, sig.phase);
+    return (
+        <>
+            <td className="cs-mono">{Number.isFinite(pg) ? `${pg.toFixed(1)} dB` : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(c3) ? formatSIValue(c3, 'Hz') : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(ug) ? formatSIValue(ug, 'Hz') : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(pm) ? `${pm.toFixed(1)}°` : '—'}</td>
+        </>
+    );
+}
+
+function formatYAtX(xArr, yArr, x, unit, isAC) {
+    if (xArr == null || yArr == null) return '—';
+    const y = sampleAt(xArr, yArr, x);
+    if (!Number.isFinite(y)) return '—';
+    if (isAC) {
+        const db = 20 * Math.log10(Math.max(Math.abs(y), 1e-18));
+        return `${db.toFixed(2)} dB`;
+    }
+    return formatSIValue(y, unit);
+}
+
+function formatDbDelta(yA, yB) {
+    if (!Number.isFinite(yA) || !Number.isFinite(yB)) return '—';
+    const dbA = 20 * Math.log10(Math.max(Math.abs(yA), 1e-18));
+    const dbB = 20 * Math.log10(Math.max(Math.abs(yB), 1e-18));
+    return `${(dbB - dbA).toFixed(2)} dB`;
 }
 
 function SignalChips({ result, selected, onToggle }) {
@@ -821,6 +1312,125 @@ const SIGNAL_COLORS = [
     '#a855f7', '#14b8a6', '#f97316', '#6366f1',
     '#ec4899', '#22d3ee', '#84cc16', '#eab308',
 ];
+
+/** Merge the per-step run outputs from `runWithStep` into the single
+ *  signal-array shape that the plot + measurement components expect.
+ *
+ *  Strategy:
+ *    - Single run (no .step): behaves exactly like before, emits one
+ *      signal per circuit node.
+ *    - N-run .step sweep: emits N signals *per node*, each suffixed
+ *      with the step value (e.g. "V(vout) @R1=1k", "V(vout) @R1=2k",
+ *      …). Downstream code doesn't need to know about .step — it
+ *      just sees more signals and renders a family of curves. The
+ *      x-axis (t or f) uses the last run, which is always identical
+ *      across runs for the same analysis directive. */
+function buildStepResult(kind, runs, parsed, stepDir) {
+    if (!runs || runs.length === 0) {
+        throw new Error('Run returned no results.');
+    }
+    const isMulti = runs.length > 1;
+    const signals = [];
+
+    if (kind === 'tran') {
+        const tRef = runs[0].tran.t;
+        for (let r = 0; r < runs.length; r++) {
+            const res = runs[r].tran;
+            const suffix = isMulti
+                ? ` @${stepDir.target}=${formatStepValue(runs[r].stepValue)}`
+                : '';
+            for (let i = 1; i < parsed.nNodes; i++) {
+                signals.push({
+                    name: `V(${parsed.nodeNames[i] || 'n' + i})${suffix}`,
+                    kind: 'tran',
+                    t: res.t,
+                    y: res.nodeV[i - 1],
+                    stepValue: runs[r].stepValue,
+                    baseNode: parsed.nodeNames[i] || `n${i}`,
+                });
+            }
+        }
+        return {
+            kind: 'tran',
+            t: tRef,
+            signals,
+            step: isMulti ? { target: stepDir.target, values: runs.map((r) => r.stepValue) } : null,
+        };
+    }
+
+    if (kind === 'ac') {
+        const fRef = runs[0].ac.freqs;
+        for (let r = 0; r < runs.length; r++) {
+            const res = runs[r].ac;
+            const suffix = isMulti
+                ? ` @${stepDir.target}=${formatStepValue(runs[r].stepValue)}`
+                : '';
+            for (let i = 1; i < parsed.nNodes; i++) {
+                const samples = res.V[i - 1];
+                signals.push({
+                    name: `V(${parsed.nodeNames[i] || 'n' + i})${suffix}`,
+                    kind: 'ac',
+                    f: res.freqs,
+                    mag: samples.map((s) => Math.hypot(s.re, s.im)),
+                    phase: samples.map((s) => Math.atan2(s.im, s.re) * 180 / Math.PI),
+                    stepValue: runs[r].stepValue,
+                    baseNode: parsed.nodeNames[i] || `n${i}`,
+                });
+            }
+        }
+        return {
+            kind: 'ac',
+            f: fRef,
+            signals,
+            step: isMulti ? { target: stepDir.target, values: runs.map((r) => r.stepValue) } : null,
+        };
+    }
+
+    if (kind === 'dc') {
+        const xRef = runs[0].dc.sweepValues;
+        const src = runs[0].dc.src;
+        for (let r = 0; r < runs.length; r++) {
+            const res = runs[r].dc;
+            const suffix = isMulti
+                ? ` @${stepDir.target}=${formatStepValue(runs[r].stepValue)}`
+                : '';
+            for (let i = 1; i < parsed.nNodes; i++) {
+                signals.push({
+                    name: `V(${parsed.nodeNames[i] || 'n' + i})${suffix}`,
+                    kind: 'dc',
+                    x: res.sweepValues,
+                    y: res.nodeV[i - 1],
+                    stepValue: runs[r].stepValue,
+                    baseNode: parsed.nodeNames[i] || `n${i}`,
+                });
+            }
+        }
+        return {
+            kind: 'dc',
+            x: xRef,
+            xSource: src,
+            signals,
+            step: isMulti ? { target: stepDir.target, values: runs.map((r) => r.stepValue) } : null,
+        };
+    }
+
+    throw new Error(`buildStepResult: unsupported kind ${kind}`);
+}
+
+function formatStepValue(v) {
+    if (!Number.isFinite(v)) return '—';
+    const abs = Math.abs(v);
+    if (abs === 0) return '0';
+    if (abs >= 1e9) return `${(v / 1e9).toPrecision(3)}G`;
+    if (abs >= 1e6) return `${(v / 1e6).toPrecision(3)}M`;
+    if (abs >= 1e3) return `${(v / 1e3).toPrecision(3)}k`;
+    if (abs >= 1) return v.toPrecision(3);
+    if (abs >= 1e-3) return `${(v / 1e-3).toPrecision(3)}m`;
+    if (abs >= 1e-6) return `${(v / 1e-6).toPrecision(3)}u`;
+    if (abs >= 1e-9) return `${(v / 1e-9).toPrecision(3)}n`;
+    if (abs >= 1e-12) return `${(v / 1e-12).toPrecision(3)}p`;
+    return v.toExponential(2);
+}
 
 function formatSIValue(v, unit) {
     if (!Number.isFinite(v)) return '—';

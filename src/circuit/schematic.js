@@ -21,7 +21,7 @@
  * React / JSX here, keeping the geometry easy to unit-test.
  */
 
-import { SYMBOLS, rotateXY, rotateSide } from './symbols.js';
+import { SYMBOLS, rotateXY, rotateSide, pickSymbol } from './symbols.js';
 
 const GRID = 20; // pixel grid used for snapping
 
@@ -46,6 +46,10 @@ function collectPinNodes(el) {
             return [el.n1, el.n2, el.nc1, el.nc2];
         case 'O':
             return [el.inp, el.inn, el.out];
+        case 'Q':
+            return [el.nc, el.nb, el.ne];
+        case 'M':
+            return [el.nd, el.ng, el.ns, el.nbulk];
         default: return [];
     }
 }
@@ -59,6 +63,10 @@ function pinToNode(el) {
             return { n1: el.n1, n2: el.n2, nc1: el.nc1, nc2: el.nc2 };
         case 'O':
             return { inp: el.inp, inn: el.inn, out: el.out };
+        case 'Q':
+            return { nc: el.nc, nb: el.nb, ne: el.ne };
+        case 'M':
+            return { nd: el.nd, ng: el.ng, ns: el.ns, nbulk: el.nbulk };
         default: return {};
     }
 }
@@ -156,7 +164,7 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
     // -------- 2. Orient components + snap to grid --------
     const components = compActors.map((c) => {
         const el = c.element;
-        const sym = SYMBOLS[el.type];
+        const sym = pickSymbol(el, parsed.models) || SYMBOLS[el.type];
         if (!sym) return null;
         const p2n = pinToNode(el);
         let rot = 0;
@@ -202,6 +210,25 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
             const outMid = (n1.x + n2.x) / 2;
             const ctlMid = (c1.x + c2.x) / 2;
             rot = outMid < ctlMid ? 180 : 0;
+        } else if (el.type === 'Q') {
+            /* BJT: default orientation has collector up, emitter down,
+               base on the left. We keep that 3-terminal stance whenever
+               possible (it matches textbook convention). The centre of
+               the symbol is placed near the average of its nodes so the
+               subsequent spread pass lines them up cleanly. */
+            const nC = nodeActors.get(p2n.nc);
+            const nB = nodeActors.get(p2n.nb);
+            const nE = nodeActors.get(p2n.ne);
+            c.x = (nC.x + nB.x + nE.x) / 3;
+            c.y = (nC.y + nB.y + nE.y) / 3;
+            rot = 0;
+        } else if (el.type === 'M') {
+            const nD = nodeActors.get(p2n.nd);
+            const nG = nodeActors.get(p2n.ng);
+            const nS = nodeActors.get(p2n.ns);
+            c.x = (nD.x + nG.x + nS.x) / 3;
+            c.y = (nD.y + nG.y + nS.y) / 3;
+            rot = 0;
         }
 
         return {
@@ -472,6 +499,12 @@ function componentValue(el) {
         case 'E': return `E = ${fmtGain(el.gain)}`;
         case 'G': return `g = ${fmtGain(el.gm)} S`;
         case 'O': return 'op-amp';
+        case 'Q': return el.model ? el.model.toUpperCase() : '';
+        case 'M': {
+            const tag = el.model ? el.model.toUpperCase() : '';
+            if (el.W && el.L) return `${tag} W/L=${formatValue(el.W, 'm').replace(' ', '')}/${formatValue(el.L, 'm').replace(' ', '')}`;
+            return tag;
+        }
         default:  return '';
     }
 }

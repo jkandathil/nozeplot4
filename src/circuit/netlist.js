@@ -11,17 +11,25 @@
  *   L  inductor                 L<name> n+ n- value [IC=i0]
  *   V  voltage source           V<name> n+ n- [DC] v | AC mag [phase] | SIN(...) | PULSE(...) | PWL(...)
  *   I  current source           same source-function grammar as V
- *   D  diode                    D<name> anode cathode MODEL
+ *   D  diode                    D<name> anode cathode MODEL     (supports Shockley + Zener BV)
+ *   Q  BJT                      Q<name> collector base emitter [substrate] MODEL       (NPN / PNP)
+ *   M  MOSFET                   M<name> drain gate source [bulk] MODEL [W=.. L=..]     (NMOS / PMOS)
  *   E  VCVS                     E<name> n+ n- c+ c- gain
  *   G  VCCS                     G<name> n+ n- c+ c- gm
  *   O  ideal op-amp             O<name> in+ in- out        (virtual-short constraint, infinite gain)
- *   .model NAME D(Is=... N=...)           diode parameters
+ *
+ *   .model NAME  D(Is=... N=... Bv=... Ibv=... Cj0=...)
+ *   .model NAME  NPN(Is=... Bf=... Br=... Vaf=... Var=... Nf=... Nr=... Re=... Rc=... Rb=... Cje=... Cjc=...)
+ *   .model NAME  PNP(...)     — same parameters, opposite polarity
+ *   .model NAME  NMOS(Vto=... Kp=... Lambda=... Gamma=... Phi=... Cgso=... Cgdo=...)
+ *   .model NAME  PMOS(...)    — same parameters, opposite polarity
  *
  * Supported directives:
  *   .op
- *   .dc <src> <start> <stop> <step>
- *   .ac {DEC|OCT|LIN} <N> <f_start> <f_stop>
- *   .tran <tstep> <tstop> [tstart] [UIC]
+ *   .dc    <src> <start> <stop> <step>
+ *   .ac    {DEC|OCT|LIN} <N> <f_start> <f_stop>
+ *   .tran  <tstep> <tstop> [tstart] [UIC]
+ *   .step  <elementName> <start> <stop> <step>             — parameter sweep for design exploration
  *   .end
  *
  * Comments: lines starting with '*' and anything after ';' on a line.
@@ -296,6 +304,21 @@ export function parseNetlist(text) {
                     });
                     continue;
                 }
+                if (d === 'step') {
+                    /* .step <elementName> <start> <stop> <step>
+                       Sweeps the primary value of the referenced element
+                       (resistance for R, capacitance for C, DC level for
+                       V/I, etc). The analysis pipeline re-solves every
+                       step and plots a family-of-curves. */
+                    directives.push({
+                        kind: 'step',
+                        target: toks[1],
+                        start: parseSpiceValue(toks[2]),
+                        stop:  parseSpiceValue(toks[3]),
+                        step:  parseSpiceValue(toks[4]),
+                    });
+                    continue;
+                }
                 if (d === 'model') {
                     const name = toks[1];
                     // Model body may be ".model NAME D(Is=... N=...)" or with space before '('
@@ -389,6 +412,56 @@ export function parseNetlist(text) {
                     });
                     break;
                 }
+                case 'Q': {
+                    /* BJT:  Q<name> C B E [substrate] MODEL
+                       Substrate (4-terminal) form is accepted but the
+                       substrate node is ignored by the solver — treated as
+                       a 3-terminal Ebers-Moll device with the bulk/sub pin
+                       folded into ground. This matches how most textbook
+                       circuits invoke Q-devices. */
+                    let mIdx = 4;
+                    if (toks.length > 5) {
+                        // Token 4 might be substrate node if token 5 looks like a model name.
+                        const maybeModel4 = (toks[4] || '').toLowerCase();
+                        const maybeModel5 = (toks[5] || '').toLowerCase();
+                        if (models[maybeModel5] || !maybeModel4.match(/^(npn|pnp)$/)) {
+                            mIdx = 5;
+                        }
+                    }
+                    const mdlName = (toks[mIdx] || 'qdefault').toLowerCase();
+                    elements.push({
+                        type: 'Q', name: head,
+                        nc: nodeId(toks[1]),   // collector
+                        nb: nodeId(toks[2]),   // base
+                        ne: nodeId(toks[3]),   // emitter
+                        model: mdlName,
+                    });
+                    break;
+                }
+                case 'M': {
+                    /* MOSFET:  M<name> D G S B MODEL [W=.. L=..]
+                       Bulk node is required by SPICE convention. We accept
+                       it but the level-1 stamp here ignores body-effect by
+                       default — gamma in the model triggers the body
+                       correction automatically. W/L override the model
+                       defaults (1 µm / 1 µm) when present on the element
+                       line. */
+                    elements.push({
+                        type: 'M', name: head,
+                        nd: nodeId(toks[1]), ng: nodeId(toks[2]),
+                        ns: nodeId(toks[3]), nbulk: nodeId(toks[4] || '0'),
+                        model: (toks[5] || 'mdefault').toLowerCase(),
+                        W: (() => {
+                            const w = toks.slice(6).find((t) => /^w=/i.test(t));
+                            return w ? parseSpiceValue(w.split('=')[1]) : undefined;
+                        })(),
+                        L: (() => {
+                            const l = toks.slice(6).find((t) => /^l=/i.test(t));
+                            return l ? parseSpiceValue(l.split('=')[1]) : undefined;
+                        })(),
+                    });
+                    break;
+                }
                 default:
                     warnings.push(`Unknown element '${head}' on line ${li + 1}`);
             }
@@ -399,7 +472,25 @@ export function parseNetlist(text) {
 
     // Default diode model if user didn't provide one.
     if (!models.default) {
-        models.default = { name: 'DEFAULT', type: 'D', params: { is: 1e-14, n: 1, bv: 100, cj0: 0 } };
+        models.default = { name: 'DEFAULT', type: 'D', params: { is: 1e-14, n: 1, bv: 100, ibv: 1e-3, cj0: 0 } };
+    }
+    /* Reasonable textbook defaults for when a BJT/MOSFET references a
+       model name that wasn't defined. These match LTspice's out-of-the-box
+       "NPN"/"PNP"/"NMOS"/"PMOS" primitives closely enough that most
+       beginner circuits will still simulate instead of erroring out. */
+    if (!models.qdefault) {
+        models.qdefault = {
+            name: 'QDEFAULT', type: 'NPN',
+            params: { is: 1e-16, bf: 100, br: 1, vaf: 100, nf: 1, nr: 1,
+                      re: 0, rb: 0, rc: 0, cje: 0, cjc: 0 },
+        };
+    }
+    if (!models.mdefault) {
+        models.mdefault = {
+            name: 'MDEFAULT', type: 'NMOS',
+            params: { vto: 1.0, kp: 50e-6, lambda: 0.02, gamma: 0, phi: 0.6,
+                      w: 10e-6, l: 1e-6, cgso: 0, cgdo: 0 },
+        };
     }
 
     return {
