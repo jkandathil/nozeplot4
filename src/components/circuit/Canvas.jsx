@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     MousePointer2, Cable, Hand, Trash2, RotateCw, ZoomIn, ZoomOut, Maximize2,
+    AlertTriangle, AlertCircle,
 } from 'lucide-react';
 import { SYMBOLS } from '../../circuit/symbols.js';
 import {
@@ -41,6 +42,7 @@ export default function Canvas({
     onCommand,
     onDocChange,
     resolvedNets,
+    validation,
     onUndo,
     onRedo,
     fitNonce = 0,
@@ -379,10 +381,20 @@ export default function Canvas({
 
     /* --------------------- derived visuals --------------------- */
     const nets = resolvedNets;
+    // Pull the validator's pre-built Sets when available; otherwise
+    // fall back to re-deriving floating pins from nets so the canvas
+    // still draws its original warning rings if a caller forgets to
+    // pass validation in.
     const floatingIds = useMemo(() => {
+        if (validation?.floatingPinKeys) return validation.floatingPinKeys;
         if (!nets) return new Set();
         return new Set(nets.floatingPins.map((fp) => `${fp.comp.id}|${fp.pinId}`));
-    }, [nets]);
+    }, [validation, nets]);
+    const flaggedComponentIds = validation?.flaggedComponentIds || new Set();
+    const flaggedWireIds = validation?.flaggedWireIds || new Set();
+    const danglingEndpoints = validation?.danglingEndpoints || [];
+    const errorCount = validation?.errorCount || 0;
+    const warnCount = validation?.warnCount || 0;
 
     const wirePreview = (() => {
         if (tool !== 'wire' || !wireStart) return null;
@@ -444,6 +456,15 @@ export default function Canvas({
                 <ToolButton onClick={fitToContent} title="Fit to view (0)">
                     <Maximize2 size={14} />
                 </ToolButton>
+                {(errorCount + warnCount) > 0 && (
+                    <IssueBadge
+                        errorCount={errorCount}
+                        warnCount={warnCount}
+                        issues={validation?.issues || []}
+                        onSelectComponent={(id) => onSelect && onSelect({ kind: 'component', id })}
+                        onSelectWire={(id) => onSelect && onSelect({ kind: 'wire', id })}
+                    />
+                )}
                 <div className="cs-canvas-toolbar-spacer" />
                 <div className="cs-canvas-hint">
                     {tool === 'wire' && (wireStart ? 'Click a pin or empty cell to finish. Esc to cancel.' : 'Click a pin to start a wire.')}
@@ -472,19 +493,52 @@ export default function Canvas({
                     {doc.wires.map((w) => {
                         const selected = selectedId?.kind === 'wire' && selectedId.id === w.id;
                         const dragging = dragState?.kind === 'drag-wire' && dragState.id === w.id && dragDelta;
+                        const flagged = flaggedWireIds.has(w.id);
                         const tx = dragging ? dragDelta.dx : 0;
                         const ty = dragging ? dragDelta.dy : 0;
+                        let stroke = 'var(--sch-wire)';
+                        if (selected) stroke = 'var(--cs-accent)';
+                        else if (flagged) stroke = 'var(--cs-danger, #ef4444)';
                         return (
                             <polyline
                                 key={`wire-${w.id}`}
                                 points={w.points.map((p) => `${p[0] + tx},${p[1] + ty}`).join(' ')}
                                 fill="none"
-                                stroke={selected ? 'var(--cs-accent)' : 'var(--sch-wire)'}
+                                stroke={stroke}
                                 strokeWidth={selected ? 2.4 : 1.8}
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
                                 opacity={dragging ? 0.85 : 1}
                             />
+                        );
+                    })}
+
+                    {/* Dangling wire endpoint markers — dashed red X so the
+                        eye is drawn to the exact spot that needs a connection. */}
+                    {danglingEndpoints.map((e) => {
+                        const r = 5;
+                        return (
+                            <g key={`dangle-${e.wireId}-${e.pointIndex}`} pointerEvents="none">
+                                <circle
+                                    cx={e.x} cy={e.y} r={r + 1}
+                                    fill="none"
+                                    stroke="var(--cs-danger, #ef4444)"
+                                    strokeWidth={1.4}
+                                    strokeDasharray="2 2"
+                                />
+                                <line
+                                    x1={e.x - r} y1={e.y - r}
+                                    x2={e.x + r} y2={e.y + r}
+                                    stroke="var(--cs-danger, #ef4444)"
+                                    strokeWidth={1.4}
+                                />
+                                <line
+                                    x1={e.x - r} y1={e.y + r}
+                                    x2={e.x + r} y2={e.y - r}
+                                    stroke="var(--cs-danger, #ef4444)"
+                                    strokeWidth={1.4}
+                                />
+                            </g>
                         );
                     })}
 
@@ -512,6 +566,7 @@ export default function Canvas({
                                 key={`comp-${c.id}`}
                                 comp={c}
                                 selected={selectedId?.kind === 'component' && selectedId.id === c.id}
+                                flagged={flaggedComponentIds.has(c.id)}
                                 floatingIds={floatingIds}
                                 dx={dragging ? dragDelta.dx : 0}
                                 dy={dragging ? dragDelta.dy : 0}
@@ -558,6 +613,56 @@ export default function Canvas({
 
 /* ---------------- sub-components ------------------------------ */
 
+/**
+ * Issue counter shown in the canvas toolbar. Click expands a dropdown
+ * listing every design-rule violation; clicking an issue row selects
+ * the offending component or wire so the user can jump straight to
+ * the problem. Severity tint is driven by whether any errors exist —
+ * a single error flips the whole badge red even when warnings dominate.
+ */
+function IssueBadge({ errorCount, warnCount, issues, onSelectComponent, onSelectWire }) {
+    const [open, setOpen] = useState(false);
+    const hasErrors = errorCount > 0;
+    const total = errorCount + warnCount;
+    const Icon = hasErrors ? AlertCircle : AlertTriangle;
+    const tint = hasErrors ? 'var(--cs-danger, #ef4444)' : 'var(--cs-warn, #eab308)';
+    return (
+        <div className="cs-canvas-issues">
+            <button
+                type="button"
+                className="cs-canvas-issues-btn"
+                onClick={() => setOpen((v) => !v)}
+                title={`${errorCount} error${errorCount === 1 ? '' : 's'}, ${warnCount} warning${warnCount === 1 ? '' : 's'}`}
+                style={{ color: tint, borderColor: tint }}
+            >
+                <Icon size={14} />
+                <span>{total}</span>
+            </button>
+            {open && (
+                <div className="cs-canvas-issues-panel" onMouseLeave={() => setOpen(false)}>
+                    <div className="cs-canvas-issues-title">Design-rule issues</div>
+                    <ul>
+                        {issues.map((iss) => (
+                            <li
+                                key={iss.id}
+                                className={`cs-canvas-issue cs-canvas-issue-${iss.severity}`}
+                                onClick={() => {
+                                    if (iss.componentIds?.length) onSelectComponent(iss.componentIds[0]);
+                                    else if (iss.wireIds?.length) onSelectWire(iss.wireIds[0]);
+                                    setOpen(false);
+                                }}
+                            >
+                                <span className="cs-canvas-issue-dot" />
+                                <span>{iss.message}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ToolButton({ active, disabled, onClick, title, children }) {
     return (
         <button
@@ -572,7 +677,7 @@ function ToolButton({ active, disabled, onClick, title, children }) {
     );
 }
 
-function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = false }) {
+function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0, dy = 0, ghost = false }) {
     if (comp.elementType === 'GND') {
         return <GroundMarker x={comp.pos.x + dx} y={comp.pos.y + dy} selected={selected} />;
     }
@@ -584,10 +689,23 @@ function CanvasComponent({ comp, selected, floatingIds, dx = 0, dy = 0, ghost = 
     const cx = comp.pos.x + dx;
     const cy = comp.pos.y + dy;
     return (
-        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}`}
+        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}${flagged ? ' is-flagged' : ''}`}
            opacity={ghost ? 0.85 : 1}>
             <g transform={`translate(${cx}, ${cy}) rotate(${comp.rot})`}>
                 {sym.shapes.map((s, i) => renderShape(s, i))}
+                {/* Flagged outline — drawn beneath the selection rect so a
+                    selected-and-flagged part shows both cues. */}
+                {flagged && !selected && (
+                    <rect
+                        x={-sym.width / 2 - 5} y={-sym.height / 2 - 5}
+                        width={sym.width + 10} height={sym.height + 10}
+                        fill="none"
+                        stroke="var(--cs-danger, #ef4444)"
+                        strokeWidth={1.2}
+                        strokeDasharray="3 2"
+                        opacity={0.9}
+                    />
+                )}
                 {selected && (
                     <rect
                         x={-sym.width / 2 - 4} y={-sym.height / 2 - 4}

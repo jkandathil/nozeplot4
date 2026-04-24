@@ -39,6 +39,7 @@ import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
 import Palette from './circuit/Palette.jsx';
 import Canvas from './circuit/Canvas.jsx';
+import { validateSchematic } from '../circuit/validate.js';
 import Inspector from './circuit/Inspector.jsx';
 import './CircuitStudioPage.css';
 
@@ -164,6 +165,13 @@ function CircuitStudioPage() {
         try { return resolveNets(doc); }
         catch { return null; }
     }, [doc]);
+
+    // Design-rule check layered on top of resolvedNets. Feeds the canvas
+    // (visual markers) and the results drawer (textual summary).
+    const validation = useMemo(() => {
+        try { return validateSchematic(doc, resolvedNets); }
+        catch { return null; }
+    }, [doc, resolvedNets]);
 
     // Imperative helper passed to Canvas/Inspector — takes a function
     // (mutator) and applies it to a clone of the current doc.
@@ -524,6 +532,7 @@ function CircuitStudioPage() {
                         onCommand={handleCommand}
                         onDocChange={mutateDoc}
                         resolvedNets={resolvedNets}
+                        validation={validation}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
                         fitNonce={fitNonce}
@@ -613,7 +622,7 @@ function CircuitStudioPage() {
                             mutateDoc((d) => removeComponent(d, selectedComp.id));
                             setSelection(null);
                         }}
-                        netWarnings={buildNetWarnings(resolvedNets, doc)}
+                        netWarnings={buildNetWarnings(resolvedNets, doc, validation)}
                         analysisPane={tourOpen && activeTour ? (
                             <div className="cs-inspector-tour">
                                 <div className="cs-inspector-title">
@@ -642,7 +651,14 @@ function CircuitStudioPage() {
     );
 }
 
-function buildNetWarnings(nets, doc) {
+function buildNetWarnings(nets, doc, validation) {
+    // Prefer the full design-rule output when available — it catches
+    // dangling wire ends, missing ground, and orphan parts on top of
+    // floating pins. Fall back to the pin-only summary if validation
+    // isn't wired in yet (e.g. during an early render).
+    if (validation && Array.isArray(validation.issues)) {
+        return validation.issues.map((i) => i.message);
+    }
     if (!nets) return [];
     const out = [];
     for (const fp of nets.floatingPins || []) {
