@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <script>self["MonacoEnvironment"] = (function (paths) {
+          return {
+            globalAPI: false,
+            getWorkerUrl : function (moduleId, label) {
+              var result =  paths[label];
+              if (/^((http:)|(https:)|(file:)|(\/\/))/.test(result)) {
+                var currentUrl = String(window.location);
+                var currentOrigin = currentUrl.substr(0, currentUrl.length - window.location.hash.length - window.location.search.length - window.location.pathname.length);
+                if (result.substring(0, currentOrigin.length) !== currentOrigin) {
+                  var js = '/*' + label + '*/importScripts("' + result + '");';
+                  var blob = new Blob([js], { type: 'application/javascript' });
+                  return URL.createObjectURL(blob);
+                }
+              }
+              return result;
+            }
+          };
+        })({
+  "editorWorkerService": "/nozeplot4/monacoeditorwork/editor.worker.bundle.js",
+  "typescript": "/nozeplot4/monacoeditorwork/ts.worker.bundle.js",
+  "json": "/nozeplot4/monacoeditorwork/json.worker.bundle.js",
+  "html": "/nozeplot4/monacoeditorwork/html.worker.bundle.js",
+  "css": "/nozeplot4/monacoeditorwork/css.worker.bundle.js",
+  "javascript": "/nozeplot4/monacoeditorwork/ts.worker.bundle.js",
+  "less": "/nozeplot4/monacoeditorwork/css.worker.bundle.js",
+  "scss": "/nozeplot4/monacoeditorwork/css.worker.bundle.js",
+  "handlebars": "/nozeplot4/monacoeditorwork/html.worker.bundle.js",
+  "razor": "/nozeplot4/monacoeditorwork/html.worker.bundle.js"
+});</script>
+
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/png" href="/nozeplot4/logo_noze_circle.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NozePlot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=STIX+Two+Math:ital@0;1&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="/nozeplot4/assets/index-CM-5DyR9.js"></script>
+  <link rel="stylesheet" crossorigin href="/nozeplot4/assets/index-DlcZ4JgE.css">
+</head>
+
+<body>
+  <div id="root"></div>
+</body>
+
+</html>
