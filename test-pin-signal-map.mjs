@@ -58,31 +58,38 @@ const stillSnap = pinMap.get(`${scope.id}|tip`);
 if (stillSnap !== 'V(vout)') fail('snapshot was mutated by a downstream edit');
 ok('pinSignalMap snapshot is immune to post-run edits');
 
-// Replicate scopeSignalFor with snapshot-fallback behavior.
-function scopeSignalFor(comp, nets, runResult) {
-    const pinKey = `${comp.id}|tip`;
-    const snap = runResult?.pinSignalMap?.get(pinKey);
-    if (snap) {
-        const lab = snap.replace(/^V\((.*)\)$/, '$1');
-        return { signalName: snap, nodeLabel: lab };
-    }
-    const nodeId = nets.pinNode(comp, 'tip');
-    if (nodeId == null || nodeId === 0) return { signalName: null, nodeLabel: 'ground / floating' };
-    const lab = nets.nodeLabels?.get(nodeId);
-    const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
-    return { signalName: `V(${label})`, nodeLabel: label };
+// Replicate scopeSignalsFor (CH1 / CH2) with snapshot-fallback behavior.
+function scopeSignalsFor(comp, nets, runResult) {
+    const slots = [{ pin: 'tip', label: 'CH1' }, { pin: 'tip2', label: 'CH2' }];
+    return {
+        channels: slots.map(({ pin, label }) => {
+            const pinKey = `${comp.id}|${pin}`;
+            const snap = runResult?.pinSignalMap?.get(pinKey);
+            if (snap) {
+                const lab = snap.replace(/^V\((.*)\)$/, '$1');
+                return { pin, label, signalName: snap, nodeLabel: lab };
+            }
+            const nodeId = nets.pinNode(comp, pin);
+            if (nodeId == null || nodeId === 0) {
+                return { pin, label, signalName: null, nodeLabel: null };
+            }
+            const lab = nets.nodeLabels?.get(nodeId);
+            const nodeLabel = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
+            return { pin, label, signalName: `V(${nodeLabel})`, nodeLabel };
+        }),
+    };
 }
 
 const runResult = { pinSignalMap: pinMap };
-const r = scopeSignalFor(scope, nets2, runResult);
-console.log('[pin-map] scopeSignalFor after drag ->', r);
-if (r.signalName !== 'V(vout)') fail(`expected V(vout), got ${r.signalName}`);
-ok('scopeSignalFor prefers the snapshot even after the doc was edited');
+const { channels } = scopeSignalsFor(scope, nets2, runResult);
+const ch1 = channels.find((c) => c.pin === 'tip');
+console.log('[pin-map] scope CH1 after drag ->', ch1);
+if (ch1.signalName !== 'V(vout)') fail(`expected V(vout), got ${ch1.signalName}`);
+ok('scope CH1 prefers the snapshot even after the doc was edited');
 
-// Without a snapshot we should get the "floating" fallback, not a stale
-// name — confirms the degrade path hasn't regressed.
-const r2 = scopeSignalFor(scope, nets2, null);
-if (r2.signalName !== null) fail(`expected null fallback, got ${r2.signalName}`);
-ok('without a snapshot, a detached scope falls back to the no-connection state');
+const { channels: chFloat } = scopeSignalsFor(scope, nets2, null);
+const ch1b = chFloat.find((c) => c.pin === 'tip');
+if (ch1b.signalName !== null) fail(`expected null CH1 fallback, got ${ch1b.signalName}`);
+ok('without a snapshot, a detached scope CH1 falls back to the no-connection state');
 
 console.log('\n[pin-signal-map] ALL OK');

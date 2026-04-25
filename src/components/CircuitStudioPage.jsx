@@ -24,20 +24,28 @@ import {
 } from 'recharts';
 import {
     Cpu, Play, Home, RefreshCw, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
-    BookOpen, Copy, Plus, FileText, Activity,
+    BookOpen, Copy, Plus, FileText, Activity, Monitor,
     SlidersHorizontal, LayoutGrid, Terminal, Undo, Redo,
-    Save, FolderOpen, FilePlus, Download, Image as ImageIcon, FileJson,
+    Save, FolderOpen, FilePlus, Download, Image as ImageIcon, FileJson, Trash2,
+    Maximize2, Minimize2, Layers,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
 import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
+import {
+    buildMonteAcResult, runMonteAcSamples, buildMonteMetaFromRuns,
+} from '../circuit/monteCarlo.js';
+import { goalSeekAcStabilityTarget } from '../circuit/goalSeek.js';
+import {
+    mergeDerivedSignals, voltageProbeNetFromSignalName, findVoltageSignalForNet,
+} from '../circuit/signalMath.js';
 import { DEMOS } from '../circuit/demos.js';
 import {
     riseTime, fallTime, settlingTime, overshoot, peakToPeak, steadyStateEst,
-    corner3dB, peakGain, unityGainFreq, phaseMargin, sampleAt,
+    corner3dB, peakGain, unityGainFreq, phaseMargin, gainMargin, sampleAt,
 } from '../circuit/measurements.js';
 import {
     emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent,
-    removeComponent, removeWire, componentPins,
+    removeComponent, removeWire, removeLabel, componentPins,
 } from '../circuit/schematicDoc.js';
 import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
@@ -46,6 +54,7 @@ import Canvas from './circuit/Canvas.jsx';
 import PropertyPopup from './circuit/PropertyPopup.jsx';
 import ScopeModal from './circuit/ScopeModal.jsx';
 import ProjectManager from './circuit/ProjectManager.jsx';
+import ModelLibraryModal from './circuit/ModelLibraryModal.jsx';
 import { validateSchematic } from '../circuit/validate.js';
 import {
     mergeDcConnectivityIssues,
@@ -62,6 +71,9 @@ import {
     exportProjectJson, exportSpiceNetlist, exportResultsCsv,
     exportCanvasSvg, exportCanvasPng,
 } from '../circuit/exporters.js';
+import { buildPcbBridgePayload, PCB_BRIDGE_KEY } from '../pcb/schematicBridge.js';
+import { buildUserLibraryPartsFromSpiceLibs } from '../circuit/userLibraryParts.js';
+import { setUserLibrarySessionParts } from '../circuit/library.js';
 import './CircuitStudioPage.css';
 
 const ANALYSIS_TYPES = [
@@ -99,7 +111,14 @@ C1 vout 0 100n
 .tran 10u 3m
 .end`;
 
-function CircuitStudioPage() {
+function newSpiceLibRow() {
+    const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `lib_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return { id, name: '', content: '' };
+}
+
+function CircuitStudioPage({ onOpenPcbLayout }) {
     // Phase 3: the SchematicDoc is the source of truth. netlistText
     // is derived via emitNetlist(); we only store raw text for the
     // optional "source view" drawer and for home-page loads (demos).
@@ -124,7 +143,7 @@ function CircuitStudioPage() {
         return { past: [], present: initial, future: [] };
     });
     const doc = docState.present;
-    // { kind:'component'|'wire', id } | { kind:'multi', componentIds, wireIds }
+    // { kind:'component'|'wire', id } | { kind:'multi', componentIds, wireIds, labelIds? }
     const [selection, setSelection] = useState(null);
     // Inline property popup state: target component + screen-space anchor
     // where the card renders. `null` when the popup is closed.
@@ -173,13 +192,46 @@ function CircuitStudioPage() {
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
     }, []);
+
     const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
     const [showResults, setShowResults] = useState(true);
+    /** Expand the Results plot strip to use most of the centre column (schematic shrinks). */
+    const [resultsPlotMaximized, setResultsPlotMaximized] = useState(false);
+    /** Bottom drawer main panel: standard plots vs. embedded oscilloscope. */
+    const [drawerTab, setDrawerTab] = useState('results');
+
+    useEffect(() => {
+        if (!showResults || drawerTab !== 'results') setResultsPlotMaximized(false);
+    }, [showResults, drawerTab]);
+
+    useEffect(() => {
+        if (!resultsPlotMaximized) return undefined;
+        const onKey = (ev) => {
+            if (ev.key !== 'Escape') return;
+            const t = ev.target;
+            const tag = t && t.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+            setResultsPlotMaximized(false);
+            ev.preventDefault();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [resultsPlotMaximized]);
+
+    /** Which SCOPE part the drawer "Scope" tab displays (when several exist). */
+    const [scopeDrawerCompId, setScopeDrawerCompId] = useState(null);
     const [netlistDraft, setNetlistDraft] = useState(''); // user-edited raw text when drawer open
     // Bump this to ask the Canvas to fit-to-content. Only do this on
     // external load events (demo / blank / apply-netlist); incremental
     // editing keeps the viewport stable.
     const [fitNonce, setFitNonce] = useState(0);
+    const [ampCoachDismissed, setAmpCoachDismissed] = useState(() => (
+        typeof sessionStorage !== 'undefined' && sessionStorage.getItem('cs-amp-coach-dismiss') === '1'
+    ));
+    const dismissAmpCoach = useCallback(() => {
+        try { sessionStorage.setItem('cs-amp-coach-dismiss', '1'); } catch { /* ignore */ }
+        setAmpCoachDismissed(true);
+    }, []);
     const [view, setView] = useState(() => (bootProject ? 'workspace' : 'home'));
     const [analysis, setAnalysis] = useState('tran');
     // User-editable transient settings — when non-null, these override
@@ -187,9 +239,16 @@ function CircuitStudioPage() {
     // as strings (with SI prefixes allowed) so the input fields stay
     // exactly what the user typed; parseSiTime below converts to
     // seconds when handing off to the solver.
-    const [tranOverride, setTranOverride] = useState({
+    const [tranOverride, setTranOverride] = useState(() => bootProject?.tranOverride || {
         tstop: '1m',
         tstep: '1u',
+    });
+    /** AC sweep: scale / point count / Hz range. Non-empty fields override parsed `.ac` at Run time. */
+    const [acOverride, setAcOverride] = useState(() => bootProject?.acOverride || {
+        mode: '',
+        n: '',
+        fStart: '',
+        fStop: '',
     });
     // Parametric sweep (`.step PARAM` in SPICE-speak). When enabled,
     // the Run pipeline walks `target` from start → stop in step-sized
@@ -208,6 +267,54 @@ function CircuitStudioPage() {
         stop: '1k',
         step: '100',
     });
+    /** AC Monte Carlo: uniform ±tol% on each R/C/L, independent samples. Incompatible with parametric / `.step`. */
+    const [monte, setMonte] = useState(() => bootProject?.monte || {
+        enabled: false,
+        runs: '30',
+        tolPercent: '5',
+        pmNode: 'vout',
+    });
+    /** AC thermal (Johnson) noise at a node — same frequency grid as the AC sweep; R only, 300 K. */
+    const [acNoise, setAcNoise] = useState(() => bootProject?.acNoise || {
+        enabled: false,
+        outputNode: 'vout',
+    });
+    /** Bisection goal seek for AC phase or gain margin vs one sweepable element. */
+    const [goalSeek, setGoalSeek] = useState(() => {
+        const g = bootProject?.goalSeek;
+        return {
+            element: g?.element ?? '',
+            lo: g?.lo ?? '',
+            hi: g?.hi ?? '',
+            target: g?.target ?? g?.targetPm ?? '45',
+            observeNode: g?.observeNode ?? 'vout',
+            metric: g?.metric === 'gm' ? 'gm' : 'pm',
+        };
+    });
+    /** Last successful goal seek — enables Apply to schematic + copy. */
+    const [goalSeekLast, setGoalSeekLast] = useState(null);
+    /** Derived trace: combine two existing signals (tran / ac / dc). */
+    const [traceMath, setTraceMath] = useState(() => bootProject?.traceMath || {
+        enabled: false,
+        op: 'minus',
+        sigA: '',
+        sigB: '',
+    });
+    /** SPICE fragments for `.include` / `.lib` — keyed by filename (basename match ok). */
+    const [spiceLibs, setSpiceLibs] = useState(() => bootProject?.spiceLibs || []);
+    const userLibraryPaletteParts = useMemo(
+        () => buildUserLibraryPartsFromSpiceLibs(spiceLibs),
+        [spiceLibs],
+    );
+    useEffect(() => {
+        setUserLibrarySessionParts(userLibraryPaletteParts);
+        return () => setUserLibrarySessionParts([]);
+    }, [userLibraryPaletteParts]);
+    const [modelLibOpen, setModelLibOpen] = useState(false);
+    /** Net name (from `V(net)`) to highlight on the schematic while hovering signal chips. */
+    const [plotHighlightNet, setPlotHighlightNet] = useState(null);
+    /** Non-error AC helper message (e.g. goal seek result). */
+    const [acStudioMessage, setAcStudioMessage] = useState('');
     const [runResult, setRunResult] = useState(null);
     const [runError, setRunError] = useState('');
     /** Pins / issues merged into Canvas after a failed Run (singular matrix, etc.). */
@@ -243,7 +350,13 @@ function CircuitStudioPage() {
                 doc,
                 analysis,
                 tranOverride,
+                acOverride,
                 sweep,
+                monte,
+                acNoise,
+                goalSeek,
+                traceMath,
+                spiceLibs,
                 selectedSignals,
             });
             if (!currentProjectId) {
@@ -283,11 +396,34 @@ function CircuitStudioPage() {
         if (showNetlistDrawer) setNetlistDraft(netlistText);
     }, [showNetlistDrawer, netlistText]);
 
+    const spiceIncludeFileMap = useMemo(() => {
+        const m = {};
+        for (const row of spiceLibs) {
+            const k = String(row?.name || '').trim();
+            if (k) m[k] = String(row?.content ?? '');
+        }
+        return m;
+    }, [spiceLibs]);
+
+    const handleQueueIncludeFromModelLib = useCallback((filename) => {
+        setShowNetlistDrawer(true);
+        setTimeout(() => {
+            setNetlistDraft((d) => {
+                const base = (typeof d === 'string' && d.trim()) ? d : netlistText;
+                const needle = `.include "${filename}"`;
+                if (base.includes(needle)) return typeof d === 'string' ? d : base;
+                return `${String(base).trimEnd()}\n.include "${filename}"\n`;
+            });
+        }, 0);
+    }, [netlistText]);
+
     const parsed = useMemo(() => {
         if (!netlistText || !netlistText.trim()) return null;
-        try { return parseNetlist(netlistText); }
+        try {
+            return parseNetlist(netlistText, { includeFiles: spiceIncludeFileMap });
+        }
         catch (e) { return { errors: [String(e?.message || e)], elements: [], directives: [], models: {}, nNodes: 1, nodeNames: ['0'] }; }
-    }, [netlistText]);
+    }, [netlistText, spiceIncludeFileMap]);
 
     // Run net resolution once per doc change — Canvas + Inspector share it.
     const resolvedNets = useMemo(() => {
@@ -312,6 +448,22 @@ function CircuitStudioPage() {
         () => mergeSolverDiagnostic(validation, solverRunDiagnostic),
         [validation, solverRunDiagnostic],
     );
+
+    const scopeComponentsInDoc = useMemo(
+        () => (doc?.components ?? []).filter((c) => c.elementType === 'SCOPE'),
+        [doc?.components],
+    );
+
+    useEffect(() => {
+        if (!scopeComponentsInDoc.length) {
+            setScopeDrawerCompId(null);
+            return;
+        }
+        setScopeDrawerCompId((prev) => {
+            if (prev && scopeComponentsInDoc.some((c) => c.id === prev)) return prev;
+            return scopeComponentsInDoc[0].id;
+        });
+    }, [scopeComponentsInDoc]);
 
     useEffect(() => {
         setSolverRunDiagnostic(null);
@@ -394,7 +546,7 @@ function CircuitStudioPage() {
         if (doc) {
             const pinMap = runResult.pinSignalMap;
             for (const c of doc.components) {
-                if (c.elementType === 'VP' || c.elementType === 'SCOPE') {
+                if (c.elementType === 'VP') {
                     const fromSnap = pinMap?.get(`${c.id}|tip`);
                     if (fromSnap) {
                         probeWanted.push(fromSnap);
@@ -408,6 +560,25 @@ function CircuitStudioPage() {
                                 ? lab
                                 : `n${nodeId}`;
                             probeWanted.push(`V(${label})`);
+                        }
+                    }
+                } else if (c.elementType === 'SCOPE') {
+                    const scopePins = c.scopeChannelMode === 'single' ? ['tip'] : ['tip', 'tip2'];
+                    for (const pid of scopePins) {
+                        const fromSnap = pinMap?.get(`${c.id}|${pid}`);
+                        if (fromSnap) {
+                            probeWanted.push(fromSnap);
+                            continue;
+                        }
+                        if (resolvedNets) {
+                            const nodeId = resolvedNets.pinNode(c, pid);
+                            if (nodeId != null && nodeId !== 0) {
+                                const lab = resolvedNets.nodeLabels?.get(nodeId);
+                                const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd')
+                                    ? lab
+                                    : `n${nodeId}`;
+                                probeWanted.push(`V(${label})`);
+                            }
                         }
                     }
                 } else if (c.elementType === 'IP') {
@@ -475,8 +646,14 @@ function CircuitStudioPage() {
         name = 'Untitled',
         analysisId = 'tran',
         tranOv = null,
+        acOv = null,
         signals = null,
         sweepOv = null,
+        monteOv = undefined,
+        acNoiseOv = undefined,
+        goalSeekOv = undefined,
+        traceMathOv = undefined,
+        spiceLibsOv = undefined,
         demoId = null,
         tour = null,
     } = {}) => {
@@ -487,9 +664,36 @@ function CircuitStudioPage() {
         setProjectName(name);
         setAnalysis(analysisId || 'tran');
         if (tranOv) setTranOverride(tranOv);
+        if (acOv) setAcOverride(acOv);
+        else setAcOverride({ mode: '', n: '', fStart: '', fStop: '' });
         if (signals) setSelectedSignals(signals);
         if (sweepOv) setSweep(sweepOv);
         else setSweep({ enabled: false, target: '', start: '100', stop: '1k', step: '100' });
+        if (monteOv !== undefined) setMonte(monteOv);
+        else setMonte({ enabled: false, runs: '30', tolPercent: '5', pmNode: 'vout' });
+        if (acNoiseOv !== undefined) setAcNoise(acNoiseOv);
+        else setAcNoise({ enabled: false, outputNode: 'vout' });
+        if (goalSeekOv !== undefined) {
+            setGoalSeek({
+                element: goalSeekOv.element ?? '',
+                lo: goalSeekOv.lo ?? '',
+                hi: goalSeekOv.hi ?? '',
+                target: goalSeekOv.target ?? goalSeekOv.targetPm ?? '45',
+                observeNode: goalSeekOv.observeNode ?? 'vout',
+                metric: goalSeekOv.metric === 'gm' ? 'gm' : 'pm',
+            });
+        } else {
+            setGoalSeek({
+                element: '', lo: '', hi: '', target: '45', observeNode: 'vout', metric: 'pm',
+            });
+        }
+        setGoalSeekLast(null);
+        if (traceMathOv !== undefined) setTraceMath(traceMathOv);
+        else setTraceMath({ enabled: false, op: 'minus', sigA: '', sigB: '' });
+        if (spiceLibsOv !== undefined) setSpiceLibs(spiceLibsOv);
+        else setSpiceLibs([]);
+        setPlotHighlightNet(null);
+        setAcStudioMessage('');
         setLoadedDemoId(demoId);
         setRunResult(null);
         setRunError('');
@@ -539,20 +743,32 @@ function CircuitStudioPage() {
     /* ---------------- File-menu command bindings ---------------- */
 
     const openProjectFromManager = useCallback((full) => {
+        const libs = Array.isArray(full.spiceLibs)
+            ? full.spiceLibs.map((r, i) => ({
+                id: r.id || `lib_${i}_${String(r.name || 'f').replace(/\W/g, '_')}`,
+                name: r.name != null ? String(r.name) : '',
+                content: r.content != null ? String(r.content) : '',
+            }))
+            : undefined;
         _switchToDoc(full.doc || emptyDoc(), {
             projectId: full.id,
             name: full.name || 'Untitled',
             analysisId: full.analysis || 'tran',
             tranOv: full.tranOverride || null,
+            acOv: full.acOverride || null,
             signals: full.selectedSignals || null,
             sweepOv: full.sweep || null,
+            monteOv: full.monte,
+            acNoiseOv: full.acNoise,
+            goalSeekOv: full.goalSeek,
+            traceMathOv: full.traceMath,
+            spiceLibsOv: libs,
         });
         setProjectManagerOpen(false);
     }, [_switchToDoc]);
 
     const handleSaveAs = useCallback(() => {
         const suggested = `${projectName} copy`;
-        // eslint-disable-next-line no-alert
         const name = window.prompt('Save a copy as…', suggested);
         if (!name) return;
         try {
@@ -562,7 +778,13 @@ function CircuitStudioPage() {
                 doc,
                 analysis,
                 tranOverride,
+                acOverride,
                 sweep,
+                monte,
+                acNoise,
+                goalSeek,
+                traceMath,
+                spiceLibs,
                 selectedSignals,
             });
             setCurrentProjectIdState(saved.id);
@@ -571,14 +793,47 @@ function CircuitStudioPage() {
         } catch (e) {
             setRunError(`Save as failed: ${e?.message || e}`);
         }
-    }, [projectName, doc, analysis, tranOverride, sweep, selectedSignals]);
+    }, [projectName, doc, analysis, tranOverride, acOverride, sweep, monte, acNoise, goalSeek, traceMath, spiceLibs, selectedSignals]);
 
     const handleRename = useCallback(() => {
-        // eslint-disable-next-line no-alert
         const name = window.prompt('Rename project', projectName);
         if (!name) return;
         setProjectName(name.trim() || 'Untitled');
     }, [projectName]);
+
+    const plotResult = useMemo(
+        () => mergeDerivedSignals(runResult, traceMath),
+        [runResult, traceMath],
+    );
+
+    /** Net label highlight: hover chip wins; else first selected `V(net)` trace. */
+    const canvasNetHighlight = useMemo(() => {
+        if (plotHighlightNet) return plotHighlightNet;
+        for (const name of selectedSignals) {
+            const n = voltageProbeNetFromSignalName(name);
+            if (n) return n;
+        }
+        return null;
+    }, [plotHighlightNet, selectedSignals]);
+
+    const handleNetLabelProbe = useCallback((netName) => {
+        if (!netName || !plotResult?.signals?.length) return;
+        const hit = findVoltageSignalForNet(plotResult.signals, netName);
+        if (!hit) return;
+        setSelectedSignals((prev) => (prev.includes(hit.name) ? prev : [...prev, hit.name]));
+    }, [plotResult]);
+
+    useEffect(() => {
+        setGoalSeekLast(null);
+    }, [doc]);
+
+    const handleExportResultsCsv = useCallback(() => {
+        try {
+            exportResultsCsv(plotResult, selectedSignals, projectName);
+        } catch (e) {
+            setRunError(String(e?.message || e));
+        }
+    }, [plotResult, selectedSignals, projectName]);
 
     const importProjectFile = useCallback(async (file) => {
         try {
@@ -596,7 +851,7 @@ function CircuitStudioPage() {
     // hatch for power users who prefer typing SPICE.
     const applyNetlistDraft = useCallback(() => {
         try {
-            const { doc: imported } = importNetlistToDoc(netlistDraft);
+            const { doc: imported } = importNetlistToDoc(netlistDraft, { includeFiles: spiceIncludeFileMap });
             setDocState({ past: [], present: imported, future: [] });
             setFitNonce((n) => n + 1);
             setSelection(null);
@@ -604,7 +859,7 @@ function CircuitStudioPage() {
         } catch (e) {
             setRunError(`Netlist parse failed: ${e?.message || e}`);
         }
-    }, [netlistDraft]);
+    }, [netlistDraft, spiceIncludeFileMap]);
 
     const goHome = useCallback(() => {
         setView('home');
@@ -621,6 +876,7 @@ function CircuitStudioPage() {
         }
         setRunning(true);
         setRunError('');
+        setAcStudioMessage('');
         setSolverRunDiagnostic(null);
         setLiveStream(null);
         // Probe auto-select lives in the runResult useEffect so it
@@ -698,13 +954,41 @@ function CircuitStudioPage() {
                         setRunResult(finalResult);
                     }
                 } else if (analysis === 'ac') {
-                    const dir = parsed.directives.find((d) => d.kind === 'ac') || {
-                        mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
-                    };
-                    const runs = runWithStep(ctx, stepDir, { ac: dir });
-                    const acResult = buildStepResult('ac', runs, parsed, stepDir, ctx);
-                    acResult.pinSignalMap = pinSignalMap;
-                    setRunResult(acResult);
+                    const dir = buildAcDirective(parsed, acOverride);
+                    if (dir.fStop <= dir.fStart) {
+                        throw new Error('AC sweep: stop frequency must be greater than start (check the AC bar or .ac in the netlist).');
+                    }
+                    if (monte?.enabled) {
+                        if (acNoise?.enabled) {
+                            throw new Error('Turn off thermal noise before running Monte Carlo (not supported together yet).');
+                        }
+                        if (sweep?.enabled) {
+                            throw new Error('Turn off parametric sweep before running Monte Carlo.');
+                        }
+                        if (stepDir) {
+                            throw new Error('Monte Carlo cannot combine with .step — remove .step from the netlist or disable Monte Carlo.');
+                        }
+                        const nRuns = Math.max(1, Math.min(200, Math.floor(parseSiValue(monte.runs) || 30)));
+                        const tolNum = Math.max(0, parseSiValue(monte.tolPercent));
+                        const pmNodeStr = String(monte.pmNode || 'vout').trim() || 'vout';
+                        const mcRuns = runMonteAcSamples(parsed, dir, nRuns, tolNum);
+                        const ctxNominal = buildContext(parsed);
+                        const meta = { ...buildMonteMetaFromRuns(mcRuns, parsed, pmNodeStr), tolPercent: tolNum };
+                        const acResult = buildMonteAcResult(mcRuns, parsed, ctxNominal, meta);
+                        acResult.pinSignalMap = pinSignalMap;
+                        setRunResult(acResult);
+                    } else {
+                        const noiseNode = String(acNoise?.outputNode || '').trim();
+                        const analyses = { ac: dir };
+                        if (acNoise?.enabled) {
+                            if (!noiseNode) throw new Error('Thermal noise: enter an output node name (e.g. vout).');
+                            analyses.acNoise = { outputNode: noiseNode, tempK: 300 };
+                        }
+                        const runs = runWithStep(ctx, stepDir, analyses);
+                        const acResult = buildStepResult('ac', runs, parsed, stepDir, ctx);
+                        acResult.pinSignalMap = pinSignalMap;
+                        setRunResult(acResult);
+                    }
                 } else if (analysis === 'dc') {
                     const dir = parsed.directives.find((d) => d.kind === 'dc');
                     if (!dir) {
@@ -738,12 +1022,138 @@ function CircuitStudioPage() {
                 setRunning(false);
             }
         }, 30);
-    }, [parsed, analysis, tranOverride, sweep, liveMode, doc, resolvedNets]);
+    }, [parsed, analysis, tranOverride, acOverride, sweep, monte, acNoise, liveMode, doc, resolvedNets]);
+
+    const handleGoalSeek = useCallback(() => {
+        if (!parsed || parsed.errors?.length > 0) {
+            setRunError(parsed?.errors?.join('\n') || 'Fix the netlist before goal seek.');
+            return;
+        }
+        setRunning(true);
+        setRunError('');
+        setAcStudioMessage('');
+        setGoalSeekLast(null);
+        setTimeout(() => {
+            try {
+                const dir = buildAcDirective(parsed, acOverride);
+                if (dir.fStop <= dir.fStart) {
+                    throw new Error('AC sweep: stop frequency must be greater than start (check the AC bar).');
+                }
+                const lo = parseSiValue(goalSeek.lo);
+                const hi = parseSiValue(goalSeek.hi);
+                const target = parseFloat(goalSeek.target);
+                const el = String(goalSeek.element || '').trim();
+                const obs = String(goalSeek.observeNode || 'vout').trim() || 'vout';
+                const metric = goalSeek.metric === 'gm' ? 'gm' : 'pm';
+                if (!el) throw new Error('Goal seek: enter a component ref (e.g. Cf or R1).');
+                if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+                    throw new Error('Goal seek: low and high values must be valid numbers (SI prefixes ok).');
+                }
+                const { value: val, achieved } = goalSeekAcStabilityTarget({
+                    parsed,
+                    acDir: dir,
+                    elementRef: el,
+                    lo,
+                    hi,
+                    observeNode: obs,
+                    metric,
+                    target,
+                });
+                setGoalSeekLast({
+                    value: val,
+                    achieved,
+                    metric,
+                    elementRef: el,
+                });
+                const tgtStr = metric === 'gm'
+                    ? (Number.isFinite(target) ? `${target} dB GM` : String(goalSeek.target))
+                    : (Number.isFinite(target) ? `${target}° PM` : String(goalSeek.target));
+                const achStr = metric === 'gm'
+                    ? (Number.isFinite(achieved) ? `${achieved.toFixed(2)} dB GM` : '—')
+                    : (Number.isFinite(achieved) ? `${achieved.toFixed(2)}° PM` : '—');
+                setAcStudioMessage(
+                    `Goal seek: ${el} ≈ ${formatSi(val)} for ${tgtStr} on V(${obs}) (achieved ${achStr}). `
+                    + 'Use Copy or Apply to schematic, then Run to verify.',
+                );
+            } catch (e) {
+                setRunError(e?.message || String(e));
+            } finally {
+                setRunning(false);
+            }
+        }, 30);
+    }, [parsed, acOverride, goalSeek]);
+
+    const handleApplyGoalSeekValue = useCallback(() => {
+        const last = goalSeekLast;
+        if (!last || !Number.isFinite(last.value)) return;
+        const ref = String(last.elementRef || '').trim();
+        if (!ref) return;
+        const comp = doc?.components?.find((c) => String(c.ref).toLowerCase() === ref.toLowerCase());
+        if (!comp) {
+            setRunError(`Apply: no schematic part "${ref}".`);
+            return;
+        }
+        if (!isSweepableType(comp.elementType)) {
+            setRunError(`Apply: ${ref} is not R/C/L/V/I — cannot set a scalar value.`);
+            return;
+        }
+        const val = last.value;
+        mutateDoc((d) => {
+            const c = d.components.find((x) => String(x.ref).toLowerCase() === ref.toLowerCase());
+            if (c) c.value = val;
+        });
+        setAcStudioMessage((m) => (m ? `${m} ` : '') + `Applied ${formatSi(val)} to ${ref} on the schematic.`);
+        setGoalSeekLast(null);
+    }, [goalSeekLast, doc, mutateDoc]);
+
+    const handleCopyGoalSeekValue = useCallback(() => {
+        const v = goalSeekLast?.value;
+        if (!Number.isFinite(v)) return;
+        const t = formatSi(v);
+        navigator.clipboard?.writeText(t).catch(() => {});
+        setAcStudioMessage((m) => ((m ? `${m} ` : '') + `Copied ${t} to clipboard.`).trim());
+    }, [goalSeekLast]);
 
     const copyNetlist = useCallback(() => {
         if (!netlistText) return;
         navigator.clipboard?.writeText(netlistText).catch(() => {});
     }, [netlistText]);
+
+    const handleSendToPcbLayout = useCallback(() => {
+        if (!resolvedNets) {
+            setRunError('Fix schematic connectivity so nets resolve, then try again.');
+            return;
+        }
+        if (typeof onOpenPcbLayout !== 'function') {
+            setRunError('PCB Studio navigation is not available.');
+            return;
+        }
+        try {
+            const payload = buildPcbBridgePayload(doc, resolvedNets, netlistText);
+            sessionStorage.setItem(PCB_BRIDGE_KEY, JSON.stringify(payload));
+            onOpenPcbLayout();
+        } catch (e) {
+            setRunError(e?.message || String(e));
+        }
+    }, [doc, resolvedNets, netlistText, onOpenPcbLayout]);
+
+    // Drag-drop import must be declared *before* the home/workspace early
+    // return — otherwise React sees fewer hooks on the home branch and
+    // throws invariant #300 ("Rendered fewer hooks than expected").
+    const onRootDragOver = useCallback((ev) => {
+        const items = ev.dataTransfer?.items;
+        if (items && [...items].some((it) => it.kind === 'file')) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'copy';
+        }
+    }, []);
+    const onRootDrop = useCallback((ev) => {
+        const file = ev.dataTransfer?.files?.[0];
+        if (!file) return;
+        if (!/\.(json|noze)$/i.test(file.name)) return;
+        ev.preventDefault();
+        importProjectFile(file);
+    }, [importProjectFile]);
 
     // ---------- Home view ----------
     if (view === 'home') {
@@ -790,8 +1200,8 @@ function CircuitStudioPage() {
 
                 <div className="cs-home-footer">
                     <strong>Phase 1 scope:</strong> analog-only, netlist-driven.
-                    Drag-and-drop schematic editing, digital gates, and noise analysis
-                    land in follow-up releases.
+                    Drag-and-drop schematic editing and digital gates land in follow-up releases.
+                    AC thermal (resistor) noise is available from the workspace AC bar.
                 </div>
             </div>
         );
@@ -801,24 +1211,6 @@ function CircuitStudioPage() {
     const directives = parsed?.directives || [];
     const hasTran = directives.some((d) => d.kind === 'tran');
     const hasAc = directives.some((d) => d.kind === 'ac');
-
-    // Drop a `.noze.json` file anywhere over the studio to import it
-    // as a new project. We accept only JSON-looking files and let
-    // importProjectFile surface a clean error for anything else.
-    const onRootDragOver = useCallback((ev) => {
-        const items = ev.dataTransfer?.items;
-        if (items && [...items].some((it) => it.kind === 'file')) {
-            ev.preventDefault();
-            ev.dataTransfer.dropEffect = 'copy';
-        }
-    }, []);
-    const onRootDrop = useCallback((ev) => {
-        const file = ev.dataTransfer?.files?.[0];
-        if (!file) return;
-        if (!/\.(json|noze)$/i.test(file.name)) return;
-        ev.preventDefault();
-        importProjectFile(file);
-    }, [importProjectFile]);
 
     return (
         <div className="cs-root" onDragOver={onRootDragOver} onDrop={onRootDrop}>
@@ -861,7 +1253,18 @@ function CircuitStudioPage() {
                             <div className="cs-file-menu-sep" />
                             <button className="cs-file-menu-item"
                                 onClick={() => { setFileMenuOpen(false); exportProjectJson({
-                                    name: projectName, doc, analysis, tranOverride, sweep, selectedSignals,
+                                    name: projectName,
+                                    doc,
+                                    analysis,
+                                    tranOverride,
+                                    acOverride,
+                                    sweep,
+                                    monte,
+                                    acNoise,
+                                    goalSeek,
+                                    traceMath,
+                                    spiceLibs,
+                                    selectedSignals,
                                 }); }}>
                                 <FileJson size={14} /> Export project (.noze.json)
                             </button>
@@ -870,8 +1273,8 @@ function CircuitStudioPage() {
                                 <FileText size={14} /> Export SPICE netlist (.cir)
                             </button>
                             <button className="cs-file-menu-item"
-                                disabled={!runResult}
-                                onClick={() => { setFileMenuOpen(false); exportResultsCsv(runResult, selectedSignals, projectName); }}>
+                                disabled={!plotResult}
+                                onClick={() => { setFileMenuOpen(false); exportResultsCsv(plotResult, selectedSignals, projectName); }}>
                                 <Download size={14} /> Export results (.csv)
                             </button>
                             <button className="cs-file-menu-item"
@@ -889,6 +1292,16 @@ function CircuitStudioPage() {
                                         .catch((e) => setRunError(e?.message || String(e)));
                                 }}>
                                 <ImageIcon size={14} /> Export canvas (.png)
+                            </button>
+                            <button
+                                type="button"
+                                className="cs-file-menu-item"
+                                onClick={() => {
+                                    setFileMenuOpen(false);
+                                    handleSendToPcbLayout();
+                                }}
+                            >
+                                <Layers size={14} /> Send to PCB Studio…
                             </button>
                             <div className="cs-file-menu-sep" />
                             <label className="cs-file-menu-item">
@@ -928,7 +1341,7 @@ function CircuitStudioPage() {
                             className={`cs-analysis-btn${analysis === t.id ? ' is-active' : ''}`}
                             onClick={() => setAnalysis(t.id)}
                             title={
-                                t.id === 'ac' && !hasAc ? 'Netlist has no .ac directive — defaults to 1 Hz..1 MHz dec 20'
+                                t.id === 'ac' && !hasAc ? 'No .ac in netlist — use the AC sweep bar (start/stop in Hz) or add e.g. `.ac dec 50 1 1meg`. Voltage sources need an AC spec (new parts default to AC 1).'
                                 : t.id === 'tran' && !hasTran ? 'Netlist has no .tran directive — defaults to 1 µs / 1 ms'
                                 : t.label
                             }
@@ -966,6 +1379,7 @@ function CircuitStudioPage() {
                 )}
             </div>
 
+            <div className="cs-workspace-scroll-chrome" role="region" aria-label="Run settings">
             {analysis === 'tran' && (
                 <div className="cs-subbar cs-tran-bar">
                     <span className="cs-tran-label">Transient</span>
@@ -1003,6 +1417,70 @@ function CircuitStudioPage() {
                 </div>
             )}
 
+            {analysis === 'ac' && (
+                <div className="cs-subbar cs-tran-bar">
+                    <span className="cs-tran-label">AC sweep</span>
+                    <label className="cs-tran-field">
+                        <span>Scale</span>
+                        <select
+                            className="cs-sweep-target"
+                            value={acOverride.mode}
+                            onChange={(e) => setAcOverride((s) => ({ ...s, mode: e.target.value }))}
+                        >
+                            <option value="">(from netlist)</option>
+                            <option value="dec">dec (per decade)</option>
+                            <option value="oct">oct (per octave)</option>
+                            <option value="lin">lin (evenly spaced)</option>
+                        </select>
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Points</span>
+                        <input
+                            type="text"
+                            value={acOverride.n}
+                            onChange={(e) => setAcOverride((s) => ({ ...s, n: e.target.value }))}
+                            spellCheck={false}
+                            placeholder="20"
+                        />
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Start f</span>
+                        <input
+                            type="text"
+                            value={acOverride.fStart}
+                            onChange={(e) => setAcOverride((s) => ({ ...s, fStart: e.target.value }))}
+                            spellCheck={false}
+                            placeholder="10"
+                        />
+                        <span className="cs-tran-unit">Hz</span>
+                    </label>
+                    <label className="cs-tran-field">
+                        <span>Stop f</span>
+                        <input
+                            type="text"
+                            value={acOverride.fStop}
+                            onChange={(e) => setAcOverride((s) => ({ ...s, fStop: e.target.value }))}
+                            spellCheck={false}
+                            placeholder="1Meg"
+                        />
+                        <span className="cs-tran-unit">Hz</span>
+                    </label>
+                    <span className="cs-tran-hint">
+                        Leave fields blank to use the netlist <code>.ac</code> line (or 1 Hz–1 MHz dec 20 if none). Filled fields override for this Run. Use <code>k</code>/<code>Meg</code> for Hz. At least one <code>V</code>/<code>I</code> needs an <code>AC</code> spec — palette sine/DC/pulse now include <code>AC 1</code> by default.
+                    </span>
+                </div>
+            )}
+
+            {analysis === 'ac' && !ampCoachDismissed && (
+                <AcAmplifierCoach
+                    onDismiss={dismissAmpCoach}
+                    onLoadStabilityDemo={() => {
+                        const d = DEMOS.find((x) => x.id === 'amp-stability');
+                        if (d) loadDemo(d);
+                    }}
+                />
+            )}
+
             {/* ---- Parametric sweep subbar (always visible) ---- */}
             {analysis !== 'op' && (
                 <div className={`cs-subbar cs-sweep-bar${sweep.enabled ? ' is-on' : ''}`}>
@@ -1010,7 +1488,11 @@ function CircuitStudioPage() {
                         <input
                             type="checkbox"
                             checked={sweep.enabled}
-                            onChange={(e) => setSweep((s) => ({ ...s, enabled: e.target.checked }))}
+                            onChange={(e) => {
+                                const on = e.target.checked;
+                                setSweep((s) => ({ ...s, enabled: on }));
+                                if (on) setMonte((m) => ({ ...m, enabled: false }));
+                            }}
                         />
                         <SlidersHorizontal size={12} /> Parametric sweep
                     </label>
@@ -1095,6 +1577,196 @@ function CircuitStudioPage() {
                 </div>
             )}
 
+            {analysis === 'ac' && (
+                <>
+                    <div className={`cs-subbar cs-monte-bar${monte.enabled ? ' is-on' : ''}`}>
+                        <label className={`cs-tran-live${monte.enabled ? ' is-on' : ''}`}>
+                            <input
+                                type="checkbox"
+                                checked={monte.enabled}
+                                onChange={(e) => {
+                                    const on = e.target.checked;
+                                    setMonte((m) => ({ ...m, enabled: on }));
+                                    if (on) {
+                                        setSweep((s) => ({ ...s, enabled: false }));
+                                        setAcNoise((n) => ({ ...n, enabled: false }));
+                                    }
+                                }}
+                            />
+                            Monte Carlo
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Runs</span>
+                            <input
+                                type="text"
+                                value={monte.runs}
+                                onChange={(e) => setMonte((m) => ({ ...m, runs: e.target.value }))}
+                                disabled={!monte.enabled}
+                                spellCheck={false}
+                                title="Number of random samples (max 200)"
+                            />
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>R/C/L ±%</span>
+                            <input
+                                type="text"
+                                value={monte.tolPercent}
+                                onChange={(e) => setMonte((m) => ({ ...m, tolPercent: e.target.value }))}
+                                disabled={!monte.enabled}
+                                spellCheck={false}
+                                title="Uniform tolerance band per sample (each R, C, L scaled independently)"
+                            />
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>PM node</span>
+                            <input
+                                type="text"
+                                className="cs-sweep-target"
+                                value={monte.pmNode}
+                                onChange={(e) => setMonte((m) => ({ ...m, pmNode: e.target.value }))}
+                                disabled={!monte.enabled}
+                                spellCheck={false}
+                                placeholder="vout"
+                            />
+                        </label>
+                        <span className="cs-tran-hint">
+                            Each run perturbs every <code>R</code>/<code>C</code>/<code>L</code> within ±%. Not compatible with sweep or <code>.step</code>. Plot = <strong>mean</strong> Bode; table lists PM per run.
+                        </span>
+                    </div>
+                    <div className={`cs-subbar cs-noise-bar${acNoise.enabled ? ' is-on' : ''}`}>
+                        <label className={`cs-tran-live${acNoise.enabled ? ' is-on' : ''}`}>
+                            <input
+                                type="checkbox"
+                                checked={acNoise.enabled}
+                                onChange={(e) => {
+                                    const on = e.target.checked;
+                                    setAcNoise((n) => ({ ...n, enabled: on }));
+                                    if (on) setMonte((m) => ({ ...m, enabled: false }));
+                                }}
+                            />
+                            Thermal noise
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Output node</span>
+                            <input
+                                type="text"
+                                className="cs-sweep-target"
+                                value={acNoise.outputNode}
+                                onChange={(e) => setAcNoise((n) => ({ ...n, outputNode: e.target.value }))}
+                                disabled={!acNoise.enabled}
+                                spellCheck={false}
+                                placeholder="vout"
+                                title="Small-signal output noise PSD at this node"
+                            />
+                        </label>
+                        <span className="cs-tran-hint">
+                            Johnson–Nyquist noise from linearised <code>R</code> only (4kT/R), 300 K, as trace <code>onoise V(node)</code> — stored as V²/Hz; magnitude plot is 10·log₁₀ (dB re 1 V²/Hz). Excludes shot/flicker. Not with Monte Carlo yet.
+                        </span>
+                    </div>
+                    <div className="cs-subbar cs-goal-bar">
+                        <span className="cs-tran-label">Goal seek</span>
+                        <label className="cs-tran-field">
+                            <span>Metric</span>
+                            <select
+                                className="cs-sweep-target"
+                                value={goalSeek.metric}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, metric: e.target.value }))}
+                                title="Stability metric to match"
+                            >
+                                <option value="pm">Phase margin</option>
+                                <option value="gm">Gain margin</option>
+                            </select>
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Part</span>
+                            <input
+                                type="text"
+                                className="cs-sweep-target"
+                                value={goalSeek.element}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, element: e.target.value }))}
+                                spellCheck={false}
+                                placeholder="Cf"
+                            />
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Lo</span>
+                            <input
+                                type="text"
+                                value={goalSeek.lo}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, lo: e.target.value }))}
+                                spellCheck={false}
+                                placeholder="1p"
+                            />
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Hi</span>
+                            <input
+                                type="text"
+                                value={goalSeek.hi}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, hi: e.target.value }))}
+                                spellCheck={false}
+                                placeholder="50p"
+                            />
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Target</span>
+                            <input
+                                type="text"
+                                value={goalSeek.target}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, target: e.target.value }))}
+                                spellCheck={false}
+                                title={goalSeek.metric === 'gm' ? 'Target gain margin (dB)' : 'Target phase margin (°)'}
+                                placeholder={goalSeek.metric === 'gm' ? '10' : '45'}
+                            />
+                            <span className="cs-tran-unit">{goalSeek.metric === 'gm' ? 'dB' : '°'}</span>
+                        </label>
+                        <label className="cs-tran-field">
+                            <span>Observe</span>
+                            <input
+                                type="text"
+                                className="cs-sweep-target"
+                                value={goalSeek.observeNode}
+                                onChange={(e) => setGoalSeek((g) => ({ ...g, observeNode: e.target.value }))}
+                                spellCheck={false}
+                                placeholder="vout"
+                                title="Node name inside V(...)"
+                            />
+                        </label>
+                        <button
+                            type="button"
+                            className="cs-topbtn cs-topbtn-primary"
+                            onClick={handleGoalSeek}
+                            disabled={running}
+                        >
+                            Seek
+                        </button>
+                        <button
+                            type="button"
+                            className="cs-topbtn"
+                            onClick={handleApplyGoalSeekValue}
+                            disabled={!goalSeekLast || running}
+                            title="Write the solved value to the matching schematic part (R/C/L/V/I)"
+                        >
+                            Apply
+                        </button>
+                        <button
+                            type="button"
+                            className="cs-topbtn"
+                            onClick={handleCopyGoalSeekValue}
+                            disabled={!goalSeekLast || running}
+                            title="Copy solved SI value to clipboard"
+                        >
+                            <Copy size={12} /> Copy
+                        </button>
+                        <span className="cs-tran-hint">
+                            Bisection on <code>V(observe)</code>: bracket <code>Lo</code>…<code>Hi</code> so metric−target changes sign.
+                            Click a <strong>net name</strong> on the canvas to add its <code>V(net)</code> trace.
+                        </span>
+                    </div>
+                </>
+            )}
+            </div>
+
             <div className={`cs-body cs-body-phase3${paletteCollapsed ? ' is-palette-collapsed' : ''}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
                 <div className={`cs-pane cs-pane-palette${paletteCollapsed ? ' is-collapsed' : ''}`}>
                     {paletteCollapsed ? (
@@ -1122,16 +1794,19 @@ function CircuitStudioPage() {
                                     <ChevronLeft size={12} />
                                 </button>
                             </div>
-                            <Palette onPick={(partId) => {
-                                // Click-to-place centres the new part near the
-                                // middle of the current canvas.
-                                mutateDoc((d) => { addComponent(d, partId, 200, 160, 0); });
-                            }} />
+                            <Palette
+                                userLibraryParts={userLibraryPaletteParts}
+                                onPick={(partId) => {
+                                    // Click-to-place centres the new part near the
+                                    // middle of the current canvas.
+                                    mutateDoc((d) => { addComponent(d, partId, 200, 160, 0); });
+                                }}
+                            />
                         </>
                     )}
                 </div>
 
-                <div className="cs-pane cs-pane-stage">
+                <div className={`cs-pane cs-pane-stage${resultsPlotMaximized ? ' is-plot-max' : ''}`}>
                     <Canvas
                         doc={doc}
                         selectedId={selection}
@@ -1145,19 +1820,19 @@ function CircuitStudioPage() {
                         onEditComponent={setEditPopup}
                         onOpenScope={setScopeModal}
                         fitNonce={fitNonce}
+                        highlightNetLabel={canvasNetHighlight}
+                        onNetLabelClick={handleNetLabelProbe}
                     />
 
                     {editPopup && (
                         <PropertyPopup
                             comp={doc?.components?.find((c) => c.id === editPopup.compId) || null}
+                            userModelsForPicker={doc?.userModels || []}
                             anchor={{ clientX: editPopup.clientX, clientY: editPopup.clientY }}
                             onClose={() => setEditPopup(null)}
                             onCommit={(patch) => {
                                 const id = editPopup.compId;
-                                mutateDoc((d) => {
-                                    const c = d.components.find((x) => x.id === id);
-                                    if (c) Object.assign(c, patch);
-                                });
+                                mutateDoc((d) => { updateComponent(d, id, patch); });
                             }}
                         />
                     )}
@@ -1171,22 +1846,24 @@ function CircuitStudioPage() {
                         />
                     )}
 
+                    {modelLibOpen && (
+                        <ModelLibraryModal
+                            onClose={() => setModelLibOpen(false)}
+                            onAddLibrary={(row) => setSpiceLibs((p) => [...p, row])}
+                            onQueueIncludeLine={handleQueueIncludeFromModelLib}
+                            netlistTextForInclude={netlistText}
+                        />
+                    )}
+
                     {scopeModal && (() => {
                         const comp = doc?.components?.find((c) => c.id === scopeModal.compId) || null;
-                        const { signalName, nodeLabel } = scopeSignalFor(comp, resolvedNets, runResult);
-                        const livePartial = (liveStream && signalName)
-                            ? {
-                                t: liveStream.t,
-                                y: liveStream.ySignals?.[signalName] || [],
-                            }
-                            : null;
+                        const { channels } = scopeSignalsFor(comp, resolvedNets, runResult);
                         return (
                             <ScopeModal
                                 comp={comp}
-                                signalName={signalName}
-                                nodeLabel={nodeLabel}
+                                channels={channels}
                                 result={runResult}
-                                livePartial={livePartial}
+                                livePartial={livePartialForChannels(liveStream, channels)}
                                 onClose={() => setScopeModal(null)}
                             />
                         );
@@ -1197,11 +1874,31 @@ function CircuitStudioPage() {
                         <div className="cs-drawer-tabs">
                             <button
                                 type="button"
-                                className="cs-drawer-tab is-active"
-                                onClick={() => setShowResults(!showResults)}
+                                className={`cs-drawer-tab${showResults && drawerTab === 'results' ? ' is-active' : ''}`}
+                                onClick={() => {
+                                    if (showResults && drawerTab === 'results') setShowResults(false);
+                                    else {
+                                        setShowResults(true);
+                                        setDrawerTab('results');
+                                    }
+                                }}
                             >
                                 <Activity size={12} /> Results
                                 {showResults ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                            </button>
+                            <button
+                                type="button"
+                                className={`cs-drawer-tab${showResults && drawerTab === 'scope' ? ' is-active' : ''}`}
+                                onClick={() => {
+                                    if (showResults && drawerTab === 'scope') setShowResults(false);
+                                    else {
+                                        setShowResults(true);
+                                        setDrawerTab('scope');
+                                    }
+                                }}
+                                title="Oscilloscope traces (SCOPE parts on the canvas)"
+                            >
+                                <Monitor size={12} /> Scope
                             </button>
                             <button
                                 type="button"
@@ -1214,17 +1911,37 @@ function CircuitStudioPage() {
                             {parsed?.errors?.length > 0 && (
                                 <span className="cs-pane-err">· {parsed.errors.length} parse error{parsed.errors.length > 1 ? 's' : ''}</span>
                             )}
+                            {drawerTab === 'results' && (
+                                <button
+                                    type="button"
+                                    className={`cs-drawer-maximize${resultsPlotMaximized ? ' is-on' : ''}`}
+                                    onClick={() => setResultsPlotMaximized((v) => !v)}
+                                    disabled={!showResults}
+                                    title={resultsPlotMaximized
+                                        ? 'Show schematic larger again'
+                                        : 'Maximize results plot (use most of the window — Esc to exit)'}
+                                >
+                                    {resultsPlotMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                                    <span className="cs-drawer-maximize-label">
+                                        {resultsPlotMaximized ? 'Restore' : 'Max plot'}
+                                    </span>
+                                </button>
+                            )}
                         </div>
-                        {showResults && (
+                        {showResults && drawerTab === 'results' && (
                             <div className="cs-drawer-body">
                                 {runError && (
                                     <div className="cs-err-block">
                                         {String(runError).split('\n').map((l, i) => <div key={i}>{l}</div>)}
                                     </div>
                                 )}
-                                {!runError && runResult && (
+                                {!runError && acStudioMessage && (
+                                    <div className="cs-studio-msg" role="status">{acStudioMessage}</div>
+                                )}
+                                {!runError && plotResult && (
                                     <ResultsPanel
-                                        result={runResult}
+                                        result={plotResult}
+                                        expandedChart={resultsPlotMaximized}
                                         selectedSignals={selectedSignals}
                                         onSignalsChange={setSelectedSignals}
                                         cursorA={cursorA}
@@ -1235,15 +1952,79 @@ function CircuitStudioPage() {
                                         onActiveCursorChange={setActiveCursor}
                                         showMeasure={showMeasure}
                                         onShowMeasureChange={setShowMeasure}
+                                        onExportCsv={handleExportResultsCsv}
+                                        traceMath={traceMath}
+                                        onTraceMathChange={setTraceMath}
+                                        onSignalProbeHover={setPlotHighlightNet}
                                     />
                                 )}
-                                {!runError && !runResult && (
+                                {!runError && !plotResult && (
                                     <div className="cs-empty">
                                         Hit <b>Run</b> to solve. DC gives node voltages; AC gives a Bode plot; Transient plots V(node) vs. time.
                                     </div>
                                 )}
                             </div>
                         )}
+                        {showResults && drawerTab === 'scope' && (() => {
+                            const scopeComp = scopeDrawerCompId
+                                ? doc?.components?.find((c) => c.id === scopeDrawerCompId) || null
+                                : null;
+                            const { channels: scopeDrawerChannels } = scopeSignalsFor(
+                                scopeComp, resolvedNets, runResult,
+                            );
+                            return (
+                                <div className="cs-drawer-body cs-drawer-scope">
+                                    <div className="cs-scope-drawer-bar">
+                                        <label htmlFor="cs-scope-drawer-select">
+                                            SCOPE
+                                            <select
+                                                id="cs-scope-drawer-select"
+                                                className="cs-scope-drawer-select"
+                                                value={scopeDrawerCompId ?? ''}
+                                                onChange={(e) => setScopeDrawerCompId(e.target.value || null)}
+                                            >
+                                                {!scopeComponentsInDoc.length && (
+                                                    <option value="">(none on schematic)</option>
+                                                )}
+                                                {scopeComponentsInDoc.map((c) => (
+                                                    <option key={c.id} value={c.id}>
+                                                        {c.ref || c.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        {scopeDrawerCompId && (
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn"
+                                                onClick={() => setScopeModal({ compId: scopeDrawerCompId })}
+                                                title="Open scope in full window (same as double-click on canvas)"
+                                            >
+                                                Pop out
+                                            </button>
+                                        )}
+                                        <span className="cs-scope-drawer-spacer" />
+                                        <span className="cs-scope-drawer-hint">
+                                            Double-click a scope on the canvas for the same view.
+                                        </span>
+                                    </div>
+                                    {scopeComp ? (
+                                        <ScopeModal
+                                            key={scopeDrawerCompId}
+                                            embedded
+                                            comp={scopeComp}
+                                            channels={scopeDrawerChannels}
+                                            result={runResult}
+                                            livePartial={livePartialForChannels(liveStream, scopeDrawerChannels)}
+                                        />
+                                    ) : (
+                                        <div className="cs-empty" style={{ padding: 16 }}>
+                                            Add a <b>SCOPE</b> from the palette and clip its probe tip(s) to nets, then run a simulation.
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
                         {showNetlistDrawer && (
                             <div className="cs-source-drawer">
                                 <div className="cs-source-drawer-top">
@@ -1251,6 +2032,74 @@ function CircuitStudioPage() {
                                     <button className="cs-topbtn" onClick={applyNetlistDraft}>
                                         <RefreshCw size={12} /> Apply
                                     </button>
+                                </div>
+                                <div className="cs-spice-lib-panel">
+                                    <div className="cs-spice-lib-head">
+                                        <span className="cs-spice-lib-title">Library files for <code>.include</code> / <code>.lib</code></span>
+                                        <span className="cs-spice-lib-actions">
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn"
+                                                onClick={() => setModelLibOpen(true)}
+                                                title="Search curated free model packs and try HTTPS downloads"
+                                            >
+                                                <BookOpen size={12} /> Model library…
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn"
+                                                onClick={() => setSpiceLibs((rows) => [...rows, newSpiceLibRow()])}
+                                            >
+                                                <Plus size={12} /> Add file
+                                            </button>
+                                        </span>
+                                    </div>
+                                    <p className="cs-spice-lib-hint">
+                                        Paste vendor fragments here; the <strong>filename</strong> must match the path in{' '}
+                                        <code>.include &quot;…&quot;</code> (basename match is enough).{' '}
+                                        <code>.subckt</code> / <code>X</code> are flattened before simulation — nested subcircuits are not supported yet.
+                                    </p>
+                                    {spiceLibs.length === 0 && (
+                                        <p className="cs-spice-lib-empty">No library entries — netlist is used as-is.</p>
+                                    )}
+                                    {spiceLibs.map((row, ri) => (
+                                        <div key={row.id || ri} className="cs-spice-lib-row">
+                                            <label className="cs-spice-lib-file">
+                                                <span>Filename</span>
+                                                <input
+                                                    type="text"
+                                                    value={row.name}
+                                                    onChange={(e) => {
+                                                        const v = e.target.value;
+                                                        setSpiceLibs((rows) => rows.map((r) => (r.id === row.id ? { ...r, name: v } : r)));
+                                                    }}
+                                                    spellCheck={false}
+                                                    placeholder="e.g. models.inc"
+                                                />
+                                            </label>
+                                            <label className="cs-spice-lib-body">
+                                                <span>SPICE text</span>
+                                                <textarea
+                                                    value={row.content}
+                                                    onChange={(e) => {
+                                                        const v = e.target.value;
+                                                        setSpiceLibs((rows) => rows.map((r) => (r.id === row.id ? { ...r, content: v } : r)));
+                                                    }}
+                                                    spellCheck={false}
+                                                    rows={5}
+                                                    placeholder=".model … / .subckt …"
+                                                />
+                                            </label>
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn cs-spice-lib-remove"
+                                                title="Remove this library entry"
+                                                onClick={() => setSpiceLibs((rows) => rows.filter((r) => r.id !== row.id))}
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
                                 </div>
                                 <textarea
                                     className="cs-netlist-editor"
@@ -1291,12 +2140,14 @@ function CircuitStudioPage() {
                             </div>
                             <Inspector
                                 selectedComp={selectedComp}
+                                userModels={doc?.userModels || []}
                                 bulkSelection={selection?.kind === 'multi' ? selection : null}
                                 onBulkDelete={() => {
                                     if (selection?.kind !== 'multi') return;
                                     mutateDoc((d) => {
                                         for (const wid of selection.wireIds || []) removeWire(d, wid);
                                         for (const cid of selection.componentIds || []) removeComponent(d, cid);
+                                        for (const lid of selection.labelIds || []) removeLabel(d, lid);
                                     });
                                     setSelection(null);
                                 }}
@@ -1336,6 +2187,36 @@ function CircuitStudioPage() {
             </div>
         </div>
     );
+}
+
+/** Build the AC directive object used at Run time (shared by normal AC, Monte Carlo, and goal seek). */
+function buildAcDirective(parsed, acOverride) {
+    const parsedAc = parsed.directives.find((d) => d.kind === 'ac') || {
+        mode: 'dec', n: 20, fStart: 1, fStop: 1e6,
+    };
+    const pickF = (str, fallback) => {
+        const t = String(str ?? '').trim();
+        if (!t) return fallback;
+        const v = parseSiValue(t);
+        return Number.isFinite(v) && v > 0 ? v : fallback;
+    };
+    const pickN = (str, fallback) => {
+        const t = String(str ?? '').trim();
+        if (!t) return fallback;
+        const v = parseSiValue(t);
+        if (!Number.isFinite(v) || v < 1) return fallback;
+        return Math.max(1, Math.floor(v));
+    };
+    const modeStr = String(acOverride?.mode || '').trim();
+    const modeRaw = (modeStr || parsedAc.mode || 'dec').toLowerCase();
+    const mode = modeRaw === 'oct' ? 'oct' : (modeRaw === 'lin' ? 'lin' : 'dec');
+    return {
+        kind: 'ac',
+        mode,
+        n: pickN(acOverride?.n, parsedAc.n ?? 20),
+        fStart: pickF(acOverride?.fStart, parsedAc.fStart ?? 1),
+        fStop: pickF(acOverride?.fStop, parsedAc.fStop ?? 1e6),
+    };
 }
 
 /**
@@ -1489,6 +2370,20 @@ function streamTranResult(result, setLiveStream, onDone) {
     requestAnimationFrame(step);
 }
 
+/** Slice `liveStream` to the channel names wired on a SCOPE (modal + drawer). */
+function livePartialForChannels(liveStream, channels) {
+    if (!liveStream?.t?.length || !channels?.length) return null;
+    const yBySignal = {};
+    for (const ch of channels) {
+        if (!ch.signalName) continue;
+        const y = liveStream.ySignals?.[ch.signalName];
+        if (y && y.length) yBySignal[ch.signalName] = y;
+    }
+    return Object.keys(yBySignal).length
+        ? { t: liveStream.t, yBySignal }
+        : null;
+}
+
 /**
  * Build a snapshot mapping of `"<compId>|<pinId>"` → `V(<nodeLabel>)`
  * for every pin in the doc, using whatever net resolution was in force
@@ -1524,37 +2419,34 @@ function buildPinSignalMap(doc, nets) {
 }
 
 /**
- * Resolve a SCOPE component's tip-pin to a (signalName, nodeLabel)
- * pair the way the plot names it. Mirrors the probe auto-select rule.
- *
- * When a `runResult` is supplied, we first consult the pin-signal
- * snapshot captured at run time. That keeps the modal working after
- * the user has edited the doc (drags, rotations, net re-number) —
- * the electrical attachment of the scope's tip pin to a simulated
- * net is stable even if the doc's auto-numbering has since drifted.
- *
- * Returns { signalName: null } when the scope is dangling / connected
- * only to ground, so the modal can render its "no connection" state.
+ * Resolve CH1 (`tip`) and optionally CH2 (`tip2`) for a SCOPE — same
+ * naming rules as the probe auto-selector and `buildPinSignalMap`.
+ * `scopeChannelMode === 'single'` limits the UI to CH1 only.
  */
-function scopeSignalFor(comp, nets, runResult) {
-    if (!comp || !nets) return { signalName: null, nodeLabel: null };
-
-    // First, consult the run-time snapshot (if we have one).
-    const pinKey = `${comp.id}|tip`;
-    const snap = runResult?.pinSignalMap?.get(pinKey);
-    if (snap) {
-        const lab = snap.replace(/^V\((.*)\)$/, '$1');
-        return { signalName: snap, nodeLabel: lab };
+function scopeSignalsFor(comp, nets, runResult) {
+    if (!comp || !nets) {
+        return { channels: [] };
     }
-
-    // Otherwise fall back to the current doc's net resolution. The
-    // modal will still render its "Hit Run" empty state until the
-    // user re-simulates.
-    const nodeId = nets.pinNode(comp, 'tip');
-    if (nodeId == null || nodeId === 0) return { signalName: null, nodeLabel: 'ground / floating' };
-    const lab = nets.nodeLabels?.get(nodeId);
-    const label = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
-    return { signalName: `V(${label})`, nodeLabel: label };
+    const dual = comp.scopeChannelMode !== 'single';
+    const slots = dual
+        ? [{ pin: 'tip', label: 'CH1' }, { pin: 'tip2', label: 'CH2' }]
+        : [{ pin: 'tip', label: 'CH1' }];
+    const channels = slots.map(({ pin, label }) => {
+        const pinKey = `${comp.id}|${pin}`;
+        const snap = runResult?.pinSignalMap?.get(pinKey);
+        if (snap) {
+            const lab = snap.replace(/^V\((.*)\)$/, '$1');
+            return { pin, label, signalName: snap, nodeLabel: lab };
+        }
+        const nodeId = nets.pinNode(comp, pin);
+        if (nodeId == null || nodeId === 0) {
+            return { pin, label, signalName: null, nodeLabel: null };
+        }
+        const lab = nets.nodeLabels?.get(nodeId);
+        const nodeLabel = (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') ? lab : `n${nodeId}`;
+        return { pin, label, signalName: `V(${nodeLabel})`, nodeLabel };
+    });
+    return { channels };
 }
 
 function buildNetWarnings(nets, doc, validation) {
@@ -1604,7 +2496,7 @@ const SchematicSvg = React.memo(function SchematicSvg({ layout, zoom }) {
                             points={w.points.map((p) => `${p[0]},${p[1]}`).join(' ')}
                             fill="none"
                             stroke={wireStroke}
-                            strokeWidth={1.8}
+                            strokeWidth={1.25}
                             strokeLinecap="round"
                             strokeLinejoin="round"
                         />
@@ -1612,7 +2504,7 @@ const SchematicSvg = React.memo(function SchematicSvg({ layout, zoom }) {
 
                     {/* Junction dots where three or more wires meet */}
                     {junctions.map((j, i) => (
-                        <circle key={`j-${i}`} cx={j.x} cy={j.y} r={3.2} fill={wireStroke} />
+                        <circle key={`j-${i}`} cx={j.x} cy={j.y} r={2.6} fill={wireStroke} />
                     ))}
 
                     {/* Node labels (the coloured signal names) */}
@@ -1634,10 +2526,10 @@ function NodeLabel({ node, color }) {
     if (node.isGround) {
         return (
             <g transform={`translate(${node.x}, ${node.y})`}>
-                <line x1={0} y1={-10} x2={0} y2={0} stroke="var(--sch-wire)" strokeWidth={1.8} />
-                <line x1={-10} y1={0} x2={10} y2={0} stroke="var(--sch-wire)" strokeWidth={2.2} />
-                <line x1={-7} y1={4} x2={7} y2={4} stroke="var(--sch-wire)" strokeWidth={1.8} />
-                <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-wire)" strokeWidth={1.8} />
+                <line x1={0} y1={-10} x2={0} y2={0} stroke="var(--sch-wire)" strokeWidth={1.25} />
+                <line x1={-10} y1={0} x2={10} y2={0} stroke="var(--sch-wire)" strokeWidth={1.55} />
+                <line x1={-7} y1={4} x2={7} y2={4} stroke="var(--sch-wire)" strokeWidth={1.25} />
+                <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-wire)" strokeWidth={1.25} />
                 <text x={0} y={22} fontSize={10} textAnchor="middle" fill="var(--sch-gnd-label)">GND</text>
             </g>
         );
@@ -1774,12 +2666,159 @@ function renderShape(s, key) {
     }
 }
 
+/** Recharts `ResponsiveContainer` needs numeric heights; scale with viewport when maximized. */
+function useResultChartHeights(expanded) {
+    const [dims, setDims] = useState(() => ({
+        main: 260,
+        mag: 160,
+        ph: 130,
+    }));
+    useEffect(() => {
+        if (!expanded) {
+            const id = requestAnimationFrame(() => {
+                setDims({ main: 260, mag: 160, ph: 130 });
+            });
+            return () => cancelAnimationFrame(id);
+        }
+        const measure = () => {
+            const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+            const main = Math.max(280, Math.floor(vh * 0.56));
+            const bodeBlock = Math.max(340, Math.floor(vh * 0.5));
+            const mag = Math.round(bodeBlock * 0.56);
+            const ph = Math.max(110, bodeBlock - mag);
+            setDims({ main, mag, ph });
+        };
+        const id = requestAnimationFrame(() => measure());
+        window.addEventListener('resize', measure);
+        return () => {
+            cancelAnimationFrame(id);
+            window.removeEventListener('resize', measure);
+        };
+    }, [expanded]);
+    return dims;
+}
+
+/** Optional row: combine two non-derived traces (same analysis kind). */
+function TraceMathBar({ result, traceMath, onTraceMathChange }) {
+    const base = (result.signals || []).filter((s) => !s.derived);
+    const opts = base.map((s) => (
+        <option key={s.name} value={s.name}>{s.name}</option>
+    ));
+    return (
+        <div className="cs-trace-math-bar">
+            <label className={`cs-trace-math-toggle${traceMath.enabled ? ' is-on' : ''}`}>
+                <input
+                    type="checkbox"
+                    checked={!!traceMath.enabled}
+                    onChange={(e) => {
+                        const on = e.target.checked;
+                        if (!on) {
+                            onTraceMathChange((t) => ({ ...t, enabled: false }));
+                            return;
+                        }
+                        const list = (result.signals || []).filter((s) => !s.derived);
+                        if (list.length < 2) {
+                            onTraceMathChange((t) => ({ ...t, enabled: true }));
+                            return;
+                        }
+                        let sigA = traceMath.sigA;
+                        let sigB = traceMath.sigB;
+                        if (!sigA || !list.some((s) => s.name === sigA)) sigA = list[0].name;
+                        if (!sigB || !list.some((s) => s.name === sigB)) sigB = list[1].name;
+                        if (sigA === sigB) {
+                            const alt = list.find((s) => s.name !== sigA);
+                            if (alt) sigB = alt.name;
+                        }
+                        onTraceMathChange((t) => ({
+                            ...t, enabled: true, sigA, sigB,
+                        }));
+                    }}
+                />
+                Trace math
+            </label>
+            {traceMath.enabled && base.length >= 2 && (
+                <>
+                    <select
+                        className="cs-trace-math-op"
+                        value={traceMath.op}
+                        onChange={(e) => onTraceMathChange((t) => ({ ...t, op: e.target.value }))}
+                        title="Operation"
+                    >
+                        <option value="minus">A − B</option>
+                        <option value="plus">A + B</option>
+                        <option value="times">A × B</option>
+                    </select>
+                    <select
+                        className="cs-trace-math-sig"
+                        value={traceMath.sigA}
+                        onChange={(e) => onTraceMathChange((t) => ({ ...t, sigA: e.target.value }))}
+                        title="Trace A"
+                    >{opts}</select>
+                    <select
+                        className="cs-trace-math-sig"
+                        value={traceMath.sigB}
+                        onChange={(e) => onTraceMathChange((t) => ({ ...t, sigB: e.target.value }))}
+                        title="Trace B"
+                    >{opts}</select>
+                </>
+            )}
+            {traceMath.enabled && base.length < 2 && (
+                <span className="cs-trace-math-hint">Need at least two traces.</span>
+            )}
+        </div>
+    );
+}
+
+function MonteCarloSummary({ monte }) {
+    if (!monte?.runs) return null;
+    const { min, max, mean, std } = monte.pmStats || {};
+    const fmt = (x) => (Number.isFinite(x) ? `${x.toFixed(1)}°` : '—');
+    const showTable = Array.isArray(monte.phaseMargins) && monte.phaseMargins.length > 0
+        && monte.phaseMargins.length <= 48;
+    return (
+        <div className="cs-monte-summary">
+            <div className="cs-monte-summary-line">
+                <strong>Monte Carlo</strong>
+                {' — '}
+                {monte.runs} runs, each R/C/L scaled independently within ±{monte.tolPercent ?? '—'}%.
+                Mean magnitude/phase is plotted.
+                {monte.pmNode && (
+                    <>
+                        {' '}Phase margin on <code>V({monte.pmNode})</code>
+                        {': min '}{fmt(min)}{', max '}{fmt(max)}{', mean '}{fmt(mean)}{', σ '}{fmt(std)}.
+                    </>
+                )}
+            </div>
+            {showTable && (
+                <table className="cs-monte-table">
+                    <thead><tr><th>Run</th><th>PM @ V({monte.pmNode})</th></tr></thead>
+                    <tbody>
+                        {monte.phaseMargins.map((pm, i) => (
+                            <tr key={i}>
+                                <td>{i + 1}</td>
+                                <td className="cs-mono">{Number.isFinite(pm) ? `${pm.toFixed(2)}°` : '—'}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+        </div>
+    );
+}
+
 function ResultsPanel({
-    result, selectedSignals, onSignalsChange,
+    result,
+    expandedChart = false,
+    selectedSignals, onSignalsChange,
     cursorA, cursorB, onCursorAChange, onCursorBChange,
     activeCursor, onActiveCursorChange,
     showMeasure, onShowMeasureChange,
+    onExportCsv,
+    traceMath,
+    onTraceMathChange,
+    onSignalProbeHover,
 }) {
+    const { main: chartH, mag: bodeMagH, ph: bodePhH } = useResultChartHeights(expandedChart);
     const toggle = (name) => {
         onSignalsChange(selectedSignals.includes(name)
             ? selectedSignals.filter((s) => s !== name)
@@ -1789,8 +2828,18 @@ function ResultsPanel({
     if (result.kind === 'op') {
         return (
             <div className="cs-op-results">
-                <div className="cs-op-meta">
-                    Converged in {result.iters} iteration{result.iters > 1 ? 's' : ''}.
+                <div className="cs-op-meta cs-op-meta-row">
+                    <span>
+                        Converged in {result.iters} iteration{result.iters > 1 ? 's' : ''}.
+                    </span>
+                    <button
+                        type="button"
+                        className="cs-topbtn"
+                        onClick={onExportCsv}
+                        title="Download node voltages as CSV (node, value)"
+                    >
+                        <Download size={12} /> Save CSV
+                    </button>
                 </div>
                 <table className="cs-op-table">
                     <thead><tr><th>Node</th><th>Voltage</th></tr></thead>
@@ -1845,21 +2894,40 @@ function ResultsPanel({
         return (
             <div className="cs-plot-wrap">
                 <div className="cs-plot-header">
-                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
-                    <button
-                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
-                        onClick={() => onShowMeasureChange(!showMeasure)}
-                        title="Toggle cursor readouts"
-                    >
-                        <SlidersHorizontal size={12} /> Measure
-                    </button>
+                    <div className="cs-plot-header-col">
+                        <SignalChips
+                            result={result}
+                            selected={selectedSignals}
+                            onToggle={toggle}
+                            onSignalProbeHover={onSignalProbeHover}
+                        />
+                        <TraceMathBar result={result} traceMath={traceMath} onTraceMathChange={onTraceMathChange} />
+                    </div>
+                    <div className="cs-plot-toolbar-right">
+                        <button
+                            type="button"
+                            className="cs-topbtn"
+                            onClick={onExportCsv}
+                            title="Download sweep data as CSV (first column = sweep variable; ticked traces as columns)"
+                        >
+                            <Download size={12} /> Save CSV
+                        </button>
+                        <button
+                            type="button"
+                            className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                            onClick={() => onShowMeasureChange(!showMeasure)}
+                            title="Toggle cursor readouts"
+                        >
+                            <SlidersHorizontal size={12} /> Measure
+                        </button>
+                    </div>
                 </div>
                 <div
                     className={`cs-chart-outer${activeCursor ? ' is-dragging' : ''}`}
                     onMouseUp={handleMouseUp}
                     onMouseLeave={handleMouseUp}
                 >
-                    <ResponsiveContainer width="100%" height={260}>
+                    <ResponsiveContainer width="100%" height={chartH}>
                         <LineChart
                             data={data}
                             margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
@@ -1926,21 +2994,40 @@ function ResultsPanel({
         return (
             <div className="cs-plot-wrap">
                 <div className="cs-plot-header">
-                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
-                    <button
-                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
-                        onClick={() => onShowMeasureChange(!showMeasure)}
-                        title="Toggle cursor & auto-measure panel"
-                    >
-                        <SlidersHorizontal size={12} /> Measure
-                    </button>
+                    <div className="cs-plot-header-col">
+                        <SignalChips
+                            result={result}
+                            selected={selectedSignals}
+                            onToggle={toggle}
+                            onSignalProbeHover={onSignalProbeHover}
+                        />
+                        <TraceMathBar result={result} traceMath={traceMath} onTraceMathChange={onTraceMathChange} />
+                    </div>
+                    <div className="cs-plot-toolbar-right">
+                        <button
+                            type="button"
+                            className="cs-topbtn"
+                            onClick={onExportCsv}
+                            title="Download transient waveforms as CSV (time in seconds, first column)"
+                        >
+                            <Download size={12} /> Save CSV
+                        </button>
+                        <button
+                            type="button"
+                            className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                            onClick={() => onShowMeasureChange(!showMeasure)}
+                            title="Toggle cursor & auto-measure panel"
+                        >
+                            <SlidersHorizontal size={12} /> Measure
+                        </button>
+                    </div>
                 </div>
                 <div
                     className={`cs-chart-outer${activeCursor ? ' is-dragging' : ''}`}
                     onMouseUp={handleMouseUp}
                     onMouseLeave={handleMouseUp}
                 >
-                    <ResponsiveContainer width="100%" height={260}>
+                    <ResponsiveContainer width="100%" height={chartH}>
                         <LineChart
                             data={data}
                             margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
@@ -2004,21 +3091,48 @@ function ResultsPanel({
             mag[i] = { f: f[i] };
             phase[i] = { f: f[i] };
             for (const s of result.signals) {
-                mag[i][s.name] = 20 * Math.log10(Math.max(s.mag[i], 1e-18));
+                if (s.yMode === 'noiseV2') {
+                    mag[i][s.name] = 10 * Math.log10(Math.max(s.mag[i], 1e-99));
+                } else {
+                    mag[i][s.name] = 20 * Math.log10(Math.max(s.mag[i], 1e-18));
+                }
                 phase[i][s.name] = s.phase[i];
             }
         }
+        const phaseSignalNames = selectedSignals.filter((name) => {
+            const s = result.signals.find((x) => x.name === name);
+            return s && s.yMode !== 'noiseV2';
+        });
         return (
             <div className="cs-plot-wrap">
                 <div className="cs-plot-header">
-                    <SignalChips result={result} selected={selectedSignals} onToggle={toggle} />
-                    <button
-                        className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
-                        onClick={() => onShowMeasureChange(!showMeasure)}
-                        title="Toggle cursor & auto-measure panel"
-                    >
-                        <SlidersHorizontal size={12} /> Measure
-                    </button>
+                    <div className="cs-plot-header-col">
+                        <SignalChips
+                            result={result}
+                            selected={selectedSignals}
+                            onToggle={toggle}
+                            onSignalProbeHover={onSignalProbeHover}
+                        />
+                        <TraceMathBar result={result} traceMath={traceMath} onTraceMathChange={onTraceMathChange} />
+                    </div>
+                    <div className="cs-plot-toolbar-right">
+                        <button
+                            type="button"
+                            className="cs-topbtn"
+                            onClick={onExportCsv}
+                            title="Download AC data as CSV (Hz; linear |V| and *_phase_deg per trace — plot uses dB)"
+                        >
+                            <Download size={12} /> Save CSV
+                        </button>
+                        <button
+                            type="button"
+                            className={`cs-topbtn${showMeasure ? ' is-active' : ''}`}
+                            onClick={() => onShowMeasureChange(!showMeasure)}
+                            title="Toggle cursor & auto-measure panel"
+                        >
+                            <SlidersHorizontal size={12} /> Measure
+                        </button>
+                    </div>
                 </div>
                 <div
                     className={`cs-chart-outer cs-chart-bode${activeCursor ? ' is-dragging' : ''}`}
@@ -2026,7 +3140,7 @@ function ResultsPanel({
                     onMouseLeave={handleMouseUp}
                 >
                     <div className="cs-bode-wrap">
-                        <ResponsiveContainer width="100%" height={160}>
+                        <ResponsiveContainer width="100%" height={bodeMagH}>
                             <LineChart
                                 data={mag}
                                 margin={{ top: 10, right: 24, left: 6, bottom: 6 }}
@@ -2040,7 +3154,12 @@ function ResultsPanel({
                                 />
                                 <YAxis
                                     tickFormatter={(v) => `${v.toFixed(0)}`}
-                                    label={{ value: 'Mag (dB)', angle: -90, position: 'insideLeft', fontSize: 10 }}
+                                    label={{
+                                        value: 'Mag (dB); noise trace uses 10*log10(V^2/Hz)',
+                                        angle: -90,
+                                        position: 'insideLeft',
+                                        fontSize: 10,
+                                    }}
                                 />
                                 <Tooltip
                                     formatter={(v) => `${Number(v).toFixed(2)} dB`}
@@ -2067,7 +3186,7 @@ function ResultsPanel({
                                 ))}
                             </LineChart>
                         </ResponsiveContainer>
-                        <ResponsiveContainer width="100%" height={130}>
+                        <ResponsiveContainer width="100%" height={bodePhH}>
                             <LineChart
                                 data={phase}
                                 margin={{ top: 6, right: 24, left: 6, bottom: 6 }}
@@ -2093,15 +3212,19 @@ function ResultsPanel({
                                 {showMeasure && cursorB != null && (
                                     <ReferenceLine x={cursorB} stroke={cursorStroke.B} strokeDasharray="4 4" strokeWidth={1.5} />
                                 )}
-                                {selectedSignals.map((name, i) => (
-                                    <Line
-                                        key={`p-${name}`}
-                                        type="monotone"
-                                        dataKey={name}
-                                        stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
-                                        dot={false} strokeWidth={1.2} isAnimationActive={false}
-                                    />
-                                ))}
+                                {phaseSignalNames.map((name) => {
+                                    const ci = selectedSignals.indexOf(name);
+                                    const i = ci >= 0 ? ci : 0;
+                                    return (
+                                        <Line
+                                            key={`p-${name}`}
+                                            type="monotone"
+                                            dataKey={name}
+                                            stroke={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                                            dot={false} strokeWidth={1.2} isAnimationActive={false}
+                                        />
+                                    );
+                                })}
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -2114,6 +3237,7 @@ function ResultsPanel({
                         cursorB={cursorB}
                     />
                 )}
+                {result.monte && <MonteCarloSummary monte={result.monte} />}
             </div>
         );
     }
@@ -2158,7 +3282,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{aRow ? formatSIValue(cursorA, xUnit) : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {aRow ? formatYAtX(xOf(s), yOf(s), cursorA, yUnit, isAC) : '—'}
+                                    {aRow ? formatYAtX(xOf(s), yOf(s), cursorA, yUnit, isAC, s.yMode) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -2167,7 +3291,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{bRow ? formatSIValue(cursorB, xUnit) : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {bRow ? formatYAtX(xOf(s), yOf(s), cursorB, yUnit, isAC) : '—'}
+                                    {bRow ? formatYAtX(xOf(s), yOf(s), cursorB, yUnit, isAC, s.yMode) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -2181,7 +3305,9 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                                 const dy = yB - yA;
                                 return (
                                     <td key={s.name} className="cs-mono">
-                                        {isAC ? formatDbDelta(yA, yB) : formatSIValue(dy, yUnit)}
+                                        {isAC && s.yMode === 'noiseV2'
+                                            ? formatDbDelta(Math.sqrt(Math.max(yA, 0)), Math.sqrt(Math.max(yB, 0)))
+                                            : (isAC ? formatDbDelta(yA, yB) : formatSIValue(dy, yUnit))}
                                     </td>
                                 );
                             })}
@@ -2204,8 +3330,9 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                                 <th>Signal</th>
                                 <th>Peak</th>
                                 <th>−3 dB</th>
-                                <th>Unity f</th>
-                                <th>Phase margin</th>
+                                <th title="First frequency where |H| = 1 (0 dB)">Unity f</th>
+                                <th title="180° + phase at unity-gain frequency (when a 0 dB crossing exists)">PM</th>
+                                <th title="Negative of gain (dB) at first −180° phase crossing">GM</th>
                             </tr>
                         ) : (
                             <tr>
@@ -2222,11 +3349,13 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                         {sigs.map((s, i) => (
                             <tr key={s.name}>
                                 <td style={{ color: SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}>{s.name}</td>
-                                {isAC ? <AcMeasureCells sig={s} /> : <TranMeasureCells sig={s} />}
+                                {isAC
+                                    ? (s.yMode === 'noiseV2' ? <NoiseAcMeasureCells /> : <AcMeasureCells sig={s} />)
+                                    : <TranMeasureCells sig={s} />}
                             </tr>
                         ))}
                         {sigs.length === 0 && (
-                            <tr><td colSpan={isAC ? 5 : 6} className="cs-empty-cell">Pick a signal above.</td></tr>
+                            <tr><td colSpan={isAC ? 6 : 6} className="cs-empty-cell">Pick a signal above.</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -2327,20 +3456,55 @@ function AcMeasureCells({ sig }) {
     const c3 = corner3dB(sig.f, sig.mag);
     const ug = unityGainFreq(sig.f, sig.mag);
     const pm = phaseMargin(sig.f, sig.mag, sig.phase);
+    const gm = gainMargin(sig.f, sig.mag, sig.phase);
     return (
         <>
             <td className="cs-mono">{Number.isFinite(pg) ? `${pg.toFixed(1)} dB` : '—'}</td>
             <td className="cs-mono">{Number.isFinite(c3) ? formatSIValue(c3, 'Hz') : '—'}</td>
             <td className="cs-mono">{Number.isFinite(ug) ? formatSIValue(ug, 'Hz') : '—'}</td>
             <td className="cs-mono">{Number.isFinite(pm) ? `${pm.toFixed(1)}°` : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(gm) ? `${gm.toFixed(1)} dB` : '—'}</td>
         </>
     );
 }
 
-function formatYAtX(xArr, yArr, x, unit, isAC) {
+function NoiseAcMeasureCells() {
+    const dash = <td className="cs-mono">—</td>;
+    return <>{dash}{dash}{dash}{dash}{dash}</>;
+}
+
+/** Short coach strip when AC analysis is selected — links to the stability demo. */
+function AcAmplifierCoach({ onDismiss, onLoadStabilityDemo }) {
+    return (
+        <div className="cs-ac-amp-coach" role="region" aria-label="Amplifier AC design tips">
+            <div className="cs-ac-amp-coach-text">
+                <strong>Amplifier design</strong>
+                {' — '}
+                Use the Bode plot (magnitude + phase) to judge bandwidth and stability. With <strong>Measure</strong> enabled,
+                Auto-measure lists peak gain, −3 dB corner, unity-gain frequency, <strong>phase margin (PM)</strong>, and{' '}
+                <strong>gain margin (GM)</strong>. For compensation trades, enable <strong>Parametric sweep</strong> on a capacitor
+                (e.g. Cf) and compare overlaid curves after each Run.
+            </div>
+            <div className="cs-ac-amp-coach-actions">
+                <button type="button" className="cs-topbtn cs-topbtn-primary" onClick={onLoadStabilityDemo}>
+                    Load stability demo
+                </button>
+                <button type="button" className="cs-topbtn" onClick={onDismiss}>Dismiss tips</button>
+            </div>
+            <button type="button" className="cs-ac-amp-coach-x" onClick={onDismiss} aria-label="Dismiss">×</button>
+        </div>
+    );
+}
+
+function formatYAtX(xArr, yArr, x, unit, isAC, yMode) {
     if (xArr == null || yArr == null) return '—';
     const y = sampleAt(xArr, yArr, x);
     if (!Number.isFinite(y)) return '—';
+    if (isAC && yMode === 'noiseV2') {
+        const vn = Math.sqrt(Math.max(y, 0));
+        const db = 20 * Math.log10(Math.max(vn, 1e-18));
+        return `${formatSIValue(vn, 'V/√Hz')} (${db.toFixed(1)} dB)`;
+    }
     if (isAC) {
         const db = 20 * Math.log10(Math.max(Math.abs(y), 1e-18));
         return `${db.toFixed(2)} dB`;
@@ -2355,16 +3519,22 @@ function formatDbDelta(yA, yB) {
     return `${(dbB - dbA).toFixed(2)} dB`;
 }
 
-function SignalChips({ result, selected, onToggle }) {
+function SignalChips({ result, selected, onToggle, onSignalProbeHover }) {
     const all = result.signals.map((s) => s.name);
     return (
         <div className="cs-signal-chips">
             {all.map((n, i) => (
                 <button
                     key={n}
+                    type="button"
                     className={`cs-chip${selected.includes(n) ? ' is-on' : ''}`}
                     style={{ '--chip-color': SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}
                     onClick={() => onToggle(n)}
+                    onMouseEnter={() => {
+                        const net = voltageProbeNetFromSignalName(n);
+                        onSignalProbeHover?.(net || null);
+                    }}
+                    onMouseLeave={() => onSignalProbeHover?.(null)}
                 >
                     {n}
                 </button>
@@ -2480,6 +3650,21 @@ function buildStepResult(kind, runs, parsed, stepDir, ctx) {
                         baseBranch: branchName(branchElems[b]),
                     });
                 }
+            }
+            const nse = runs[r].acNoise;
+            if (nse?.noiseV2PerHz?.length === res.freqs.length) {
+                const onBase = nse.outputNode || 'out';
+                const arr = nse.noiseV2PerHz;
+                signals.push({
+                    name: `onoise V(${onBase})${suffix}`,
+                    kind: 'ac',
+                    yMode: 'noiseV2',
+                    f: res.freqs,
+                    mag: Array.from(arr),
+                    phase: res.freqs.map(() => 0),
+                    stepValue: runs[r].stepValue,
+                    baseNode: onBase,
+                });
             }
         }
         return {

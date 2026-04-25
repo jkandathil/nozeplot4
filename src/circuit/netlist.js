@@ -30,13 +30,22 @@
  *   .ac    {DEC|OCT|LIN} <N> <f_start> <f_stop>
  *   .tran  <tstep> <tstop> [tstart] [UIC]
  *   .step  <elementName> <start> <stop> <step>             — parameter sweep for design exploration
+ *   .include "file" / .lib "file" [section]                — merged from caller `includeFiles` map
+ *   .subckt NAME n1 n2 … / .ends  plus  Xref … SUBNAME      — subcircuits flattened to primitives (v1)
  *   .end
  *
  * Comments: lines starting with '*' and anything after ';' on a line.
  *
  * Unit suffixes: T, G, MEG, K, M, U, N, P, F (case-insensitive),
  *                plus 'mil' and 'Hz'/'s' which are stripped.
+ *
+ * Optional second argument to {@link parseNetlist}:
+ *   `{ includeFiles: { 'path.lib': text, ... } }` — resolves `.include`
+ *   before parsing. See {@link expandSpiceForParse} in spiceExpand.js.
  */
+
+import { preprocess, tokenize } from './spiceLineUtils.js';
+import { expandSpiceForParse } from './spiceExpand.js';
 
 const UNIT_MULT = {
     t: 1e12, g: 1e9, meg: 1e6, k: 1e3,
@@ -64,56 +73,6 @@ export function parseSpiceValue(tok) {
     if (mult != null) return num * mult;
     // Unknown trailing unit (e.g. "V", "Hz") → ignore the suffix.
     return num;
-}
-
-/** Strip comments and blank lines, and fold '+'-continuation lines into the previous entry. */
-function preprocess(text) {
-    const raw = String(text || '').replace(/\r\n?/g, '\n').split('\n');
-    const out = [];
-    for (let line of raw) {
-        // Semicolon / '//' comment tail
-        const semi = line.indexOf(';');
-        if (semi >= 0) line = line.slice(0, semi);
-        const slash = line.indexOf('//');
-        if (slash >= 0) line = line.slice(0, slash);
-        line = line.trimEnd();
-        if (line.length === 0) { out.push(''); continue; }
-        const first = line.trimStart()[0];
-        if (first === '*') { out.push(''); continue; }     // full-line comment
-        if (first === '+' && out.length > 0) {
-            // Continuation — glue onto previous.
-            out[out.length - 1] = out[out.length - 1] + ' ' + line.trimStart().slice(1);
-        } else {
-            out.push(line);
-        }
-    }
-    return out;
-}
-
-/**
- * Split a line into tokens, preserving parenthesised groups like
- * SIN(0 1 1k) as a single token so the parameterised source parser
- * can handle them downstream.
- */
-function tokenize(line) {
-    const out = [];
-    let i = 0;
-    const n = line.length;
-    while (i < n) {
-        while (i < n && /\s/.test(line[i])) i++;
-        if (i >= n) break;
-        let start = i;
-        let depth = 0;
-        while (i < n) {
-            const ch = line[i];
-            if (ch === '(') depth++;
-            else if (ch === ')') depth--;
-            else if (depth === 0 && /\s/.test(ch)) break;
-            i++;
-        }
-        out.push(line.slice(start, i));
-    }
-    return out;
 }
 
 /**
@@ -228,9 +187,21 @@ function parseSourceSpec(tokens, startIdx) {
 /**
  * Parse a netlist into {elements, directives, models, nodes}.
  * `nodes` maps node names to integer ids (0 = ground: matches "0", "GND", "gnd").
+ *
+ * @param {string} text
+ * @param {{ includeFiles?: Record<string, string> }} [options]
  */
-export function parseNetlist(text) {
-    const lines = preprocess(text);
+export function parseNetlist(text, options = {}) {
+    const preWarnings = [];
+    const preErrors = [];
+    let source = String(text || '');
+    if (options.includeFiles && typeof options.includeFiles === 'object') {
+        const exp = expandSpiceForParse(source, options.includeFiles);
+        source = exp.text;
+        preWarnings.push(...exp.warnings);
+        preErrors.push(...exp.errors);
+    }
+    const lines = preprocess(source);
     const elements = [];
     const directives = [];
     const models = {};
@@ -250,8 +221,8 @@ export function parseNetlist(text) {
         return nodeMap.get(key);
     };
 
-    const errors = [];
-    const warnings = [];
+    const errors = [...preErrors];
+    const warnings = [...preWarnings];
 
     /* We intentionally do NOT auto-skip the first line as a SPICE title —
        users of Circuit Studio start from blank canvases as often as from

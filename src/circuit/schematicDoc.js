@@ -43,8 +43,24 @@
  * node is *always* id 0, no matter what else shares that coordinate.
  */
 
-import { SYMBOLS, rotateXY } from './symbols.js';
-import { getPart } from './library.js';
+import { SYMBOLS, rotateXY, symbolForSchematic } from './symbols.js';
+import { getPart, getContributedUserModelForName } from './library.js';
+
+/**
+ * Merge a parsed `.model` into `doc.userModels` if that name is not already present.
+ * @param {object} doc
+ * @param {{ name: string, type: string, params?: Record<string, number> }} rec
+ */
+export function ensureUserModel(doc, rec) {
+    if (!doc || !rec?.name) return;
+    const key = String(rec.name).toLowerCase();
+    if (doc.userModels.some((u) => String(u.name).toLowerCase() === key)) return;
+    doc.userModels.push({
+        name: rec.name,
+        type: String(rec.type || 'D').toUpperCase(),
+        params: { ...(rec.params || {}) },
+    });
+}
 
 export const GRID = 20;
 
@@ -71,12 +87,15 @@ export function emptyDoc() {
         // users can place labels in the canvas for hierarchical /
         // bus-style designs (future work).
         labels: [],       // [{ id, x, y, name, visible }]
-        wires: [],
         directives: [],   // [{ id, kind, text, parsed }]
         userModels: [],   // [{ name, type, params }] — extra .model defs imported from user netlists
         meta: {
             nextUid: 1,
             refCounts: {},
+            // When true, resolveNets() uses label-authoritative mode (imported
+            // netlists: connectivity from pin-stamped labels; wires visual-only).
+            // Hand-built circuits keep this false so Manhattan wires define nets.
+            labelNetAuthority: false,
         },
     };
 }
@@ -126,8 +145,81 @@ export function addComponent(doc, partId, px, py, rotation = 0) {
         modelRef: part.modelRef || null,
         autoGround: !!part.autoGround,
     };
+    if (part.elementType === 'SCOPE') {
+        comp.scopeChannelMode = part.scopeChannelMode === 'single' ? 'single' : 'dual';
+    }
+    if (part.contributesUserModel) {
+        ensureUserModel(doc, part.contributesUserModel);
+    }
     doc.components.push(comp);
     return comp;
+}
+
+/** Serializable slice of a component for copy/paste (no `id` / `ref`). */
+export function componentToPastePayload(comp) {
+    return {
+        partId: comp.partId,
+        pos: { x: comp.pos.x, y: comp.pos.y },
+        rot: comp.rot ?? 0,
+        value: comp.value,
+        valueUnit: comp.valueUnit,
+        sourceSpec: comp.sourceSpec ? JSON.parse(JSON.stringify(comp.sourceSpec)) : null,
+        modelRef: comp.modelRef ?? null,
+        autoGround: !!comp.autoGround,
+        scopeChannelMode: comp.scopeChannelMode,
+    };
+}
+
+/**
+ * Insert clones from {@link componentToPastePayload} at `anchorWorldX/Y`
+ * (snapped): the payload bbox min corner is aligned to that point.
+ * @returns {Array<object>} the new component records pushed onto `doc`
+ */
+export function pasteComponentPayloads(doc, payloads, anchorWorldX, anchorWorldY) {
+    if (!payloads?.length) return [];
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const p of payloads) {
+        minX = Math.min(minX, p.pos.x);
+        minY = Math.min(minY, p.pos.y);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return [];
+    const tx = snap(anchorWorldX);
+    const ty = snap(anchorWorldY);
+    const dx = tx - minX;
+    const dy = ty - minY;
+    const out = [];
+    for (const s of payloads) {
+        const part = getPart(s.partId);
+        if (!part) continue;
+        const comp = {
+            id: nextUid(doc),
+            partId: s.partId,
+            elementType: part.elementType,
+            symbolKey: part.symbolKey,
+            pos: { x: snap(s.pos.x + dx), y: snap(s.pos.y + dy) },
+            rot: (((s.rot ?? 0) % 360) + 360) % 360,
+            ref: part.refPrefix === '0' ? '0' : nextRef(doc, part.refPrefix),
+            value: s.value != null ? s.value : part.defaultValue,
+            valueUnit: s.valueUnit != null ? s.valueUnit : part.valueUnit,
+            sourceSpec: s.sourceSpec != null
+                ? JSON.parse(JSON.stringify(s.sourceSpec))
+                : (part.sourceSpec ? JSON.parse(JSON.stringify(part.sourceSpec)) : null),
+            modelRef: s.modelRef != null ? s.modelRef : (part.modelRef || null),
+            autoGround: s.autoGround != null ? !!s.autoGround : !!part.autoGround,
+        };
+        if (part.elementType === 'SCOPE') {
+            comp.scopeChannelMode = (s.scopeChannelMode === 'single' || part.scopeChannelMode === 'single')
+                ? 'single'
+                : 'dual';
+        }
+        if (part.contributesUserModel) {
+            ensureUserModel(doc, part.contributesUserModel);
+        }
+        doc.components.push(comp);
+        out.push(comp);
+    }
+    return out;
 }
 
 export function removeComponent(doc, compId) {
@@ -202,6 +294,10 @@ export function updateComponent(doc, compId, patch) {
     const c = doc.components.find((c) => c.id === compId);
     if (!c) return false;
     Object.assign(c, patch);
+    if (patch.modelRef != null && ['D', 'Q', 'M'].includes(c.elementType)) {
+        const rec = getContributedUserModelForName(c.modelRef);
+        if (rec) ensureUserModel(doc, rec);
+    }
     return true;
 }
 
@@ -248,6 +344,81 @@ export function removeWire(doc, wireId) {
     if (idx < 0) return false;
     doc.wires.splice(idx, 1);
     return true;
+}
+
+export function removeLabel(doc, labelId) {
+    const idx = doc.labels.findIndex((l) => l.id === labelId);
+    if (idx < 0) return false;
+    doc.labels.splice(idx, 1);
+    return true;
+}
+
+/**
+ * Drop consecutive duplicate vertices, remove collinear Manhattan
+ * middles (straightens A–B–C on one axis), then delete wires with
+ * fewer than two points. Clears many spurious “junction dots” caused
+ * by stacked vertices on the same grid point.
+ */
+export function cleanupWireGeometry(doc) {
+    if (!doc?.wires?.length) return { removedWires: 0, simplifiedWires: 0 };
+
+    const dedupeConsecutive = (pts) => {
+        const out = [];
+        for (const p of pts) {
+            const x = p[0];
+            const y = p[1];
+            if (!out.length || out[out.length - 1][0] !== x || out[out.length - 1][1] !== y) {
+                out.push([x, y]);
+            }
+        }
+        return out;
+    };
+
+    const removeCollinearOnce = (pts) => {
+        if (pts.length < 3) return { pts, changed: false };
+        const out = [pts[0]];
+        let changed = false;
+        for (let i = 1; i < pts.length - 1; i++) {
+            const prev = out[out.length - 1];
+            const cur = pts[i];
+            const next = pts[i + 1];
+            const allXSame = prev[0] === cur[0] && cur[0] === next[0];
+            const allYSame = prev[1] === cur[1] && cur[1] === next[1];
+            if (allXSame || allYSame) {
+                changed = true;
+                continue;
+            }
+            out.push(cur);
+        }
+        out.push(pts[pts.length - 1]);
+        return { pts: out, changed };
+    };
+
+    const straighten = (pts) => {
+        let p = dedupeConsecutive(pts);
+        for (let g = 0; g < 32; g++) {
+            const { pts: np, changed } = removeCollinearOnce(p);
+            p = np;
+            if (!changed) break;
+        }
+        return p;
+    };
+
+    let removedWires = 0;
+    let simplifiedWires = 0;
+    const next = [];
+    for (const w of doc.wires) {
+        const before = (w.points || []).length;
+        const pts = straighten((w.points || []).map((p) => [p[0], p[1]]));
+        if (pts.length < 2) {
+            removedWires++;
+            continue;
+        }
+        if (pts.length !== before) simplifiedWires++;
+        next.push({ ...w, points: pts });
+    }
+    doc.wires = next;
+    return { removedWires, simplifiedWires };
 }
 
 /**
@@ -693,7 +864,7 @@ export function componentPins(comp) {
     if (comp.elementType === 'GND') {
         return [{ id: 'gnd', x: comp.pos.x, y: comp.pos.y, side: 'T' }];
     }
-    const sym = SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
+    const sym = symbolForSchematic(comp) || SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
     if (!sym) return [];
     const out = [];
     for (const p of sym.pins) {
@@ -749,11 +920,14 @@ export function resolveNets(doc) {
     //       as a T-junction. Straightforward SPICE-style wire
     //       connectivity.
     //
-    // Most interesting docs live in mode (a): imports carry labels,
-    // and when the user drops a new component the canvas stamps a
-    // fresh label wherever the new pin ties into an existing net.
-    const hasLabels = Array.isArray(doc.labels) && doc.labels.length > 0;
-    return hasLabels ? resolveNetsLabelMode(doc) : resolveNetsGeometricMode(doc);
+    // Interactive edits add many `doc.labels` (wire tool stamps names at
+    // endpoints) — those must NOT flip the whole doc into label-only mode
+    // or wires stop conducting and parts look "floating" after small moves.
+    // Only netlist imports set meta.labelNetAuthority = true.
+    if (doc.meta?.labelNetAuthority === true) {
+        return resolveNetsLabelMode(doc);
+    }
+    return resolveNetsGeometricMode(doc);
 }
 
 /* ------------------------- label-authoritative ------------------- */

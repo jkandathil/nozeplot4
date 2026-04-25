@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
   LayoutDashboard,
@@ -36,6 +36,7 @@ import HelpPage from './components/HelpPage';
 import HomePage from './components/HomePage';
 import FlowLabPage from './components/FlowLabPage';
 import CircuitStudioPage from './components/CircuitStudioPage';
+import PcbStudioPage from './components/PcbStudioPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
@@ -296,6 +297,15 @@ function App() {
       return next;
     });
   }, [activePage]);
+
+  /** Include `activePage` so the shell exists on the same render as navigation (Send to PCB, deep links, etc.). */
+  const persistentPageIds = useMemo(() => {
+    const s = new Set(everOpenedPages);
+    if (activePage) s.add(activePage);
+    return [...s].filter(
+      (pageId) => pageId !== 'aromaUnitCapture' && pageId !== 'folderCompareAroma'
+    );
+  }, [everOpenedPages, activePage]);
 
   // Common handler for adding files to processing queue
   const addFiles = useCallback(async (newFiles, targetFolderId = null) => {
@@ -1722,9 +1732,7 @@ function App() {
               Set rather than a single ref — order stays stable across
               renders.
             */}
-            {[...everOpenedPages]
-              .filter((pageId) => pageId !== 'aromaUnitCapture' && pageId !== 'folderCompareAroma')
-              .map((pageId) => {
+            {persistentPageIds.map((pageId) => {
                 const isActive = activePage === pageId;
                 const shellStyle = {
                   display: isActive ? 'block' : 'none',
@@ -1842,7 +1850,14 @@ function App() {
                     );
                     break;
                   case 'circuitStudio':
-                    content = <CircuitStudioPage />;
+                    content = (
+                      <CircuitStudioPage onOpenPcbLayout={() => setActivePage('pcbStudio')} />
+                    );
+                    break;
+                  case 'pcbStudio':
+                    content = (
+                      <PcbStudioPage onBackToSchematic={() => setActivePage('circuitStudio')} />
+                    );
                     break;
                   case 'spreadsheet':
                     content = (

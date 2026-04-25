@@ -190,6 +190,15 @@ export function emitNetlist(doc, opts = {}) {
                 lines.push(`${spiceName} ${nodes[0]} ${nodes[1]} DC 0`);
                 break;
             }
+            case 'REG': {
+                // Ideal linear regulator: V(OUT)−V(GND)=Vnom. IN pin is
+                // schematic-only (not emitted — no dropout / input current).
+                const vnom = Number(comp.value);
+                const vdc = Number.isFinite(vnom) ? vnom : 0;
+                const spiceName = spiceRegulatorVoltageName(ref);
+                lines.push(`${spiceName} ${nodes[2]} ${nodes[1]} DC ${formatValue(vdc)}`);
+                break;
+            }
             default:
                 warnings.push(`${ref}: unknown element type ${comp.elementType}`);
         }
@@ -233,6 +242,12 @@ export function emitNetlist(doc, opts = {}) {
     };
 }
 
+/** SPICE name for emitted V source (must start with `V` for netlist.js). */
+function spiceRegulatorVoltageName(ref) {
+    const s = String(ref || 'U').replace(/[^A-Za-z0-9_]/g, '') || 'U';
+    return `VREG_${s}`;
+}
+
 function serialiseModel(m) {
     const params = Object.entries(m.params || {})
         .map(([k, v]) => `${k}=${formatValue(v)}`)
@@ -242,7 +257,8 @@ function serialiseModel(m) {
 
 /**
  * Return the SYMBOL pin ordering the solver expects for each element
- * type. Pin ids come from src/circuit/symbols.js.
+ * type. Pin ids come from src/circuit/symbols.js — polarity glyphs and
+ * labels on those symbols follow this same order (e.g. V: n1 = + node).
  */
 function pinOrderFor(elementType) {
     switch (elementType) {
@@ -253,8 +269,9 @@ function pinOrderFor(elementType) {
         case 'O': return ['inp', 'inn', 'out'];
         case 'E': case 'G': return ['n1', 'n2', 'nc1', 'nc2'];
         case 'IP': return ['n1', 'n2'];
+        case 'REG': return ['n_in', 'n_gnd', 'n_out'];
         case 'VP': return ['tip'];
-        case 'SCOPE': return ['tip'];
+        case 'SCOPE': return ['tip', 'tip2'];
         default: return [];
     }
 }

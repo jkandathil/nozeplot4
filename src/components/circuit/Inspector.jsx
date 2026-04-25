@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { RotateCw, Trash2 } from 'lucide-react';
 import { SYMBOLS } from '../../circuit/symbols.js';
 import { SymbolGlyph } from './SymbolGlyph.jsx';
-import { BUILTIN_MODELS, getPart } from '../../circuit/library.js';
+import { getPart, modelChoicesForElement } from '../../circuit/library.js';
 
 /**
  * Right-side property editor.
@@ -12,7 +12,7 @@ import { BUILTIN_MODELS, getPart } from '../../circuit/library.js';
  *   • Scalar value (with SI-prefix picker) for passives and
  *     dependent sources.
  *   • Source waveform editor (DC / AC / SIN / PULSE / PWL) for V/I.
- *   • Model picker (from BUILTIN_MODELS) for diodes, BJTs, MOSFETs.
+ *   • Model picker (built-ins + doc userModels) for diodes, BJTs, MOSFETs.
  *   • Delete / Rotate buttons.
  *
  * When nothing is selected, the panel shows a hint + the list of
@@ -27,6 +27,7 @@ export default function Inspector({
     if (!selectedComp) {
         const nBulk = bulkSelection
             ? (bulkSelection.componentIds?.length || 0) + (bulkSelection.wireIds?.length || 0)
+                + (bulkSelection.labelIds?.length || 0)
             : 0;
         return (
             <div className="cs-inspector">
@@ -35,7 +36,8 @@ export default function Inspector({
                         <h3>Area selection</h3>
                         <p>
                             {bulkSelection.componentIds?.length || 0} part(s),{' '}
-                            {bulkSelection.wireIds?.length || 0} wire segment(s).
+                            {bulkSelection.wireIds?.length || 0} wire segment(s),{' '}
+                            {bulkSelection.labelIds?.length || 0} net label(s).
                         </p>
                         <button
                             type="button"
@@ -45,7 +47,7 @@ export default function Inspector({
                             <Trash2 size={14} /> Delete selected
                         </button>
                         <p className="cs-inspector-hint">
-                            Right-drag on the canvas (select tool) to draw a selection rectangle. Del removes everything inside.
+                            With the select tool, <b>right-drag</b> or <b>Shift+left-drag</b> on the canvas to box-select wires, net labels, and parts. Press <b>Del</b> or use Delete selected here.
                         </p>
                     </div>
                 ) : (
@@ -71,11 +73,19 @@ export default function Inspector({
 
     const sym = SYMBOLS[selectedComp.symbolKey] || SYMBOLS[selectedComp.elementType];
     const part = getPart(selectedComp.partId);
+    const modelSelectOptions = useMemo(() => {
+        const base = modelChoicesForElement(selectedComp.elementType, userModels);
+        const cur = selectedComp.modelRef;
+        if (cur && !base.some((x) => String(x).toLowerCase() === String(cur).toLowerCase())) {
+            return [...base, cur];
+        }
+        return base;
+    }, [selectedComp.elementType, selectedComp.modelRef, userModels]);
 
     return (
         <div className="cs-inspector">
             <div className="cs-inspector-header">
-                <div className="cs-inspector-preview">
+                <div className={`cs-inspector-preview cs-comp-${selectedComp.elementType}`}>
                     <SymbolGlyph symbol={sym} partType={selectedComp.elementType} partId={selectedComp.symbolKey} size={72} />
                 </div>
                 <div className="cs-inspector-heading">
@@ -97,12 +107,28 @@ export default function Inspector({
                 <input
                     type="text"
                     value={selectedComp.ref}
+                    readOnly={selectedComp.elementType === 'GND'}
+                    title={selectedComp.elementType === 'GND' ? 'Ground is always node 0 in SPICE' : undefined}
                     onChange={(e) => onUpdate({ ref: e.target.value })}
                 />
             </Field>
 
+            {selectedComp.elementType === 'SCOPE' && (
+                <Field label="Channels">
+                    <select
+                        value={selectedComp.scopeChannelMode === 'single' ? 'single' : 'dual'}
+                        onChange={(e) => onUpdate({ scopeChannelMode: e.target.value })}
+                    >
+                        <option value="dual">Dual — two tips (CH1 + CH2)</option>
+                        <option value="single">Single — one tip (CH1)</option>
+                    </select>
+                </Field>
+            )}
+
+            <PartNotes comp={selectedComp} />
+
             {/* Scalar-value editor for passives and dependent sources */}
-            {['R', 'C', 'L', 'E', 'G'].includes(selectedComp.elementType) && (
+            {['R', 'C', 'L', 'E', 'G', 'REG'].includes(selectedComp.elementType) && (
                 <ValueEditor
                     value={selectedComp.value}
                     unit={selectedComp.valueUnit || inferUnit(selectedComp.elementType)}
@@ -126,7 +152,7 @@ export default function Inspector({
                         value={selectedComp.modelRef || ''}
                         onChange={(e) => onUpdate({ modelRef: e.target.value })}
                     >
-                        {modelChoicesFor(selectedComp.elementType).map((m) => (
+                        {modelSelectOptions.map((m) => (
                             <option key={m} value={m}>{m}</option>
                         ))}
                     </select>
@@ -147,6 +173,33 @@ function Field({ label, children }) {
             <span>{label}</span>
             {children}
         </label>
+    );
+}
+
+/** Short context for parts with no extra scalar row (op-amp, probes, ground). */
+function PartNotes({ comp }) {
+    const t = comp.elementType;
+    let text = '';
+    if (t === 'O') {
+        text = 'Ideal op-amp: enforces V(+) = V(−); output is a stiff voltage source. No gain, offset, or bandwidth parameters — use a VCVS (E) or the netlist drawer for a macromodel.';
+    } else if (t === 'GND') {
+        text = 'Ties the attached net to the simulator reference (node 0). Not emitted as a separate SPICE line.';
+    } else if (t === 'VP') {
+        text = 'Voltage probe — not in the netlist. After Run, its node is auto-selected for plotting.';
+    } else if (t === 'SCOPE') {
+        text = comp.scopeChannelMode === 'single'
+            ? 'Single-channel mode: one probe terminal; CRT and Scope tab show CH1 only. Double-click to open properties and switch to dual for two tips.'
+            : 'Dual-channel mode: two probe terminals (CH1 and CH2). Double-click for properties to switch to single. Not in the netlist.';
+    } else if (t === 'IP') {
+        text = 'Current probe — emitted as a 0 V source so branch current is solved. Plot I(<your reference>) after Run.';
+    } else if (t === 'REG') {
+        text = 'Ideal linear regulator: the netlist is a DC voltage source V(OUT)−V(GND) equal to the nominal output below. The IN pin is not in SPICE (no dropout, no input current) — use it on the schematic for wiring clarity only.';
+    }
+    if (!text) return null;
+    return (
+        <div className="cs-inspector-part-note">
+            <p className="cs-inspector-hint">{text}</p>
+        </div>
     );
 }
 
@@ -208,7 +261,7 @@ function ValueEditor({ value, unit, onChange }) {
 }
 
 function inferUnit(type) {
-    return { R: 'Ω', C: 'F', L: 'H', E: 'V/V', G: 'A/V' }[type] || '';
+    return { R: 'Ω', C: 'F', L: 'H', E: 'V/V', G: 'A/V', REG: 'V' }[type] || '';
 }
 
 /* ---------------- source-spec editor ---------------- */
@@ -348,14 +401,3 @@ function parsePwl(txt) {
     return pts;
 }
 
-/* ---------------- model choices ---------------- */
-
-function modelChoicesFor(elementType) {
-    const all = Object.keys(BUILTIN_MODELS);
-    switch (elementType) {
-        case 'D': return all.filter((k) => /^D/i.test(k) && !/^Q/.test(k));
-        case 'Q': return all.filter((k) => /^Q/i.test(k));
-        case 'M': return all.filter((k) => /^M/i.test(k));
-        default:  return all;
-    }
-}

@@ -2,83 +2,174 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Activity, Maximize2, Minimize2 } from 'lucide-react';
 
+const CH_COLORS = ['#34d399', '#fbbf24'];
+
 /**
- * Oscilloscope modal — double-clicking a SCOPE component on the canvas
- * opens this overlay, which shows the waveform at the scope's attached
- * node. When the simulation is running live, it ticks in real time.
+ * Oscilloscope modal — double-clicking a SCOPE component opens this
+ * overlay. Dual-channel: each entry in `channels` is one trace (CH1 /
+ * CH2 tips). Transient, AC, and DC results are supported; live replay
+ * streams the same `yBySignal` shape the parent builds from
+ * `liveStream.ySignals`.
  *
- * Inputs:
- *   comp          — the SCOPE component (so we can read its ref)
- *   signalName    — 'V(<node>)' that the scope is probing
- *   result        — the current run result (transient/ac/dc); we grab
- *                   the named series out of `result.signals`
- *   livePartial   — optional { t: [], v: [] } preview while a live run
- *                   is still producing samples (see handleRunLive)
- *   onClose       — dismiss the modal
- *
- * Rendering is a plain <canvas>; no external deps. For a real-ish CRT
- * feel we draw on a dark grid with a bright trace.
+ * When `embedded` is true, renders inline (no portal/backdrop) for the
+ * bottom drawer "Scope" tab; Escape does not close the parent page.
  */
-export default function ScopeModal({ comp, signalName, nodeLabel, result, livePartial, onClose }) {
+export default function ScopeModal({
+    comp, channels = [], result, livePartial, onClose,
+    embedded = false,
+}) {
     const [fullscreen, setFullscreen] = useState(false);
     const canvasRef = useRef(null);
+    const embedWrapRef = useRef(null);
 
-    // ESC closes; F toggles fullscreen.
     useEffect(() => {
         const onKey = (ev) => {
-            if (ev.key === 'Escape') onClose?.();
-            if (ev.key === 'f' || ev.key === 'F') setFullscreen((v) => !v);
+            if (!embedded && ev.key === 'Escape') onClose?.();
+            if (!embedded && (ev.key === 'f' || ev.key === 'F')) setFullscreen((v) => !v);
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [onClose]);
+    }, [onClose, embedded]);
 
-    // Pick the series out of the result. For transient runs, the x
-    // axis is time; for AC, frequency; for DC sweeps, the swept
-    // source. We render whatever we're given.
-    const series = useMemo(() => {
-        if (livePartial && livePartial.t?.length) {
+    useEffect(() => {
+        if (!embedded || typeof ResizeObserver === 'undefined') return undefined;
+        const el = embedWrapRef.current;
+        if (!el) return undefined;
+        const ro = new ResizeObserver(() => {
+            canvasRef.current?.dispatchEvent(new Event('resize'));
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [embedded]);
+
+    const plotModel = useMemo(() => {
+        const chList = channels;
+        const findSig = (name) => {
+            if (!name || !result?.signals) return null;
+            return result.signals.find((s) => s.name === name
+                || s.name?.startsWith(`${name} @`)) || null;
+        };
+
+        if (livePartial?.t?.length && livePartial.yBySignal && chList.length) {
+            const traces = [];
+            for (let i = 0; i < chList.length; i++) {
+                const ch = chList[i];
+                if (!ch.signalName) continue;
+                const ys = livePartial.yBySignal[ch.signalName];
+                if (!ys?.length) continue;
+                traces.push({
+                    xs: livePartial.t,
+                    ys,
+                    color: CH_COLORS[i % CH_COLORS.length],
+                    legend: `${ch.label}: ${ch.signalName}`,
+                    yLabel: ch.signalName,
+                });
+            }
+            if (traces.length === 0) return null;
             return {
-                xs: livePartial.t,
-                ys: livePartial.y,
-                xUnit: 's', yUnit: 'V',
-                kind: 'tran', live: true,
-                xLabel: 'Time', yLabel: signalName || 'Signal',
+                kind: 'tran',
+                xUnit: 's',
+                yUnit: 'V',
+                xLabel: 'Time',
+                traces,
+                live: true,
+                logX: false,
             };
         }
-        if (!result || !signalName) return null;
-        const sig = (result.signals || []).find((s) => s.name === signalName
-            || s.name?.startsWith(`${signalName} @`));
-        if (!sig) return null;
+
+        if (!result || !chList.length) return null;
+
+        const traces = [];
+        for (let i = 0; i < chList.length; i++) {
+            const ch = chList[i];
+            if (!ch.signalName) continue;
+            const sig = findSig(ch.signalName);
+            if (!sig) continue;
+            const color = CH_COLORS[i % CH_COLORS.length];
+            if (result.kind === 'tran') {
+                traces.push({
+                    xs: sig.t || result.t,
+                    ys: sig.y,
+                    color,
+                    legend: `${ch.label}: ${ch.signalName}`,
+                    yLabel: ch.signalName,
+                });
+            } else if (result.kind === 'ac') {
+                traces.push({
+                    xs: sig.f || result.f,
+                    ys: sig.mag,
+                    color,
+                    legend: `${ch.label}: |${ch.signalName}|`,
+                    yLabel: `|${ch.signalName}|`,
+                    logX: true,
+                });
+            } else if (result.kind === 'dc') {
+                traces.push({
+                    xs: sig.x || result.x,
+                    ys: sig.y,
+                    color,
+                    legend: `${ch.label}: ${ch.signalName}`,
+                    yLabel: ch.signalName,
+                });
+            }
+        }
+        if (traces.length === 0) return null;
+
         if (result.kind === 'tran') {
             return {
-                xs: sig.t || result.t, ys: sig.y,
-                xUnit: 's', yUnit: 'V',
-                kind: 'tran', live: false,
-                xLabel: 'Time', yLabel: signalName,
+                kind: 'tran',
+                xUnit: 's',
+                yUnit: 'V',
+                xLabel: 'Time',
+                traces,
+                live: false,
+                logX: false,
             };
         }
         if (result.kind === 'ac') {
             return {
-                xs: sig.f || result.f, ys: sig.mag,
-                xUnit: 'Hz', yUnit: '',
-                kind: 'ac', live: false, logX: true,
-                xLabel: 'Frequency', yLabel: `|${signalName}|`,
+                kind: 'ac',
+                xUnit: 'Hz',
+                yUnit: '',
+                xLabel: 'Frequency',
+                traces,
+                live: false,
+                logX: true,
             };
         }
         if (result.kind === 'dc') {
             return {
-                xs: sig.x || result.x, ys: sig.y,
-                xUnit: '', yUnit: 'V',
-                kind: 'dc', live: false,
-                xLabel: result.xSource ? `Sweep ${result.xSource}` : 'Sweep', yLabel: signalName,
+                kind: 'dc',
+                xUnit: '',
+                yUnit: 'V',
+                xLabel: result.xSource ? `Sweep ${result.xSource}` : 'Sweep',
+                traces,
+                live: false,
+                logX: false,
             };
         }
         return null;
-    }, [result, signalName, livePartial]);
+    }, [result, channels, livePartial]);
 
-    // Draw on the canvas. Imperative because re-computing thousands of
-    // SVG path ops for 10k-sample traces at 60 fps is a non-starter.
+    const subtitle = useMemo(() => {
+        if (!channels.length) return 'no probes';
+        return channels
+            .map((c) => (c.nodeLabel ? `${c.label} ${c.nodeLabel}` : `${c.label} —`))
+            .join(' · ');
+    }, [channels]);
+
+    const anySignalName = channels.some((c) => c.signalName);
+    const firstMissing = useMemo(() => {
+        if (!result?.signals || !channels.length) return null;
+        for (const ch of channels) {
+            if (!ch.signalName) continue;
+            const hit = (result.signals || []).some((s) => s.name === ch.signalName
+                || s.name?.startsWith(`${ch.signalName} @`));
+            if (!hit) return ch.signalName;
+        }
+        return null;
+    }, [result, channels]);
+
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -91,7 +182,6 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
 
         const W = rect.width, H = rect.height;
         ctx.clearRect(0, 0, W, H);
-        // CRT backdrop
         const bg = ctx.createLinearGradient(0, 0, 0, H);
         bg.addColorStop(0, '#061018');
         bg.addColorStop(1, '#0b1a24');
@@ -102,7 +192,6 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         const plotW = Math.max(10, W - pad.l - pad.r);
         const plotH = Math.max(10, H - pad.t - pad.b);
 
-        // Grid
         ctx.strokeStyle = 'rgba(34, 211, 238, 0.18)';
         ctx.lineWidth = 1;
         const divX = 10, divY = 8;
@@ -119,54 +208,54 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         }
         ctx.stroke();
 
-        // Border
         ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
         ctx.lineWidth = 1;
         ctx.strokeRect(pad.l, pad.t, plotW, plotH);
 
-        if (!series || !series.xs || series.xs.length === 0) {
+        if (!plotModel || !plotModel.traces?.length) {
             ctx.fillStyle = '#94a3b8';
             ctx.font = '13px ui-monospace, Menlo, monospace';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             const cx = pad.l + plotW / 2;
             const cy = pad.t + plotH / 2;
-            if (!signalName) {
+            if (!anySignalName) {
                 ctx.fillStyle = '#fbbf24';
-                ctx.fillText('Scope tip is not on a node.', cx, cy - 10);
+                ctx.fillText('Clip CH1 (left tip) and/or CH2 (right tip) onto a net.', cx, cy - 14);
                 ctx.fillStyle = '#94a3b8';
                 ctx.font = '11px ui-monospace, Menlo, monospace';
-                ctx.fillText('Drag the scope so its tip lands on a wire or pin.', cx, cy + 10);
+                ctx.fillText('Ground or floating tips are ignored. Then hit Run.', cx, cy + 10);
             } else if (!result) {
                 ctx.fillText('No waveform yet — hit Run.', cx, cy - 8);
                 ctx.font = '11px ui-monospace, Menlo, monospace';
                 ctx.fillStyle = '#64748b';
-                ctx.fillText(`Probe: ${signalName}`, cx, cy + 12);
+                ctx.fillText('Dual trace when both tips are on nodes.', cx, cy + 12);
             } else {
                 ctx.fillStyle = '#f87171';
-                ctx.fillText(`Signal "${signalName}" not found in results.`, cx, cy - 8);
+                ctx.fillText(`Signal "${firstMissing || '?'}" not found in results.`, cx, cy - 8);
                 ctx.font = '11px ui-monospace, Menlo, monospace';
                 ctx.fillStyle = '#94a3b8';
-                ctx.fillText('Re-run after connecting the scope to a different node.', cx, cy + 12);
+                ctx.fillText('Re-run after wiring both scope tips.', cx, cy + 12);
             }
             return;
         }
 
-        // Data ranges
-        const xs = series.xs, ys = series.ys;
+        const logX = !!plotModel.logX;
         let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
-        for (let i = 0; i < xs.length; i++) {
-            const x = xs[i]; if (x < xmin) xmin = x; if (x > xmax) xmax = x;
-            const y = ys[i]; if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+        for (const tr of plotModel.traces) {
+            const xs = tr.xs, ys = tr.ys;
+            for (let i = 0; i < xs.length; i++) {
+                const x = xs[i]; if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+                const y = ys[i]; if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+            }
         }
         if (!isFinite(xmin) || xmin === xmax) { xmin = 0; xmax = 1; }
         if (!isFinite(ymin) || ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
-        // Pad y a little so the trace doesn't kiss the box.
         const yPad = (ymax - ymin) * 0.08;
         ymin -= yPad; ymax += yPad;
 
         const xToPx = (x) => {
-            if (series.logX) {
+            if (logX) {
                 const lx = Math.log10(Math.max(x, 1e-30));
                 const lmin = Math.log10(Math.max(xmin, 1e-30));
                 const lmax = Math.log10(Math.max(xmax, 1e-30));
@@ -176,22 +265,23 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         };
         const yToPx = (y) => pad.t + plotH - ((y - ymin) / (ymax - ymin)) * plotH;
 
-        // Trace (bright cyan-green, like a phosphor CRT)
-        ctx.strokeStyle = '#34d399';
-        ctx.lineWidth = 1.6;
-        ctx.shadowColor = 'rgba(52, 211, 153, 0.55)';
-        ctx.shadowBlur = 3;
-        ctx.beginPath();
-        for (let i = 0; i < xs.length; i++) {
-            const px = xToPx(xs[i]);
-            const py = yToPx(ys[i]);
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+        for (const tr of plotModel.traces) {
+            const xs = tr.xs, ys = tr.ys;
+            ctx.strokeStyle = tr.color;
+            ctx.lineWidth = 1.6;
+            ctx.shadowColor = `${tr.color}88`;
+            ctx.shadowBlur = 3;
+            ctx.beginPath();
+            for (let i = 0; i < xs.length; i++) {
+                const px = xToPx(xs[i]);
+                const py = yToPx(ys[i]);
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
         }
-        ctx.stroke();
-        ctx.shadowBlur = 0;
 
-        // Axis labels
         ctx.fillStyle = '#94a3b8';
         ctx.font = '11px ui-monospace, Menlo, monospace';
         ctx.textAlign = 'right';
@@ -199,34 +289,39 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         for (let i = 0; i <= divY; i++) {
             const y = pad.t + (plotH * i) / divY;
             const val = ymax - ((ymax - ymin) * i) / divY;
-            ctx.fillText(fmtEng(val) + series.yUnit, pad.l - 6, y);
+            ctx.fillText(fmtEng(val) + plotModel.yUnit, pad.l - 6, y);
         }
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         for (let i = 0; i <= divX; i++) {
             const x = pad.l + (plotW * i) / divX;
             let v;
-            if (series.logX) {
+            if (logX) {
                 const lmin = Math.log10(Math.max(xmin, 1e-30));
                 const lmax = Math.log10(Math.max(xmax, 1e-30));
                 v = Math.pow(10, lmin + ((lmax - lmin) * i) / divX);
             } else {
                 v = xmin + ((xmax - xmin) * i) / divX;
             }
-            ctx.fillText(fmtEng(v) + series.xUnit, x, pad.t + plotH + 6);
+            ctx.fillText(fmtEng(v) + plotModel.xUnit, x, pad.t + plotH + 6);
         }
 
-        // Axis titles
         ctx.fillStyle = '#cbd5e1';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText(series.yLabel, pad.l + 4, pad.t + 4);
+        ctx.font = '10px ui-monospace, Menlo, monospace';
+        let ly = pad.t + 4;
+        for (const tr of plotModel.traces) {
+            ctx.fillStyle = tr.color;
+            ctx.fillText(tr.legend, pad.l + 4, ly);
+            ly += 12;
+        }
+        ctx.fillStyle = '#94a3b8';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'bottom';
-        ctx.fillText(series.xLabel, pad.l + plotW - 4, pad.t + plotH - 4);
+        ctx.fillText(plotModel.xLabel, pad.l + plotW - 4, pad.t + plotH - 4);
 
-        // LIVE badge
-        if (series.live) {
+        if (plotModel.live) {
             ctx.fillStyle = '#ef4444';
             ctx.beginPath();
             ctx.arc(pad.l + plotW - 10, pad.t + 12, 4, 0, Math.PI * 2);
@@ -237,12 +332,10 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
             ctx.textBaseline = 'middle';
             ctx.fillText('LIVE', pad.l + plotW - 20, pad.t + 12);
         }
-    }, [series, fullscreen, signalName, result]);
+    }, [plotModel, fullscreen, anySignalName, result, firstMissing]);
 
-    // Re-draw on resize
     useEffect(() => {
         const onResize = () => {
-            // Nudge the canvas to re-run the draw effect.
             if (canvasRef.current) {
                 canvasRef.current.dispatchEvent(new Event('resize'));
             }
@@ -251,12 +344,61 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
         return () => window.removeEventListener('resize', onResize);
     }, []);
 
-    // Portal the modal straight into <body> so it escapes the
-    // CircuitStudio's stacking context. `.main-content` uses
-    // `position: relative; z-index: 1`, which creates a new stacking
-    // context — without a portal the modal's z-index:1200 is trapped
-    // inside that context and the app sidebar (z-index:50 in the
-    // parent context) paints on top.
+    const card = (
+        <div className={`cs-scope-card${embedded ? ' is-embedded' : ''}`}>
+            <div className="cs-scope-head">
+                <Activity size={14} />
+                <div className="cs-scope-title">
+                    {comp?.ref || 'Scope'}
+                    <span className="cs-scope-sub">{subtitle}</span>
+                </div>
+                {!embedded && (
+                    <>
+                        <button
+                            type="button"
+                            className="cs-scope-iconbtn"
+                            onClick={() => setFullscreen((v) => !v)}
+                            title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+                        >
+                            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                        </button>
+                        <button
+                            type="button"
+                            className="cs-scope-iconbtn"
+                            onClick={onClose}
+                            title="Close (Esc)"
+                        >
+                            <X size={14} />
+                        </button>
+                    </>
+                )}
+            </div>
+            <div className="cs-scope-body">
+                <canvas ref={canvasRef} className="cs-scope-canvas" />
+            </div>
+            <div className="cs-scope-foot">
+                {plotModel ? (
+                    <>
+                        <span>{plotModel.kind.toUpperCase()}</span>
+                        <span>·</span>
+                        <span>{plotModel.traces[0]?.xs?.length ?? 0} samples</span>
+                        {plotModel.live && <><span>·</span><span className="cs-scope-live">LIVE</span></>}
+                    </>
+                ) : (
+                    <span>Hit <b>Run</b> to capture waveforms, or enable Live to stream.</span>
+                )}
+            </div>
+        </div>
+    );
+
+    if (embedded) {
+        return (
+            <div className="cs-scope-embed-wrap" ref={embedWrapRef}>
+                {card}
+            </div>
+        );
+    }
+
     if (typeof document === 'undefined') return null;
     return createPortal(
         <div className={`cs-scope-modal${fullscreen ? ' is-fullscreen' : ''}`} role="dialog" aria-modal="true">
@@ -265,48 +407,7 @@ export default function ScopeModal({ comp, signalName, nodeLabel, result, livePa
                 onClick={onClose}
                 aria-hidden="true"
             />
-            <div className="cs-scope-card">
-                <div className="cs-scope-head">
-                    <Activity size={14} />
-                    <div className="cs-scope-title">
-                        {comp?.ref || 'Scope'}
-                        <span className="cs-scope-sub">
-                            {nodeLabel ? `probing ${nodeLabel}` : (signalName || 'no connection')}
-                        </span>
-                    </div>
-                    <button
-                        type="button"
-                        className="cs-scope-iconbtn"
-                        onClick={() => setFullscreen((v) => !v)}
-                        title={fullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
-                    >
-                        {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                    </button>
-                    <button
-                        type="button"
-                        className="cs-scope-iconbtn"
-                        onClick={onClose}
-                        title="Close (Esc)"
-                    >
-                        <X size={14} />
-                    </button>
-                </div>
-                <div className="cs-scope-body">
-                    <canvas ref={canvasRef} className="cs-scope-canvas" />
-                </div>
-                <div className="cs-scope-foot">
-                    {series ? (
-                        <>
-                            <span>{series.kind.toUpperCase()}</span>
-                            <span>·</span>
-                            <span>{series.xs?.length ?? 0} samples</span>
-                            {series.live && <><span>·</span><span className="cs-scope-live">LIVE</span></>}
-                        </>
-                    ) : (
-                        <span>Hit <b>Run</b> to capture a waveform, or enable Live to stream.</span>
-                    )}
-                </div>
-            </div>
+            {card}
         </div>,
         document.body,
     );

@@ -17,6 +17,14 @@
  *   • `labelRef` / `labelVal` are default positions (relative to the
  *     symbol centre) for the reference designator and value text.
  *     For vertical orientations the renderer flips/rotates them.
+ *
+ * Polarity vs. netlist (must match emitNetlist.js pinOrderFor + solver):
+ *   • V / I: pin n1 is the left terminal in local space, n2 the right.
+ *     SPICE: V(n1)−V(n2) equals the source value; +/− glyphs sit on n1/n2.
+ *     Current arrow points n1 → n2 for the positive reference current.
+ *   • D: n1 = anode, n2 = cathode (bar end); small A/K labels mark that.
+ *   • O: pin inp = non-inverting (+), inn = inverting (−), out = output.
+ *   • E / G: output n1 (top) = + sense, n2 (bottom) = −; control nc1/nc2 on the left.
  */
 
 export const SYMBOL_STROKE_WIDTH = 1.6;
@@ -94,12 +102,15 @@ const V_SYMBOL = twoTerm({
     body: [
         ...leads(40, 18),
         { kind: 'circle', cx: 0, cy: 0, r: 18, fill: 'var(--sch-body)' },
-        { kind: 'polarity', sign: '+', x:  8, y: -6 },
-        { kind: 'polarity', sign: '−', x: -8, y: -6 },
+        // Pin n1 (left lead) is SPICE node+; n2 (right) is node−. Glyphs must
+        // match emitNetlist / solver order so rotation + wiring match user expectation.
+        { kind: 'polarity', sign: '+', x: -8, y: -6 },
+        { kind: 'polarity', sign: '−', x:  8, y: -6 },
     ],
 });
 
 // ---------- Current source (circle + arrow) ----------------------
+// Arrow points n1 → n2: positive branch current flows from pin n1 to n2.
 
 const I_SYMBOL = twoTerm({
     width: 80,
@@ -122,6 +133,9 @@ const D_SYMBOL = twoTerm({
         { kind: 'path', d: 'M -10 -10 L -10 10 L 10 0 Z', fill: 'var(--sch-stroke)' },
         { kind: 'line', x1: 10, y1: -10, x2: 10, y2: 10, strokeWidth: 2 },
         { kind: 'line', x1: 10, y1: 0,   x2: 30, y2: 0 },
+        // n1 = anode (triangle), n2 = cathode (bar) — matches SPICE D order.
+        { kind: 'text', x: -18, y: -16, text: 'A', fontSize: 8, fontWeight: 700, anchor: 'middle', baseline: 'middle' },
+        { kind: 'text', x:  18, y: -16, text: 'K', fontSize: 8, fontWeight: 700, anchor: 'middle', baseline: 'middle' },
     ],
 });
 
@@ -142,6 +156,7 @@ const O_SYMBOL = {
     ],
     shapes: [
         { kind: 'path', d: 'M -24 -26 L -24 26 L 28 0 Z', fill: 'var(--sch-body)' },
+        // inp = non-inverting (+), inn = inverting (−) — matches solver V(inp)−V(inn)=0.
         { kind: 'text', x: -18, y: -14, text: '+', fontSize: 12, fontWeight: 600, anchor: 'start', baseline: 'middle' },
         { kind: 'text', x: -18, y:  14, text: '−', fontSize: 14, fontWeight: 700, anchor: 'start', baseline: 'middle' },
     ],
@@ -172,6 +187,9 @@ function dependentSource(kindTag) {
             { kind: 'line', x1: -40, y1:  14, x2: -22, y2:  14, strokeDasharray: '4 3' },
             { kind: 'line', x1:  22, y1: -14, x2:  40, y2: -14 },
             { kind: 'line', x1:  22, y1:  14, x2:  40, y2:  14 },
+            // Output pins n1 (top) / n2 (bottom): V(n1)−V(n2) = gain·V(nc1,nc2) for E, etc.
+            { kind: 'polarity', sign: '+', x: 34, y: -20 },
+            { kind: 'polarity', sign: '−', x: 34, y:  20 },
         ],
         labelRef: { x: 0, y: -32, anchor: 'middle', baseline: 'baseline' },
         labelVal: { x: 0, y:  36, anchor: 'middle', baseline: 'hanging'  },
@@ -330,41 +348,111 @@ const IP_SYMBOL = {
     labelVal: { x: 0, y:  24, anchor: 'middle', baseline: 'hanging'  },
 };
 
-// Oscilloscope — an instrument you can clip onto any node. UI-only
-// (skipped by emitNetlist, same as VP). After Run, double-click it to
-// pop the CRT modal and inspect the waveform for its attached node.
-// Visual: a CRT-style rounded rectangle with a little sine-wave
-// "screen" and a probe lead dropping down to the connection pin.
-// Tip pin is placed at the symbol origin (0, 0) so drag-and-drop
-// snaps it directly onto the node you want to probe — the rest of
-// the CRT body floats above. This mirrors how GND anchors at its
-// pin, which is what people intuitively expect when clipping a
-// scope probe to a trace.
+// Oscilloscope — dual-channel: CH1 `tip` at symbol origin (0,0), CH2
+// `tip2` offset to the right so you can clip each probe onto a node.
+// UI-only (skipped by emitNetlist, same as VP). After Run, double-click
+// opens a CRT modal with one or two superimposed traces (shared Y
+// autoscale). CH1 placement matches the old single-tip scope so
+// existing demos still snap the primary probe the same way.
 const SCOPE_SYMBOL = {
-    width: 80, height: 80,
-    pins: [{ id: 'tip', x: 0, y: 0, side: 'B' }],
+    width: 96,
+    height: 80,
+    pins: [
+        { id: 'tip', x: 0, y: 0, side: 'B' },
+        { id: 'tip2', x: 28, y: 0, side: 'B' },
+    ],
     shapes: [
-        // Probe lead: straight down from body to the tip.
-        { kind: 'line', x1: 0, y1: 0, x2: 0, y2: -20 },
-        // CRT body
-        { kind: 'rect', x: -30, y: -62, w: 60, h: 44, rx: 6, ry: 6, fill: 'var(--sch-body)' },
-        // Inner "screen"
-        { kind: 'rect', x: -22, y: -56, w: 44, h: 24, rx: 2, ry: 2, fill: 'none' },
-        // Sine-wave squiggle inside the screen
+        { kind: 'line', x1: 0, y1: 0, x2: 0, y2: -22 },
+        { kind: 'line', x1: 28, y1: 0, x2: 28, y2: -22 },
+        { kind: 'rect', x: -34, y: -62, w: 68, h: 44, rx: 6, ry: 6, fill: 'var(--sch-body)' },
+        { kind: 'rect', x: -26, y: -56, w: 52, h: 24, rx: 2, ry: 2, fill: 'none' },
+        // Two trace hints (CH1 green-ish, CH2 amber) — colours match modal.
         {
             kind: 'path',
-            d: 'M-18,-44 Q-12,-54 -6,-44 T 6,-44 T 18,-44',
+            d: 'M-22,-50 Q-14,-54 -6,-48',
             fill: 'none',
+            stroke: 'rgba(52, 211, 153, 0.85)',
+            strokeWidth: 1.4,
         },
-        // Axis cross inside screen (dim)
-        { kind: 'line', x1: 0,   y1: -56, x2: 0,   y2: -32, opacity: 0.5 },
-        { kind: 'line', x1: -22, y1: -44, x2: 22,  y2: -44, opacity: 0.5 },
-        // "SCOPE" tag between body and tip
+        {
+            kind: 'path',
+            d: 'M-4,-42 Q6,-48 16,-44',
+            fill: 'none',
+            stroke: 'rgba(251, 191, 36, 0.9)',
+            strokeWidth: 1.4,
+        },
+        { kind: 'line', x1: 0, y1: -56, x2: 0, y2: -32, opacity: 0.45 },
+        { kind: 'line', x1: -22, y1: -44, x2: 22, y2: -44, opacity: 0.45 },
         { kind: 'text', x: 0, y: -22, text: 'SCOPE', fontSize: 7, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+        { kind: 'text', x: 0, y: 10, text: '1', fontSize: 6, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+        { kind: 'text', x: 28, y: 10, text: '2', fontSize: 6, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
     ],
     labelRef: { x: 0, y: -68, anchor: 'middle', baseline: 'baseline' },
-    labelVal: { x: 10, y:   4, anchor: 'start',  baseline: 'hanging' },
+    labelVal: { x: 14, y: 4, anchor: 'start', baseline: 'hanging' },
 };
+
+/** Single-channel scope: one probe tip (CH1 only), narrower CRT body. */
+const SCOPE_SINGLE_SYMBOL = {
+    width: 56,
+    height: 80,
+    pins: [
+        { id: 'tip', x: 0, y: 0, side: 'B' },
+    ],
+    shapes: [
+        { kind: 'line', x1: 0, y1: 0, x2: 0, y2: -22 },
+        { kind: 'rect', x: -26, y: -62, w: 52, h: 44, rx: 6, ry: 6, fill: 'var(--sch-body)' },
+        { kind: 'rect', x: -20, y: -56, w: 40, h: 24, rx: 2, ry: 2, fill: 'none' },
+        {
+            kind: 'path',
+            d: 'M-16,-50 Q-6,-54 6,-48',
+            fill: 'none',
+            stroke: 'rgba(52, 211, 153, 0.85)',
+            strokeWidth: 1.4,
+        },
+        { kind: 'line', x1: 0, y1: -56, x2: 0, y2: -32, opacity: 0.45 },
+        { kind: 'line', x1: -18, y1: -44, x2: 18, y2: -44, opacity: 0.45 },
+        { kind: 'text', x: 0, y: -22, text: 'SCOPE', fontSize: 7, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+        { kind: 'text', x: 0, y: 10, text: 'CH1', fontSize: 6, anchor: 'middle', baseline: 'middle', fontWeight: 700 },
+    ],
+    labelRef: { x: 0, y: -68, anchor: 'middle', baseline: 'baseline' },
+    labelVal: { x: 0, y: 4, anchor: 'middle', baseline: 'hanging' },
+};
+
+// ---------- Linear regulator (3-terminal, ideal Vout) ---------------
+//
+// Pins: IN (left), GND (tab / common, bottom), OUT (right). The
+// netlist emitter turns this into an ideal V(OUT)−V(GND)=Vnom source;
+// IN is schematic-only (dropout & quiescent current not modeled).
+
+function regulatorSymbol(bodyLabel) {
+    return {
+        width: 76,
+        height: 68,
+        pins: [
+            { id: 'n_in', x: -36, y: 0, side: 'L' },
+            { id: 'n_gnd', x: 0, y: 32, side: 'B' },
+            { id: 'n_out', x: 36, y: 0, side: 'R' },
+        ],
+        shapes: [
+            {
+                kind: 'rect', x: -32, y: -22, w: 64, h: 44, rx: 4, ry: 4,
+                fill: 'var(--sch-body)', stroke: 'var(--sch-stroke)', strokeWidth: 1.4,
+            },
+            {
+                kind: 'text', x: 0, y: -2, text: bodyLabel, fontSize: 9,
+                anchor: 'middle', baseline: 'middle', fontWeight: 700,
+            },
+            { kind: 'text', x: -36, y: -30, text: 'IN', fontSize: 7, anchor: 'middle', baseline: 'bottom', fontWeight: 600 },
+            { kind: 'text', x: 0, y: 38, text: 'GND', fontSize: 7, anchor: 'middle', baseline: 'hanging', fontWeight: 600 },
+            { kind: 'text', x: 36, y: -30, text: 'OUT', fontSize: 7, anchor: 'middle', baseline: 'bottom', fontWeight: 600 },
+        ],
+        labelRef: { x: 0, y: -40, anchor: 'middle', baseline: 'baseline' },
+        labelVal: { x: 0, y: 48, anchor: 'middle', baseline: 'hanging' },
+    };
+}
+
+const REG_POS_SYMBOL = regulatorSymbol('REG+');
+const REG_NEG_SYMBOL = regulatorSymbol('REG−');
 
 // ---------- Registry ----------------------------------------------
 
@@ -376,8 +464,22 @@ export const SYMBOLS = {
     Q_NPN: Q_NPN_SYMBOL, Q_PNP: Q_PNP_SYMBOL,
     M:     M_NMOS_SYMBOL,
     M_NMOS: M_NMOS_SYMBOL, M_PMOS: M_PMOS_SYMBOL,
-    VP: VP_SYMBOL, IP: IP_SYMBOL, SCOPE: SCOPE_SYMBOL,
+    VP: VP_SYMBOL, IP: IP_SYMBOL, SCOPE: SCOPE_SYMBOL, SCOPE_SINGLE: SCOPE_SINGLE_SYMBOL,
+    REG7805: REG_POS_SYMBOL,
+    REG7905: REG_NEG_SYMBOL,
 };
+
+/**
+ * Symbol geometry for an on-canvas schematic component (handles SCOPE
+ * single vs dual channel).
+ */
+export function symbolForSchematic(comp) {
+    if (!comp) return null;
+    if (comp.elementType === 'SCOPE' && comp.scopeChannelMode === 'single') {
+        return SYMBOLS.SCOPE_SINGLE;
+    }
+    return SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType] || null;
+}
 
 /**
  * Resolve the right symbol variant for a given element, consulting the

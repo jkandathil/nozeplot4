@@ -4,7 +4,9 @@
  * Handles DC operating point (with Newton-Raphson for diodes),
  * transient (trapezoidal integration with per-step Newton-Raphson),
  * and small-signal AC (complex MNA sweep around the DC operating
- * point). All three analyses share the same stamping pipeline — only
+ * point). Thermal output noise (resistor Johnson–Nyquist, 300 K) is
+ * available as an add-on to the AC frequency grid. All analyses share
+ * the same stamping pipeline — only
  * the element companion models differ.
  *
  * The solver is intentionally dense and allocation-heavy: we target
@@ -916,21 +918,8 @@ export function solveTran(ctx, options) {
     };
 }
 
-/**
- * AC (small-signal) analysis.
- *
- * Linearises the circuit around the DC operating point (so diode
- * incremental conductances are captured) and then builds a complex
- * MNA matrix at each frequency sample. Capacitors contribute jωC and
- * inductors contribute jωL through an auxiliary branch.
- *
- * returns {freqs: Float64Array, V: Array<{re, im}[]>, nodeNames}
- *   V[nodeIdx][freqIdx] = {re, im}
- */
-export function solveAC(ctx, directive) {
-    const dc = solveDC(ctx);
-
-    // Frequency sweep points.
+/** Same frequency samples as {@link solveAC} (dec / oct / lin). */
+function buildAcFreqList(directive) {
     const freqs = [];
     const n = Math.max(1, Math.floor(directive.n));
     if (directive.mode === 'dec') {
@@ -949,6 +938,177 @@ export function solveAC(ctx, directive) {
             freqs.push(directive.fStart + a * (directive.fStop - directive.fStart));
         }
     }
+    return freqs;
+}
+
+/** Matrix row for an interior node named in the netlist (ground excluded). */
+function interiorRowForNetName(ctx, name) {
+    const nn = ctx.nodeNames;
+    if (!nn || name == null) return -1;
+    const want = String(name).trim().toLowerCase();
+    for (let i = 1; i < ctx.nNodes; i++) {
+        if (String(nn[i] ?? '').trim().toLowerCase() === want) return i - 1;
+    }
+    return -1;
+}
+
+/**
+ * Stamp the small-signal AC MNA at radian frequency `w` into Are/Aim and
+ * RHS bre/bim. When `acZero` is true, V/I AC stimulus is suppressed
+ * (used for uncorrelated noise transfers).
+ */
+function stampAcMna(ctx, dc, w, Are, Aim, bre, bim, acZero) {
+    const cG = (a, b, gRe, gIm) => {
+        const ia = ri(a), ib = ri(b);
+        if (ia >= 0) { Are[ia][ia] += gRe; Aim[ia][ia] += gIm; }
+        if (ib >= 0) { Are[ib][ib] += gRe; Aim[ib][ib] += gIm; }
+        if (ia >= 0 && ib >= 0) {
+            Are[ia][ib] -= gRe; Aim[ia][ib] -= gIm;
+            Are[ib][ia] -= gRe; Aim[ib][ia] -= gIm;
+        }
+    };
+    const cVSrc = (a, b, k, eRe, eIm) => {
+        const ia = ri(a), ib = ri(b);
+        if (ia >= 0) { Are[ia][k] += 1; Are[k][ia] += 1; }
+        if (ib >= 0) { Are[ib][k] -= 1; Are[k][ib] -= 1; }
+        bre[k] += eRe; bim[k] += eIm;
+    };
+    const cI = (a, b, iRe, iIm) => {
+        const ia = ri(a), ib = ri(b);
+        if (ia >= 0) { bre[ia] -= iRe; bim[ia] -= iIm; }
+        if (ib >= 0) { bre[ib] += iRe; bim[ib] += iIm; }
+    };
+
+    for (const el of ctx.elems) {
+        switch (el.type) {
+            case 'R': cG(el.n1, el.n2, 1 / el.value, 0); break;
+            case 'C': cG(el.n1, el.n2, 0, w * el.value); break;
+            case 'L': {
+                const k = el.branchIdx;
+                const ip = ri(el.n1), in_ = ri(el.n2);
+                if (ip >= 0) { Are[ip][k] += 1; Are[k][ip] += 1; }
+                if (in_ >= 0) { Are[in_][k] -= 1; Are[k][in_] -= 1; }
+                Aim[k][k] -= w * el.value;
+                break;
+            }
+            case 'V': {
+                const ac = acZero ? { mag: 0, phase: 0 } : evalSourceAC(el.source);
+                const ph = (ac.phase || 0) * Math.PI / 180;
+                cVSrc(el.n1, el.n2, el.branchIdx, ac.mag * Math.cos(ph), ac.mag * Math.sin(ph));
+                break;
+            }
+            case 'I': {
+                const ac = acZero ? { mag: 0, phase: 0 } : evalSourceAC(el.source);
+                const ph = (ac.phase || 0) * Math.PI / 180;
+                cI(el.n1, el.n2, ac.mag * Math.cos(ph), ac.mag * Math.sin(ph));
+                break;
+            }
+            case 'D': {
+                const mdl = ctx.models[el.model] || ctx.models.default;
+                const a = ri(el.n1), b = ri(el.n2);
+                const vA = a >= 0 ? dc.x[a] : 0;
+                const vB = b >= 0 ? dc.x[b] : 0;
+                const { Geq } = diodeEval(vA - vB, mdl.params);
+                cG(el.n1, el.n2, Geq, 0);
+                break;
+            }
+            case 'Q': {
+                const mdl = ctx.models[el.model] || ctx.models.qdefault;
+                const isNPN = (mdl.type || 'NPN').toUpperCase() !== 'PNP';
+                const p = isNPN ? +1 : -1;
+                const iC = ri(el.nc), iB = ri(el.nb), iE = ri(el.ne);
+                const vC = iC >= 0 ? dc.x[iC] : 0;
+                const vB = iB >= 0 ? dc.x[iB] : 0;
+                const vE = iE >= 0 ? dc.x[iE] : 0;
+                const r = bjtEval(p * (vB - vE), p * (vB - vC), mdl);
+                const gPi = r.J_be_b + GMIN;
+                const gM  = r.J_be_c;
+                const gMu = r.J_bc_b + GMIN;
+                const gO  = -r.J_bc_c;
+                const cje = mdl.params.cje || 0;
+                const cjc = mdl.params.cjc || 0;
+                cG(el.nb, el.ne, gPi, w * cje);
+                cG(el.nb, el.nc, gMu, w * cjc);
+                cG(el.nc, el.ne, gO, 0);
+                if (iC >= 0 && iB >= 0) Are[iC][iB] += gM;
+                if (iC >= 0 && iE >= 0) Are[iC][iE] -= gM;
+                if (iE >= 0 && iB >= 0) Are[iE][iB] -= gM;
+                if (iE >= 0 && iE >= 0) Are[iE][iE] += gM;
+                break;
+            }
+            case 'M': {
+                const mdl = ctx.models[el.model] || ctx.models.mdefault;
+                const isN = (mdl.type || 'NMOS').toUpperCase() === 'NMOS';
+                const iD = ri(el.nd), iG = ri(el.ng), iS = ri(el.ns), iB = ri(el.nbulk);
+                const vG = iG >= 0 ? dc.x[iG] : 0;
+                const vD = iD >= 0 ? dc.x[iD] : 0;
+                const vS = iS >= 0 ? dc.x[iS] : 0;
+                const vB = iB >= 0 ? dc.x[iB] : 0;
+                const r = mosEval(vG, vD, vS, vB, el, mdl, isN);
+                const cgs = mdl.params.cgso || 0;
+                const cgd = mdl.params.cgdo || 0;
+                cG(el.ng, el.ns, 0, w * cgs);
+                cG(el.ng, el.nd, 0, w * cgd);
+                cG(el.nd, el.ns, r.go + GMIN, 0);
+                if (iD >= 0 && iG >= 0) Are[iD][iG] += r.gm;
+                if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gm;
+                if (iS >= 0 && iG >= 0) Are[iS][iG] -= r.gm;
+                if (iS >= 0)            Are[iS][iS] += r.gm;
+                if (r.gmb && iB >= 0) {
+                    if (iD >= 0) Are[iD][iB] += r.gmb;
+                    if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gmb;
+                    if (iS >= 0) Are[iS][iB] -= r.gmb;
+                    if (iS >= 0) Are[iS][iS] += r.gmb;
+                }
+                break;
+            }
+            case 'E': {
+                const k = el.branchIdx;
+                const ip = ri(el.n1), in_ = ri(el.n2);
+                const cp = ri(el.nc1), cn = ri(el.nc2);
+                if (ip >= 0) { Are[ip][k] += 1; Are[k][ip] += 1; }
+                if (in_ >= 0) { Are[in_][k] -= 1; Are[k][in_] -= 1; }
+                if (cp >= 0) Are[k][cp] -= el.gain;
+                if (cn >= 0) Are[k][cn] += el.gain;
+                break;
+            }
+            case 'G': {
+                const n1 = ri(el.n1), n2 = ri(el.n2);
+                const cp = ri(el.nc1), cn = ri(el.nc2);
+                if (n1 >= 0 && cp >= 0) Are[n1][cp] += el.gm;
+                if (n1 >= 0 && cn >= 0) Are[n1][cn] -= el.gm;
+                if (n2 >= 0 && cp >= 0) Are[n2][cp] -= el.gm;
+                if (n2 >= 0 && cn >= 0) Are[n2][cn] += el.gm;
+                break;
+            }
+            case 'O': {
+                const k = el.branchIdx;
+                const ip = ri(el.inp), in_ = ri(el.inn);
+                const out = ri(el.out);
+                if (out >= 0) { Are[out][k] += 1; }
+                if (ip >= 0) Are[k][ip] += 1;
+                if (in_ >= 0) Are[k][in_] -= 1;
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
+/**
+ * AC (small-signal) analysis.
+ *
+ * Linearises the circuit around the DC operating point (so diode
+ * incremental conductances are captured) and then builds a complex
+ * MNA matrix at each frequency sample. Capacitors contribute jωC and
+ * inductors contribute jωL through an auxiliary branch.
+ *
+ * returns {freqs: Float64Array, V: Array<{re, im}[]>, nodeNames}
+ *   V[nodeIdx][freqIdx] = {re, im}
+ */
+export function solveAC(ctx, directive) {
+    const dc = solveDC(ctx);
+    const freqs = buildAcFreqList(directive);
 
     const size = ctx.size;
     const interior = ctx.interior;
@@ -963,159 +1123,7 @@ export function solveAC(ctx, directive) {
         const { re: Are, im: Aim } = zerosComplexMat(size);
         const bre = new Float64Array(size);
         const bim = new Float64Array(size);
-
-        // Stamping helpers for complex MNA.
-        const cG = (a, b, gRe, gIm) => {
-            const ia = ri(a), ib = ri(b);
-            if (ia >= 0) { Are[ia][ia] += gRe; Aim[ia][ia] += gIm; }
-            if (ib >= 0) { Are[ib][ib] += gRe; Aim[ib][ib] += gIm; }
-            if (ia >= 0 && ib >= 0) {
-                Are[ia][ib] -= gRe; Aim[ia][ib] -= gIm;
-                Are[ib][ia] -= gRe; Aim[ib][ia] -= gIm;
-            }
-        };
-        const cVSrc = (a, b, k, eRe, eIm) => {
-            const ia = ri(a), ib = ri(b);
-            if (ia >= 0) { Are[ia][k] += 1; Are[k][ia] += 1; }
-            if (ib >= 0) { Are[ib][k] -= 1; Are[k][ib] -= 1; }
-            bre[k] += eRe; bim[k] += eIm;
-        };
-        const cI = (a, b, iRe, iIm) => {
-            const ia = ri(a), ib = ri(b);
-            if (ia >= 0) { bre[ia] -= iRe; bim[ia] -= iIm; }
-            if (ib >= 0) { bre[ib] += iRe; bim[ib] += iIm; }
-        };
-
-        for (const el of ctx.elems) {
-            switch (el.type) {
-                case 'R': cG(el.n1, el.n2, 1 / el.value, 0); break;
-                case 'C': cG(el.n1, el.n2, 0, w * el.value); break;
-                case 'L': {
-                    // Inductor branch: V = jωL · I ⇒ A[k][k] = -jωL.
-                    const k = el.branchIdx;
-                    const ip = ri(el.n1), in_ = ri(el.n2);
-                    if (ip >= 0) { Are[ip][k] += 1; Are[k][ip] += 1; }
-                    if (in_ >= 0) { Are[in_][k] -= 1; Are[k][in_] -= 1; }
-                    Aim[k][k] -= w * el.value;
-                    break;
-                }
-                case 'V': {
-                    const ac = evalSourceAC(el.source);
-                    const ph = (ac.phase || 0) * Math.PI / 180;
-                    cVSrc(el.n1, el.n2, el.branchIdx, ac.mag * Math.cos(ph), ac.mag * Math.sin(ph));
-                    break;
-                }
-                case 'I': {
-                    const ac = evalSourceAC(el.source);
-                    const ph = (ac.phase || 0) * Math.PI / 180;
-                    cI(el.n1, el.n2, ac.mag * Math.cos(ph), ac.mag * Math.sin(ph));
-                    break;
-                }
-                case 'D': {
-                    // Small-signal diode conductance at DC op-point
-                    // (includes the reverse-breakdown contribution via diodeEval).
-                    const mdl = ctx.models[el.model] || ctx.models.default;
-                    const a = ri(el.n1), b = ri(el.n2);
-                    const vA = a >= 0 ? dc.x[a] : 0;
-                    const vB = b >= 0 ? dc.x[b] : 0;
-                    const { Geq } = diodeEval(vA - vB, mdl.params);
-                    cG(el.n1, el.n2, Geq, 0);
-                    break;
-                }
-                case 'Q': {
-                    /* Hybrid-π small-signal stamp at the DC op-point:
-                         gπ = dIb/dVbe   (base–emitter admittance)
-                         gm = dIc/dVbe   (transconductance)
-                         go = |dIc/dVbc| (output conductance, from Early)
-                         gμ = dIb/dVbc   (feedback, often negligible)
-                       Plus Cje (B-E), Cjc (B-C) as jωC admittances.         */
-                    const mdl = ctx.models[el.model] || ctx.models.qdefault;
-                    const isNPN = (mdl.type || 'NPN').toUpperCase() !== 'PNP';
-                    const p = isNPN ? +1 : -1;
-                    const iC = ri(el.nc), iB = ri(el.nb), iE = ri(el.ne);
-                    const vC = iC >= 0 ? dc.x[iC] : 0;
-                    const vB = iB >= 0 ? dc.x[iB] : 0;
-                    const vE = iE >= 0 ? dc.x[iE] : 0;
-                    const r = bjtEval(p * (vB - vE), p * (vB - vC), mdl);
-                    const gPi = r.J_be_b + GMIN;
-                    const gM  = r.J_be_c;
-                    const gMu = r.J_bc_b + GMIN;
-                    const gO  = -r.J_bc_c;     // flip sign → positive output conductance
-                    const cje = mdl.params.cje || 0;
-                    const cjc = mdl.params.cjc || 0;
-                    // gπ + jωCje between B-E
-                    cG(el.nb, el.ne, gPi, w * cje);
-                    // gμ + jωCjc between B-C
-                    cG(el.nb, el.nc, gMu, w * cjc);
-                    // Output conductance go between C-E
-                    cG(el.nc, el.ne, gO, 0);
-                    // Transconductance: Ic = gm · Vbe  ≡ a VCCS from B→E driving C→E.
-                    // Stamp: A[nc][nb] += gm, A[nc][ne] -= gm, A[ne][nb] -= gm, A[ne][ne] += gm.
-                    if (iC >= 0 && iB >= 0) Are[iC][iB] += gM;
-                    if (iC >= 0 && iE >= 0) Are[iC][iE] -= gM;
-                    if (iE >= 0 && iB >= 0) Are[iE][iB] -= gM;
-                    if (iE >= 0 && iE >= 0) Are[iE][iE] += gM;
-                    break;
-                }
-                case 'M': {
-                    const mdl = ctx.models[el.model] || ctx.models.mdefault;
-                    const isN = (mdl.type || 'NMOS').toUpperCase() === 'NMOS';
-                    const iD = ri(el.nd), iG = ri(el.ng), iS = ri(el.ns), iB = ri(el.nbulk);
-                    const vG = iG >= 0 ? dc.x[iG] : 0;
-                    const vD = iD >= 0 ? dc.x[iD] : 0;
-                    const vS = iS >= 0 ? dc.x[iS] : 0;
-                    const vB = iB >= 0 ? dc.x[iB] : 0;
-                    const r = mosEval(vG, vD, vS, vB, el, mdl, isN);
-                    const cgs = mdl.params.cgso || 0;
-                    const cgd = mdl.params.cgdo || 0;
-                    cG(el.ng, el.ns, 0, w * cgs);
-                    cG(el.ng, el.nd, 0, w * cgd);
-                    cG(el.nd, el.ns, r.go + GMIN, 0);
-                    // gm: VCCS from G→S driving D→S
-                    if (iD >= 0 && iG >= 0) Are[iD][iG] += r.gm;
-                    if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gm;
-                    if (iS >= 0 && iG >= 0) Are[iS][iG] -= r.gm;
-                    if (iS >= 0)            Are[iS][iS] += r.gm;
-                    if (r.gmb && iB >= 0) {
-                        // Body transconductance (minor for most sims)
-                        if (iD >= 0) Are[iD][iB] += r.gmb;
-                        if (iD >= 0 && iS >= 0) Are[iD][iS] -= r.gmb;
-                        if (iS >= 0) Are[iS][iB] -= r.gmb;
-                        if (iS >= 0) Are[iS][iS] += r.gmb;
-                    }
-                    break;
-                }
-                case 'E': {
-                    const k = el.branchIdx;
-                    const ip = ri(el.n1), in_ = ri(el.n2);
-                    const cp = ri(el.nc1), cn = ri(el.nc2);
-                    if (ip >= 0) { Are[ip][k] += 1; Are[k][ip] += 1; }
-                    if (in_ >= 0) { Are[in_][k] -= 1; Are[k][in_] -= 1; }
-                    if (cp >= 0) Are[k][cp] -= el.gain;
-                    if (cn >= 0) Are[k][cn] += el.gain;
-                    break;
-                }
-                case 'G': {
-                    const n1 = ri(el.n1), n2 = ri(el.n2);
-                    const cp = ri(el.nc1), cn = ri(el.nc2);
-                    if (n1 >= 0 && cp >= 0) Are[n1][cp] += el.gm;
-                    if (n1 >= 0 && cn >= 0) Are[n1][cn] -= el.gm;
-                    if (n2 >= 0 && cp >= 0) Are[n2][cp] -= el.gm;
-                    if (n2 >= 0 && cn >= 0) Are[n2][cn] += el.gm;
-                    break;
-                }
-                case 'O': {
-                    const k = el.branchIdx;
-                    const ip = ri(el.inp), in_ = ri(el.inn);
-                    const out = ri(el.out);
-                    if (out >= 0) { Are[out][k] += 1; }
-                    if (ip >= 0) Are[k][ip] += 1;
-                    if (in_ >= 0) Are[k][in_] -= 1;
-                    break;
-                }
-                default: break;
-            }
-        }
+        stampAcMna(ctx, dc, w, Are, Aim, bre, bim, false);
 
         const { re: xRe, im: xIm } = solveComplex(Are, Aim, bre, bim);
         for (let i = 0; i < interior; i++) results[i][fi] = { re: xRe[i], im: xIm[i] };
@@ -1124,6 +1132,56 @@ export function solveAC(ctx, directive) {
         }
     }
     return { freqs: Float64Array.from(freqs), V: results, branchI: branchResults };
+}
+
+const KBOLTZ = 1.380649e-23;
+
+/**
+ * Output-referred thermal (Johnson) noise PSD at a node, vs the same
+ * frequency grid as {@link solveAC}. Each resistor contributes
+ * uncorrelated Norton noise i_n with one-sided PSD 4kT/R (A²/Hz); we
+ * sum |H_{i_n→Vout}|² · (4kT/R) into V²/Hz. Shot / flicker noise and
+ * temperature other than `tempK` are not modelled.
+ *
+ * @returns {{ freqs: Float64Array, noiseV2PerHz: Float64Array }}
+ */
+export function solveAcThermalNoisePSD(ctx, directive, outputNodeName, options = {}) {
+    const T = options.tempK ?? 300;
+    const dc = solveDC(ctx);
+    const outRow = interiorRowForNetName(ctx, outputNodeName);
+    if (outRow < 0) {
+        throw new Error(`Thermal noise: unknown output node "${outputNodeName}"`);
+    }
+    const freqs = buildAcFreqList(directive);
+    const size = ctx.size;
+    const noiseV2PerHz = new Float64Array(freqs.length);
+    const outLabel = String(ctx.nodeNames?.[outRow + 1] ?? outputNodeName).trim() || outputNodeName;
+
+    for (let fi = 0; fi < freqs.length; fi++) {
+        const w = 2 * Math.PI * freqs[fi];
+        let sum = 0;
+        for (const el of ctx.elems) {
+            if (el.type !== 'R') continue;
+            const R = el.value;
+            if (!(R > 0) || !Number.isFinite(R)) continue;
+
+            const { re: Are, im: Aim } = zerosComplexMat(size);
+            const bre = new Float64Array(size);
+            const bim = new Float64Array(size);
+            stampAcMna(ctx, dc, w, Are, Aim, bre, bim, true);
+            const ia = ri(el.n1), ib = ri(el.n2);
+            if (ia >= 0) { bre[ia] -= 1; bim[ia] -= 0; }
+            if (ib >= 0) { bre[ib] += 1; bim[ib] += 0; }
+
+            const { re: xRe, im: xIm } = solveComplex(Are, Aim, bre, bim);
+            const vr = xRe[outRow];
+            const vi = xIm[outRow];
+            const h2 = vr * vr + vi * vi;
+            sum += h2 * (4 * KBOLTZ * T / R);
+        }
+        noiseV2PerHz[fi] = sum;
+    }
+    return { freqs: Float64Array.from(freqs), noiseV2PerHz, outputNode: outLabel };
 }
 
 /**
@@ -1194,6 +1252,14 @@ function runAnalyses(ctx, analyses) {
     const out = {};
     if (analyses.op)   out.op   = solveDC(ctx);
     if (analyses.ac)   out.ac   = solveAC(ctx, analyses.ac);
+    if (analyses.ac && analyses.acNoise?.outputNode) {
+        const node = String(analyses.acNoise.outputNode).trim();
+        if (node) {
+            out.acNoise = solveAcThermalNoisePSD(ctx, analyses.ac, node, {
+                tempK: analyses.acNoise.tempK,
+            });
+        }
+    }
     if (analyses.tran) out.tran = solveTran(ctx, analyses.tran);
     if (analyses.dc)   out.dc   = solveDCSweep(ctx, analyses.dc);
     return out;

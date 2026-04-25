@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Check } from 'lucide-react';
-import { BUILTIN_MODELS, getPart } from '../../circuit/library.js';
+import { getPart, modelChoicesForElement } from '../../circuit/library.js';
 // SI parsing is shared with the parametric-sweep editor — keep it
 // in one place so "4.7k" parses identically everywhere.
 import { SI_MAP, parseSiValue } from '../../circuit/siUnits.js';
@@ -11,8 +11,8 @@ import { SI_MAP, parseSiValue } from '../../circuit/siUnits.js';
  * component on the canvas. Kept intentionally minimal — the full
  * Inspector in the side panel is still the home for rarely-used
  * controls (source-waveform editor, rotation, delete). The popup
- * focuses on the two fields people actually change mid-design:
- * reference designator and scalar value (or model name).
+ * focuses on the fields people change mid-design: reference,
+ * scalar value (or model name), and scope channel mode (OK commits).
  *
  * Positioning: anchored to the screen coordinates the canvas passed
  * us. We clamp to the viewport so opening near the bottom/right edge
@@ -23,7 +23,9 @@ import { SI_MAP, parseSiValue } from '../../circuit/siUnits.js';
  *   Esc    discard edits and close
  *   Tab    moves between fields normally
  */
-export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
+export default function PropertyPopup({
+    comp, anchor, onClose, onCommit, userModelsForPicker = [],
+}) {
     const [ref, setRef] = useState(comp?.ref || '');
     const [valueText, setValueText] = useState(() => formatForEdit(comp?.value));
     const [modelRef, setModelRef] = useState(comp?.modelRef || '');
@@ -41,12 +43,25 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
     const waveCacheRef = useRef({ [initialSpecs.waveKind]: initialSpecs.waveFields });
     const [acMag, setAcMag] = useState(initialSpecs.acMag);
     const [acPhase, setAcPhase] = useState(initialSpecs.acPhase);
+    const [scopeChannelMode, setScopeChannelMode] = useState(
+        () => (comp?.elementType === 'SCOPE' && comp?.scopeChannelMode === 'single' ? 'single' : 'dual'),
+    );
     const cardRef = useRef(null);
     const refInputRef = useRef(null);
 
     useEffect(() => {
         refInputRef.current?.select();
     }, []);
+
+    useEffect(() => {
+        if (comp?.elementType === 'SCOPE') {
+            setScopeChannelMode(comp.scopeChannelMode === 'single' ? 'single' : 'dual');
+        }
+    }, [comp?.id, comp?.elementType, comp?.scopeChannelMode]);
+
+    useEffect(() => {
+        setModelRef(comp?.modelRef || '');
+    }, [comp?.id, comp?.modelRef]);
 
     // Dismiss on outside click / Esc.
     useEffect(() => {
@@ -70,10 +85,21 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
     }, []);
 
     const part = comp ? getPart(comp.partId) : null;
+    const modelSelectChoices = useMemo(() => {
+        if (!comp || !['D', 'Q', 'M'].includes(comp.elementType)) return [];
+        const base = modelChoicesForElement(comp.elementType, userModelsForPicker);
+        const cur = comp.modelRef;
+        if (cur && !base.some((x) => String(x).toLowerCase() === String(cur).toLowerCase())) {
+            return [...base, cur];
+        }
+        return base;
+    }, [comp?.elementType, comp?.modelRef, userModelsForPicker]);
     const unit = comp?.valueUnit || inferUnit(comp?.elementType);
-    const isPassive = comp && ['R', 'C', 'L', 'E', 'G'].includes(comp.elementType);
+    const isPassive = comp && ['R', 'C', 'L', 'E', 'G', 'REG'].includes(comp.elementType);
     const isSource = comp && ['V', 'I'].includes(comp.elementType);
     const isSemi = comp && ['D', 'Q', 'M'].includes(comp.elementType);
+    const isScope = comp && comp.elementType === 'SCOPE';
+    const isScalarPart = isPassive || isSource || isSemi;
 
     // Clamp the popup card so it stays inside the viewport. We do the
     // clamp in a useMemo against window dims (no resize listener —
@@ -86,7 +112,7 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
         // card a little when the active part is a source. The clamp
         // below makes sure it still fits when opened near a screen
         // edge.
-        const cardH = isSource ? 460 : 220;
+        const cardH = isSource ? 460 : (isScalarPart ? 220 : (isScope ? 360 : 300));
         const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
         const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
         let left = (anchor?.clientX ?? 100) + 16;
@@ -96,11 +122,11 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
         if (left < pad) left = pad;
         if (top < pad) top = pad;
         return { left, top };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [anchor?.clientX, anchor?.clientY, isSource]);
+    }, [anchor?.clientX, anchor?.clientY, isSource, isScalarPart, isScope]);
 
     function commit() {
-        const patch = { ref };
+        const patch = {};
+        if (comp.elementType !== 'GND') patch.ref = ref;
         if (isPassive) {
             const v = parseSiValue(valueText);
             if (Number.isFinite(v)) patch.value = v;
@@ -121,6 +147,9 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
             patch.sourceSpec = specs;
         } else if (isSemi && modelRef) {
             patch.modelRef = modelRef;
+        }
+        if (isScope) {
+            patch.scopeChannelMode = scopeChannelMode === 'single' ? 'single' : 'dual';
         }
         onCommit(patch);
         onClose();
@@ -166,6 +195,8 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
                     ref={refInputRef}
                     type="text"
                     value={ref}
+                    readOnly={comp.elementType === 'GND'}
+                    title={comp.elementType === 'GND' ? 'Ground is always 0 in SPICE' : undefined}
                     onChange={(e) => setRef(e.target.value)}
                     spellCheck={false}
                 />
@@ -173,11 +204,11 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
 
             {isPassive && (
                 <label className="cs-prop-popup-field">
-                    <span>Value ({unit})</span>
+                    <span>{comp.elementType === 'REG' ? `Nominal Vout (${unit})` : `Value (${unit})`}</span>
                     <input
                         type="text"
                         value={valueText}
-                        placeholder="e.g. 4.7k"
+                        placeholder={comp.elementType === 'REG' ? 'e.g. 5, −12, 3.3' : 'e.g. 4.7k'}
                         onChange={(e) => setValueText(e.target.value)}
                         spellCheck={false}
                     />
@@ -246,16 +277,29 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
                 <label className="cs-prop-popup-field">
                     <span>Model</span>
                     <select value={modelRef} onChange={(e) => setModelRef(e.target.value)}>
-                        {modelChoicesFor(comp.elementType).map((m) => (
+                        {modelSelectChoices.map((m) => (
                             <option key={m} value={m}>{m}</option>
                         ))}
                     </select>
                 </label>
             )}
 
+            {isScope && (
+                <label className="cs-prop-popup-field">
+                    <span>Channels</span>
+                    <select
+                        value={scopeChannelMode}
+                        onChange={(e) => setScopeChannelMode(e.target.value)}
+                    >
+                        <option value="dual">Dual — two probe tips (CH1 + CH2)</option>
+                        <option value="single">Single — one probe tip (CH1)</option>
+                    </select>
+                </label>
+            )}
+
             {!isPassive && !isSource && !isSemi && (
                 <div className="cs-prop-popup-hint">
-                    Use the side inspector for full editing of this part.
+                    {hintForNonScalarPart(comp.elementType, scopeChannelMode)}
                 </div>
             )}
 
@@ -264,7 +308,7 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
                     Cancel
                 </button>
                 <button className="cs-prop-popup-btn cs-prop-popup-ok" onClick={commit}>
-                    <Check size={14} /> Apply
+                    <Check size={14} /> OK
                 </button>
             </div>
         </div>,
@@ -275,7 +319,7 @@ export default function PropertyPopup({ comp, anchor, onClose, onCommit }) {
 /* ---------------- helpers ---------------- */
 
 function inferUnit(type) {
-    return { R: 'Ω', C: 'F', L: 'H', E: 'V/V', G: 'A/V' }[type] || '';
+    return { R: 'Ω', C: 'F', L: 'H', E: 'V/V', G: 'A/V', REG: 'V' }[type] || '';
 }
 
 function formatForEdit(v) {
@@ -452,12 +496,21 @@ function buildAcSpec(magText, phaseText) {
     return { kind: 'ac', mag, phase: Number.isFinite(phase) ? phase : 0 };
 }
 
-function modelChoicesFor(elementType) {
-    const all = Object.keys(BUILTIN_MODELS);
+function hintForNonScalarPart(elementType, scopeMode) {
     switch (elementType) {
-        case 'D': return all.filter((k) => /^D/i.test(k) && !/^Q/.test(k));
-        case 'Q': return all.filter((k) => /^Q/i.test(k));
-        case 'M': return all.filter((k) => /^M/i.test(k));
-        default:  return all;
+        case 'O':
+            return 'Ideal op-amp — included in the solve. No numeric parameters; edit Reference if needed. Use a VCVS (E) in the palette for finite gain / controlled sources.';
+        case 'VP':
+            return 'Voltage probe — not in the netlist. Wire the tip to a node; Run auto-picks that voltage. Edit Reference for display only.';
+        case 'SCOPE':
+            return scopeMode === 'single'
+                ? 'Single mode: one terminal (CH1). Scope modal and drawer show one trace. Not in the netlist.'
+                : 'Dual mode: two terminals (CH1 left, CH2 right). Clip both tips, Run, then use this scope or double‑click it. Not in the netlist.';
+        case 'IP':
+            return 'Inline ammeter (0 V in the netlist). Splice into a branch; after Run plot I(<reference>). Edit Reference to match the signal name.';
+        case 'GND':
+            return 'Reference node 0 — label is fixed. Use the Inspector for rotation / delete.';
+        default:
+            return 'Edit Reference above. Use the Inspector panel for rotation, delete, and any extra fields.';
     }
 }

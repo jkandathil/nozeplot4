@@ -42,8 +42,8 @@ export function renderShape(s, key) {
                     fill={s.fill === 'var(--sch-stroke)' ? 'var(--sch-stroke)'
                         : s.fill === 'var(--sch-body)' ? 'var(--sch-body)'
                         : s.fill || 'none'}
-                    stroke={s.fill === 'var(--sch-stroke)' ? 'none' : strokeColor}
-                    strokeWidth={strokeWidth}
+                    stroke={s.stroke || (s.fill === 'var(--sch-stroke)' ? 'none' : strokeColor)}
+                    strokeWidth={s.strokeWidth ?? strokeWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                 />

@@ -30,6 +30,110 @@
     --sch-gnd-label: #94a3b8;
 }
 
+/*
+ * Per-component schematic hues — scoped under .cs-root so palette,
+ * canvas, and inspector previews all pick up the same family. Symbols
+ * resolve stroke/fill/text via --sch-stroke / --sch-body / --sch-label*.
+ */
+.cs-root .cs-comp-R {
+    --sch-stroke: #fb923c;
+    --sch-body: rgba(120, 53, 15, 0.42);
+    --sch-label: #ffedd5;
+    --sch-label-dim: #fdba74;
+}
+/* Lime/chartreuse — deliberately not cyan (wires use --sch-wire). */
+.cs-root .cs-comp-C {
+    --sch-stroke: #a3e635;
+    --sch-body: rgba(54, 83, 20, 0.48);
+    --sch-label: #ecfccb;
+    --sch-label-dim: #bef264;
+}
+.cs-root .cs-comp-L {
+    --sch-stroke: #c084fc;
+    --sch-body: rgba(88, 28, 135, 0.4);
+    --sch-label: #fae8ff;
+    --sch-label-dim: #d8b4fe;
+}
+.cs-root .cs-comp-V {
+    --sch-stroke: #4ade80;
+    --sch-body: rgba(20, 83, 45, 0.42);
+    --sch-label: #dcfce7;
+    --sch-label-dim: #86efac;
+}
+.cs-root .cs-comp-REG {
+    --sch-stroke: #38bdf8;
+    --sch-body: rgba(12, 74, 110, 0.45);
+    --sch-label: #e0f2fe;
+    --sch-label-dim: #7dd3fc;
+}
+.cs-root .cs-comp-I {
+    --sch-stroke: #2dd4bf;
+    --sch-body: rgba(15, 118, 110, 0.4);
+    --sch-label: #ccfbf1;
+    --sch-label-dim: #5eead4;
+}
+.cs-root .cs-comp-D {
+    --sch-stroke: #fcd34d;
+    --sch-body: rgba(113, 63, 18, 0.4);
+    --sch-label: #fef9c3;
+    --sch-label-dim: #fde047;
+}
+.cs-root .cs-comp-Q {
+    --sch-stroke: #f472b6;
+    --sch-body: rgba(131, 24, 67, 0.38);
+    --sch-label: #fce7f3;
+    --sch-label-dim: #f9a8d4;
+}
+.cs-root .cs-comp-M {
+    --sch-stroke: #a78bfa;
+    --sch-body: rgba(67, 56, 202, 0.38);
+    --sch-label: #ede9fe;
+    --sch-label-dim: #c4b5fd;
+}
+.cs-root .cs-comp-O {
+    --sch-stroke: #818cf8;
+    --sch-body: rgba(49, 46, 129, 0.42);
+    --sch-label: #e0e7ff;
+    --sch-label-dim: #a5b4fc;
+}
+.cs-root .cs-comp-E {
+    --sch-stroke: #94a3b8;
+    --sch-body: rgba(51, 65, 85, 0.5);
+    --sch-label: #f1f5f9;
+    --sch-label-dim: #cbd5e1;
+}
+.cs-root .cs-comp-G {
+    --sch-stroke: #64748b;
+    --sch-body: rgba(30, 41, 59, 0.52);
+    --sch-label: #e2e8f0;
+    --sch-label-dim: #94a3b8;
+}
+.cs-root .cs-comp-VP {
+    --sch-stroke: #22d3ee;
+    --sch-body: rgba(8, 51, 68, 0.45);
+    --sch-label: #cffafe;
+    --sch-label-dim: #67e8f9;
+}
+.cs-root .cs-comp-IP {
+    --sch-stroke: #34d399;
+    --sch-body: rgba(6, 78, 59, 0.42);
+    --sch-label: #d1fae5;
+    --sch-label-dim: #6ee7b7;
+}
+.cs-root .cs-comp-SCOPE {
+    --sch-stroke: #fbbf24;
+    --sch-body: rgba(120, 53, 15, 0.4);
+    --sch-label: #fef3c7;
+    --sch-label-dim: #fcd34d;
+}
+.cs-root .cs-comp-GND {
+    --sch-stroke: #94a3b8;
+    --sch-body: rgba(30, 41, 59, 0.35);
+    --sch-label: #e2e8f0;
+    --sch-label-dim: #94a3b8;
+    --sch-gnd-label: #cbd5e1;
+}
+
 /* -------------------- Home view -------------------- */
 .cs-home {
     padding: 28px 40px 40px;
@@ -230,6 +334,19 @@
 
 .cs-topbar-spacer { flex: 1 1 auto; }
 
+/* Scrollable strip under the top bar so AC coach + sweep + Monte + goal seek
+   do not consume the whole viewport — schematic / results stay visible. */
+.cs-workspace-scroll-chrome {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: min(42vh, 520px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
 .cs-analysis-group {
     display: inline-flex;
     align-items: center;
@@ -282,8 +399,9 @@
     grid-template-columns: minmax(240px, 340px) minmax(0, 1fr) minmax(0, 300px);
     gap: 10px;
     padding: 10px;
-    flex: 1 1 auto;
-    min-height: 0;
+    /* Take all remaining height under the top bar + scrollable run settings. */
+    flex: 1 1 0%;
+    min-height: 200px;
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
@@ -508,9 +626,153 @@
     padding: 0 2px;
 }
 
-.cs-plot-header > .cs-signal-chips {
+.cs-plot-header-col {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cs-plot-header-col .cs-signal-chips {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.cs-trace-math-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.cs-trace-math-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.cs-trace-math-toggle.is-on {
+    color: #e2e8f0;
+}
+
+.cs-trace-math-op,
+.cs-trace-math-sig {
+    background: var(--cs-input-bg, #0b1220);
+    color: var(--cs-text, #e2e8f0);
+    border: 1px solid var(--cs-border, #334155);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font: inherit;
+    font-size: 0.78rem;
+}
+
+.cs-trace-math-hint {
+    color: #fbbf24;
+    font-size: 0.72rem;
+}
+
+.cs-studio-msg {
+    margin: 8px 10px 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    color: #bbf7d0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+}
+
+.cs-monte-summary {
+    margin: 10px 2px 4px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.cs-monte-summary-line code {
+    font-size: 0.85em;
+}
+
+.cs-monte-table {
+    width: 100%;
+    max-width: 420px;
+    margin-top: 8px;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+}
+
+.cs-monte-table th,
+.cs-monte-table td {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    padding: 3px 8px;
+    text-align: left;
+}
+
+.cs-monte-table th {
+    color: #94a3b8;
+    font-weight: 600;
+}
+
+.cs-monte-bar {
+    gap: 10px;
+}
+
+.cs-monte-bar.is-on {
+    background: linear-gradient(
+        180deg,
+        rgba(167, 139, 250, 0.1) 0%,
+        rgba(15, 23, 42, 0.35) 100%
+    );
+    border-color: rgba(167, 139, 250, 0.28);
+}
+
+.cs-goal-bar {
+    gap: 10px;
+}
+
+html[data-theme="light"] .cs-monte-bar.is-on {
+    background: linear-gradient(180deg, #ede9fe 0%, #ffffff 100%);
+    border-color: #c4b5fd;
+}
+
+.cs-noise-bar {
+    gap: 10px;
+}
+
+.cs-noise-bar.is-on {
+    background: linear-gradient(
+        180deg,
+        rgba(45, 212, 191, 0.1) 0%,
+        rgba(15, 23, 42, 0.35) 100%
+    );
+    border-color: rgba(45, 212, 191, 0.28);
+}
+
+html[data-theme="light"] .cs-noise-bar.is-on {
+    background: linear-gradient(180deg, #ccfbf1 0%, #ffffff 100%);
+    border-color: #5eead4;
+}
+
+html[data-theme="light"] .cs-studio-msg {
+    background: #ecfdf5;
+    border-color: #86efac;
+    color: #166534;
+}
+
+.cs-plot-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
 }
 
 .cs-chart-outer {
@@ -623,6 +885,14 @@
     color: #94a3b8;
     font-size: 0.82rem;
     margin-bottom: 8px;
+}
+
+.cs-op-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .cs-op-table {
@@ -759,6 +1029,105 @@ html[data-theme="light"] .cs-root {
     --sch-body: #ffffff;
     --sch-label: #0f172a;
     --sch-label-dim: #475569;
+    --sch-gnd-label: #475569;
+}
+
+/* Light mode: same per-type grouping, tuned for ivory paper + dark ink. */
+html[data-theme="light"] .cs-root .cs-comp-R {
+    --sch-stroke: #c2410c;
+    --sch-body: rgba(255, 237, 213, 0.92);
+    --sch-label: #7c2d12;
+    --sch-label-dim: #9a3412;
+}
+html[data-theme="light"] .cs-root .cs-comp-C {
+    --sch-stroke: #4d7c0f;
+    --sch-body: rgba(236, 252, 203, 0.96);
+    --sch-label: #365314;
+    --sch-label-dim: #3f6212;
+}
+html[data-theme="light"] .cs-root .cs-comp-L {
+    --sch-stroke: #7e22ce;
+    --sch-body: rgba(243, 232, 255, 0.95);
+    --sch-label: #581c87;
+    --sch-label-dim: #6b21a8;
+}
+html[data-theme="light"] .cs-root .cs-comp-V {
+    --sch-stroke: #15803d;
+    --sch-body: rgba(220, 252, 231, 0.95);
+    --sch-label: #14532d;
+    --sch-label-dim: #166534;
+}
+html[data-theme="light"] .cs-root .cs-comp-REG {
+    --sch-stroke: #0369a1;
+    --sch-body: rgba(224, 242, 254, 0.96);
+    --sch-label: #0c4a6e;
+    --sch-label-dim: #075985;
+}
+html[data-theme="light"] .cs-root .cs-comp-I {
+    --sch-stroke: #0f766e;
+    --sch-body: rgba(204, 251, 241, 0.95);
+    --sch-label: #134e4a;
+    --sch-label-dim: #115e59;
+}
+html[data-theme="light"] .cs-root .cs-comp-D {
+    --sch-stroke: #a16207;
+    --sch-body: rgba(254, 249, 195, 0.95);
+    --sch-label: #713f12;
+    --sch-label-dim: #854d0e;
+}
+html[data-theme="light"] .cs-root .cs-comp-Q {
+    --sch-stroke: #be185d;
+    --sch-body: rgba(252, 231, 243, 0.95);
+    --sch-label: #831843;
+    --sch-label-dim: #9d174d;
+}
+html[data-theme="light"] .cs-root .cs-comp-M {
+    --sch-stroke: #5b21b6;
+    --sch-body: rgba(237, 233, 254, 0.95);
+    --sch-label: #4c1d95;
+    --sch-label-dim: #5b21b6;
+}
+html[data-theme="light"] .cs-root .cs-comp-O {
+    --sch-stroke: #4338ca;
+    --sch-body: rgba(224, 231, 255, 0.95);
+    --sch-label: #312e81;
+    --sch-label-dim: #3730a3;
+}
+html[data-theme="light"] .cs-root .cs-comp-E {
+    --sch-stroke: #475569;
+    --sch-body: rgba(241, 245, 249, 0.95);
+    --sch-label: #0f172a;
+    --sch-label-dim: #475569;
+}
+html[data-theme="light"] .cs-root .cs-comp-G {
+    --sch-stroke: #334155;
+    --sch-body: rgba(226, 232, 240, 0.95);
+    --sch-label: #0f172a;
+    --sch-label-dim: #475569;
+}
+html[data-theme="light"] .cs-root .cs-comp-VP {
+    --sch-stroke: #0e7490;
+    --sch-body: rgba(207, 250, 254, 0.95);
+    --sch-label: #164e63;
+    --sch-label-dim: #155e75;
+}
+html[data-theme="light"] .cs-root .cs-comp-IP {
+    --sch-stroke: #047857;
+    --sch-body: rgba(209, 250, 229, 0.95);
+    --sch-label: #064e3b;
+    --sch-label-dim: #065f46;
+}
+html[data-theme="light"] .cs-root .cs-comp-SCOPE {
+    --sch-stroke: #b45309;
+    --sch-body: rgba(254, 243, 199, 0.95);
+    --sch-label: #78350f;
+    --sch-label-dim: #92400e;
+}
+html[data-theme="light"] .cs-root .cs-comp-GND {
+    --sch-stroke: #475569;
+    --sch-body: rgba(241, 245, 249, 0.9);
+    --sch-label: #0f172a;
+    --sch-label-dim: #64748b;
     --sch-gnd-label: #475569;
 }
 
@@ -962,6 +1331,31 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 .cs-palette-group {
     margin-top: 6px;
 }
+.cs-palette-group-downloaded {
+    margin-top: 0;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+.cs-palette-group-downloaded .cs-palette-group-title {
+    color: #7dd3fc;
+}
+.cs-palette-group-downloaded .cs-palette-group-title:hover {
+    color: #bae6fd;
+}
+.cs-palette-downloaded-empty {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 10px 6px 12px;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--cs-muted);
+    text-align: left;
+}
+.cs-palette-downloaded-empty strong {
+    color: #cbd5e1;
+    font-weight: 600;
+}
 .cs-palette-group-title {
     display: flex;
     align-items: center;
@@ -1012,17 +1406,67 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
     justify-content: center;
     width: 56px;
     height: 56px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.cs-palette-tiles-downloaded {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.cs-palette-tile--downloaded {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 6px 4px 5px;
+}
+.cs-palette-tile--downloaded .cs-palette-tile-glyph {
+    width: 100%;
+    height: 52px;
+}
+.cs-palette-tile--downloaded .cs-palette-tile-meta {
+    width: 100%;
+    min-width: 0;
+}
+.cs-palette-tile-partno {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    text-align: center;
+    line-height: 1.25;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.cs-palette-tile-model {
+    margin-top: 2px;
+    font-size: 0.6rem;
+    font-weight: 500;
+    color: var(--cs-muted);
+    text-align: center;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
 }
 .cs-palette-tile-badge {
     display: inline-block;
-    min-width: 42px;
-    padding: 8px 6px;
+    max-width: 100%;
+    padding: 6px 4px;
     border-radius: 6px;
     background: rgba(99, 102, 241, 0.18);
     color: #c7d2fe;
     font-weight: 700;
-    font-size: 0.82rem;
+    font-size: 0.65rem;
     text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .cs-palette-tile-meta { text-align: center; }
 .cs-palette-tile-name {
@@ -1201,7 +1645,13 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 
 .cs-canvas-comp text { user-select: none; pointer-events: none; }
 .cs-canvas-comp { cursor: pointer; }
-.cs-canvas-comp.is-selected { filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.45)); }
+/* Selection: accent glow tracks theme (--cs-accent); double shadow reads
+   clearly on both dark paper and light theme. */
+.cs-canvas-comp.is-selected {
+    filter:
+        drop-shadow(0 0 3px color-mix(in srgb, var(--cs-accent) 75%, transparent))
+        drop-shadow(0 0 14px color-mix(in srgb, var(--cs-accent) 40%, transparent));
+}
 
 .cs-canvas-empty {
     position: absolute;
@@ -1252,6 +1702,73 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 .cs-drawer-tab.is-active { background: rgba(30, 41, 59, 0.8); color: #e2e8f0; }
 .cs-drawer-tab.is-on { color: var(--cs-accent); }
 .cs-drawer-tab:hover { background: rgba(30, 41, 59, 0.6); }
+
+/* Maximize results plot — drawer grows, schematic column shrinks */
+.cs-drawer-maximize {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(30, 41, 59, 0.45);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.cs-drawer-maximize:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #e2e8f0;
+}
+.cs-drawer-maximize:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.cs-drawer-maximize.is-on {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #e0f2fe;
+}
+.cs-drawer-maximize-label {
+    letter-spacing: 0.02em;
+}
+
+.cs-pane-stage.is-plot-max .cs-canvas {
+    flex: 0 0 auto;
+    max-height: min(26vh, 200px);
+    min-height: 0;
+}
+.cs-pane-stage.is-plot-max .cs-drawer {
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 0;
+}
+.cs-pane-stage.is-plot-max .cs-drawer-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.cs-pane-stage.is-plot-max .cs-plot-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+.cs-pane-stage.is-plot-max .cs-chart-outer {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.cs-pane-stage.is-plot-max .cs-chart-bode {
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.cs-pane-stage.is-plot-max .cs-chart-bode .cs-bode-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
 .cs-drawer-body {
     overflow: auto;
     flex: 1 1 auto;
@@ -1260,10 +1777,346 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 .cs-source-drawer {
     display: flex;
     flex-direction: column;
-    flex: 0 0 220px;
-    min-height: 160px;
+    flex: 1 1 38%;
+    min-height: 220px;
+    max-height: 55vh;
     border-top: 1px dashed var(--cs-panel-border);
 }
+.cs-spice-lib-panel {
+    flex: 0 0 auto;
+    max-height: 220px;
+    overflow: auto;
+    padding: 6px 10px 8px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    font-size: 0.76rem;
+    color: var(--cs-muted);
+}
+.cs-spice-lib-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+.cs-spice-lib-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    justify-content: flex-end;
+}
+.cs-spice-lib-title {
+    font-weight: 600;
+    color: #cbd5e1;
+}
+.cs-spice-lib-title code {
+    font-size: 0.72rem;
+}
+.cs-spice-lib-hint {
+    margin: 0 0 8px;
+    line-height: 1.35;
+    font-size: 0.72rem;
+}
+.cs-spice-lib-empty {
+    margin: 0 0 6px;
+    font-style: italic;
+    opacity: 0.85;
+}
+.cs-spice-lib-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 140px) 1fr auto;
+    gap: 8px;
+    align-items: start;
+    margin-bottom: 8px;
+}
+.cs-spice-lib-file,
+.cs-spice-lib-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.cs-spice-lib-file span,
+.cs-spice-lib-body span {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+}
+.cs-spice-lib-file input {
+    width: 100%;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.75rem;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--cs-panel-border);
+    background: rgba(15, 23, 42, 0.6);
+    color: #e2e8f0;
+}
+.cs-spice-lib-body textarea {
+    width: 100%;
+    min-height: 72px;
+    resize: vertical;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid var(--cs-panel-border);
+    background: rgba(15, 23, 42, 0.6);
+    color: #e2e8f0;
+}
+.cs-spice-lib-remove {
+    margin-top: 18px;
+    padding: 6px 8px;
+}
+
+/* ---------- Model library modal (free packs + URL fetch) ---------- */
+.cs-model-lib-root {
+    position: fixed;
+    inset: 0;
+    z-index: 12000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+.cs-model-lib-backdrop {
+    position: absolute;
+    inset: 0;
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: rgba(2, 6, 23, 0.72);
+    cursor: pointer;
+}
+.cs-model-lib-card {
+    position: relative;
+    z-index: 1;
+    width: min(920px, 100%);
+    max-height: min(88vh, 900px);
+    overflow: auto;
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+    padding: 16px 18px 18px;
+}
+.cs-model-lib-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.cs-model-lib-head h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 650;
+    color: #f1f5f9;
+}
+.cs-model-lib-x {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+}
+.cs-model-lib-x:hover {
+    color: #e2e8f0;
+    background: rgba(148, 163, 184, 0.12);
+}
+.cs-model-lib-lead {
+    margin: 0 0 12px;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: #94a3b8;
+}
+.cs-model-lib-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.85);
+    color: #94a3b8;
+}
+.cs-model-lib-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: #e2e8f0;
+    font-size: 0.85rem;
+    outline: none;
+}
+.cs-model-lib-hint-tight {
+    margin: 0 0 10px;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    color: #94a3b8;
+}
+.cs-model-lib-hint-tight code {
+    font-size: 0.72rem;
+}
+.cs-model-lib-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 0.76rem;
+    color: #94a3b8;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
+.cs-model-lib-check code {
+    font-size: 0.72rem;
+}
+.cs-model-lib-err {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fecaca;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+.cs-model-lib-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+@media (max-width: 720px) {
+    .cs-model-lib-body {
+        grid-template-columns: 1fr;
+    }
+}
+.cs-model-lib-col h3 {
+    margin: 0 0 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #cbd5e1;
+}
+.cs-model-lib-h3 {
+    margin-top: 14px;
+}
+.cs-model-lib-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.cs-model-lib-list > li {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.55);
+}
+.cs-model-lib-item-title {
+    font-weight: 600;
+    color: #e2e8f0;
+    font-size: 0.85rem;
+    margin-bottom: 4px;
+}
+.cs-model-lib-item-meta {
+    font-size: 0.72rem;
+    color: #64748b;
+    margin-bottom: 6px;
+}
+.cs-model-lib-item-parts {
+    font-size: 0.72rem;
+    color: #64748b;
+    line-height: 1.35;
+    margin-bottom: 6px;
+}
+.cs-model-lib-item-parts-label {
+    color: #94a3b8;
+    font-weight: 500;
+}
+.cs-model-lib-item-desc {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    line-height: 1.4;
+    margin-bottom: 6px;
+}
+.cs-model-lib-item-license {
+    font-size: 0.72rem;
+    color: #86efac;
+    margin-bottom: 8px;
+}
+.cs-model-lib-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.cs-model-lib-item-actions a.cs-topbtn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.cs-model-lib-empty {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #64748b;
+    font-style: italic;
+}
+.cs-model-lib-col-url .cs-model-lib-hint {
+    margin: 0 0 8px;
+    font-size: 0.76rem;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+.cs-model-lib-url {
+    width: 100%;
+    margin-bottom: 8px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.75rem;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    resize: vertical;
+}
+
+html[data-theme="light"] .cs-model-lib-card {
+    background: #ffffff;
+    border-color: #e2e8f0;
+}
+html[data-theme="light"] .cs-model-lib-head h2 {
+    color: #0f172a;
+}
+html[data-theme="light"] .cs-model-lib-lead,
+html[data-theme="light"] .cs-model-lib-hint-tight,
+html[data-theme="light"] .cs-model-lib-item-desc,
+html[data-theme="light"] .cs-model-lib-col-url .cs-model-lib-hint {
+    color: #475569;
+}
+html[data-theme="light"] .cs-model-lib-item-parts,
+html[data-theme="light"] .cs-model-lib-item-parts-label {
+    color: #64748b;
+}
+html[data-theme="light"] .cs-model-lib-list > li {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+html[data-theme="light"] .cs-model-lib-item-title {
+    color: #0f172a;
+}
+html[data-theme="light"] .cs-model-lib-url {
+    background: #fff;
+    border-color: #cbd5e1;
+    color: #0f172a;
+}
+
 .cs-source-drawer-top {
     display: flex;
     align-items: center;
@@ -1293,6 +2146,9 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
     font-size: 0.78rem !important;
     color: var(--cs-muted) !important;
     line-height: 1.35 !important;
+}
+.cs-inspector-part-note {
+    margin-top: 8px;
 }
 .cs-inspector-header { display: flex; gap: 10px; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--cs-panel-border); }
 .cs-inspector-preview {
@@ -1457,12 +2313,42 @@ html[data-theme="light"] .cs-palette-search input {
     background: #ffffff;
     color: #0f172a;
 }
+html[data-theme="light"] .cs-palette-tile-partno {
+    color: #0f172a;
+}
+html[data-theme="light"] .cs-palette-group-downloaded {
+    border-bottom-color: #e2e8f0;
+}
+html[data-theme="light"] .cs-palette-group-downloaded .cs-palette-group-title {
+    color: #0369a1;
+}
+html[data-theme="light"] .cs-palette-group-downloaded .cs-palette-group-title:hover {
+    color: #0c4a6e;
+}
+html[data-theme="light"] .cs-palette-downloaded-empty strong {
+    color: #475569;
+}
 html[data-theme="light"] .cs-canvas-svg {
     background: #f8fafc;
 }
 html[data-theme="light"] .cs-canvas-toolbar,
 html[data-theme="light"] .cs-drawer {
     background: #ffffff;
+}
+html[data-theme="light"] .cs-drawer-maximize {
+    background: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #334155;
+}
+html[data-theme="light"] .cs-drawer-maximize:hover:not(:disabled) {
+    background: #e0f2fe;
+    border-color: #7dd3fc;
+    color: #0c4a6e;
+}
+html[data-theme="light"] .cs-drawer-maximize.is-on {
+    background: #e0f2fe;
+    border-color: #38bdf8;
+    color: #075985;
 }
 html[data-theme="light"] .cs-inspector-preview {
     background: #f8fafc;
@@ -1718,6 +2604,132 @@ html[data-theme="light"] .cs-prop-popup-btn {
     letter-spacing: 0.1em;
 }
 
+/* Embedded scope in bottom drawer */
+.cs-drawer-body.cs-drawer-scope {
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
+    padding: 0;
+    overflow: hidden;
+}
+.cs-scope-drawer-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--cs-panel-border);
+    font-size: 0.78rem;
+    color: var(--cs-muted);
+    flex: 0 0 auto;
+    background: rgba(15, 23, 42, 0.45);
+}
+.cs-scope-drawer-bar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: #cbd5e1;
+}
+.cs-scope-drawer-select {
+    min-width: 140px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--cs-panel-border);
+    background: rgba(10, 14, 26, 0.85);
+    color: #e2e8f0;
+    font-size: 0.78rem;
+}
+.cs-scope-drawer-spacer {
+    flex: 1 1 auto;
+    min-width: 8px;
+}
+.cs-scope-drawer-hint {
+    font-size: 0.72rem;
+    color: var(--cs-muted);
+    line-height: 1.35;
+    max-width: 220px;
+    text-align: right;
+}
+.cs-scope-embed-wrap {
+    flex: 1 1 auto;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.cs-scope-card.is-embedded {
+    width: 100%;
+    height: 100%;
+    min-height: 200px;
+    max-height: none;
+    flex: 1 1 auto;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    box-shadow: none;
+}
+
+/* ---- AC mode: amplifier / Bode design coach (dismissible) ---- */
+.cs-ac-amp-coach {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin: 0 10px 8px;
+    padding: 10px 36px 10px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    background: linear-gradient(135deg, rgba(8, 51, 68, 0.55) 0%, rgba(15, 23, 42, 0.75) 100%);
+    position: relative;
+    flex-shrink: 0;
+}
+.cs-ac-amp-coach-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: #cbd5e1;
+}
+.cs-ac-amp-coach-text strong { color: #e0f2fe; font-weight: 600; }
+.cs-ac-amp-coach-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 0 auto;
+    align-items: stretch;
+}
+.cs-ac-amp-coach-x {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cs-ac-amp-coach-x:hover {
+    background: rgba(148, 163, 184, 0.12);
+    color: #e2e8f0;
+}
+
+html[data-theme="light"] .cs-ac-amp-coach {
+    border-color: #bae6fd;
+    background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%);
+}
+html[data-theme="light"] .cs-ac-amp-coach-text { color: #334155; }
+html[data-theme="light"] .cs-ac-amp-coach-text strong { color: #0c4a6e; }
+html[data-theme="light"] .cs-ac-amp-coach-x { color: #64748b; }
+html[data-theme="light"] .cs-ac-amp-coach-x:hover { background: #e2e8f0; color: #0f172a; }
+
 /* ---------- Transient settings subbar ---------- */
 .cs-subbar {
     display: flex;
@@ -1797,6 +2809,10 @@ html[data-theme="light"] .cs-prop-popup-btn {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     margin: 0 2px;
 }
+html[data-theme="light"] .cs-workspace-scroll-chrome {
+    border-bottom-color: #e2e8f0;
+}
+
 html[data-theme="light"] .cs-subbar {
     background: #f8fafc;
     border-color: #e2e8f0;

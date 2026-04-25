@@ -91,14 +91,34 @@ export function exportResultsCsv(result, selectedSignals, projectName) {
         ? selectedSignals
         : result.signals.map((s) => s.name);
 
-    const header = [xLabel, ...cols].map(csvEsc).join(',');
+    // For AC sweeps, append a phase column after each selected trace so
+    // spreadsheets get both |V| (linear) and phase (degrees).
+    const colDefs = [];
+    for (const name of cols) {
+        colDefs.push({ header: name, sigName: name, part: 'main' });
+        const sig = sigMap.get(name);
+        if (result.kind === 'ac' && sig?.phase?.length && sig.yMode !== 'noiseV2') {
+            colDefs.push({
+                header: `${name}_phase_deg`,
+                sigName: name,
+                part: 'phase',
+            });
+        }
+    }
+
+    const header = [xLabel, ...colDefs.map((c) => c.header)].map(csvEsc).join(',');
     const rows = [header];
     const N = xs.length;
     for (let i = 0; i < N; i++) {
         const row = [xs[i]];
-        for (const name of cols) {
-            const sig = sigMap.get(name);
-            const v = sig?.y?.[i] ?? sig?.mag?.[i] ?? sig?.phase?.[i] ?? '';
+        for (const c of colDefs) {
+            const sig = sigMap.get(c.sigName);
+            let v;
+            if (c.part === 'phase') {
+                v = sig?.phase?.[i];
+            } else {
+                v = sig?.y?.[i] ?? sig?.mag?.[i] ?? '';
+            }
             row.push(Number.isFinite(v) ? v : '');
         }
         rows.push(row.join(','));

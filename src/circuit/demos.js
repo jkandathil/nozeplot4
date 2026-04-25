@@ -88,6 +88,215 @@ C_gbw vout 0 15.9n
         ],
     },
     {
+        id: 'opamp-inv',
+        title: 'Ideal op-amp — inverting amplifier',
+        tagline: 'Virtual ground at the summing node; closed-loop gain −R_f / R_in.',
+        category: 'Op-amps',
+        netlist: `* Inverting amplifier with the built-in ideal op-amp (O device).
+* Non-inverting input tied to 0 V. Feedback forces V(−) ≈ V(+) = 0.
+* DC: V(vout) = −(R_f/R_in)·V(vin). Here gain = −10 k / 1 k = −10.
+
+V1 vin 0 AC 1 SIN(0 0.05 1k)
+Rin vin nsum 1k
+Rf nsum vout 10k
+O1 0 nsum vout
+
+.op
+.ac dec 20 10 1meg
+.tran 5u 5m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+            ac: ['V(vout)'],
+            op: ['V(vout)', 'V(nsum)'],
+        },
+        tour: [
+            {
+                title: 'Ideal op-amp (O)',
+                body: 'The O device enforces V(+) = V(−) and drives whatever output voltage satisfies that constraint. There is no finite gain or bandwidth here — it is a linear algebra idealization, perfect for learning feedback.',
+            },
+            {
+                title: 'Virtual ground',
+                body: 'The + input is grounded, so the summing node nsum sits at ~0 V. All of V(vin) appears across R_in, so I = V(vin)/R_in flows through R_f, giving V(vout) = −(R_f/R_in)·V(vin).',
+            },
+            {
+                title: 'Run transient',
+                body: 'You should see V(vout) as an inverted, 10× larger sine than V(vin). Switch to AC to confirm flat 20 dB gain until the sweep runs out of band (ideal op-amp has no rolloff in this model).',
+            },
+        ],
+    },
+    {
+        id: 'opamp-noninv',
+        title: 'Ideal op-amp — non-inverting amplifier',
+        tagline: 'Input on +; resistor divider from output to − sets gain 1 + R2/R1.',
+        category: 'Op-amps',
+        netlist: `* Non-inverting amplifier: V(vout) = (1 + R2/R1)·V(vin).
+* The − pin tracks V(vin) on +; divider current sets the output.
+
+V1 vin 0 AC 1 SIN(0 0.05 1k)
+R1 nminus 0 1k
+R2 vout nminus 10k
+O1 vin nminus vout
+
+.op
+.ac dec 20 10 1meg
+.tran 5u 5m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+            ac: ['V(vout)'],
+            op: ['V(vout)', 'V(nminus)'],
+        },
+        tour: [
+            {
+                title: 'Same-phase gain',
+                body: 'Signal enters the + input. The − pin sits at the same voltage (virtual short), so the voltage across R1 is V(vin) and the current through R2 is V(vin)/R1. That gives V(vout) = V(vin) + R2·(V(vin)/R1) = (1 + R2/R1)·V(vin) ≈ 11× here.',
+            },
+            {
+                title: 'High input impedance',
+                body: 'Unlike the inverting topology, the driving source only sees the op-amp’s + terminal (infinite in this ideal model). That is why sensor front-ends often use non-inverting stages first.',
+            },
+            {
+                title: 'Run and compare',
+                body: 'Transient: V(vout) should be in phase with V(vin) and about eleven times larger. DC op-point with V(vin)=0 gives 0 V out; bias V1 with a .dc sweep on a copy if you want a DC transfer curve.',
+            },
+        ],
+    },
+    {
+        id: 'opamp-buffer',
+        title: 'Ideal op-amp — voltage follower',
+        tagline: 'Unity-gain buffer: V(vout) = V(vin); isolates load from source.',
+        category: 'Op-amps',
+        netlist: `* Voltage follower (non-inverting gain of 1).
+* Output tied to − input → op-amp drives until V(−) = V(+).
+
+V1 vin 0 AC 1 SIN(0 0.2 1k)
+O1 vin vout vout
+
+.op
+.ac dec 20 10 1meg
+.tran 2u 5m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+            ac: ['V(vout)'],
+            op: ['V(vout)'],
+        },
+        tour: [
+            {
+                title: 'Why use a buffer?',
+                body: 'A resistive divider or sensor with high Thevenin impedance would sag if you hung a low load on it. The follower presents a very light load at its input and a stiff voltage at its output.',
+            },
+            {
+                title: 'Unity gain',
+                body: 'With − tied to out, the only solution consistent with V(+) = V(−) is V(vout) = V(vin). Run transient — the two traces overlay (gain 0 dB in AC).',
+            },
+        ],
+    },
+    {
+        id: 'amp-stability',
+        title: 'Op-amp stability & compensation (Bode)',
+        tagline: 'Non-inverting gain with finite GBW, load cap, and Miller Cf — tune PM on the Bode plot.',
+        category: 'Op-amps',
+        netlist: `* Non-inverting amplifier + finite GBW op-amp + capacitive load.
+* Cf (Miller / feedback) fights the extra phase lag from Cload so the
+* closed-loop AC response stays well-behaved. Try Parametric sweep on Cf.
+
+Vin vp 0 AC 1 DC 0
+R1 vm 0 10k
+R2 vout vm 90k
+Cf vm vout 6p
+* VCVS ~100k open-loop gain; Rout + Cload create a dominant output pole.
+Eoa vtmp 0 vp vm 100000
+Rout vtmp vout 250
+Cload vout 0 400p
+
+.op
+.ac dec 50 1 50meg
+.tran 2n 3u
+.end`,
+        defaultAnalysis: 'ac',
+        signals: {
+            tran: ['V(vp)', 'V(vout)'],
+            ac: ['V(vout)', 'V(vp)'],
+            op: ['V(vout)', 'V(vm)', 'V(vp)'],
+        },
+        postImport: (doc) => {
+            const cl = doc.components.find((c) => String(c.ref).toLowerCase() === 'cload');
+            if (!cl) return;
+            const pins = componentPins(cl);
+            const tip = pins.find((p) => p.id === 'n1') || pins[0];
+            if (!tip) return;
+            addComponent(doc, 'VP', tip.x, tip.y, 0);
+        },
+        tour: [
+            {
+                title: 'What you are looking at',
+                body: 'This is a 1 + R2/R1 ≈ 10× non-inverting stage. The op-amp is a high-gain VCVS with a 250 Ω output resistor and 400 pF load — that extra pole can make the loop marginal. Cf from the output back toward the inverting node adds phase lead (classic compensation intuition).',
+            },
+            {
+                title: 'Run AC first',
+                body: 'Analysis is already set to AC. Hit Run. Tick V(vout) in the plot (V(vp) is the 0 dB reference). Open Measure under the chart: you will see peak gain, −3 dB bandwidth, unity-gain frequency, phase margin (PM), and gain margin (GM).',
+            },
+            {
+                title: 'Read phase & gain margin',
+                body: 'PM is computed at the first 0 dB crossing of |V(vout)| (SPICE-style small-signal magnitude). GM reports how many dB of gain you have when the phase hits −180° — larger GM usually means a more conservative, slower loop.',
+            },
+            {
+                title: 'Optimize with a sweep',
+                body: 'Enable Parametric sweep, pick target Cf, sweep e.g. 1p → 20p in 2p steps, Run again, and compare overlaid Bodes. More Cf often damps peaking (higher PM) but shrinks bandwidth — the plot + auto-measure make the trade-off visible.',
+            },
+            {
+                title: 'Cross-check in transient',
+                body: 'Switch to Transient and Run: a well-compensated step should settle without long ringing. Remove or shrink Cf to see the opposite — then restore it from the palette or inspector.',
+            },
+        ],
+    },
+    {
+        id: 'opamp-diff',
+        title: 'Ideal op-amp — difference amplifier',
+        tagline: 'Matched resistor bridge: V(vout) ≈ V(vb) − V(va) when ratios match.',
+        category: 'Op-amps',
+        netlist: `* Single-op-amp difference (subtractor) stage.
+* With R1=R2=R3=R4, V(vout) = V(vb) − V(va) (common-mode cancels).
+
+Va va 0 AC 0.5 SIN(0 0.08 1k)
+Vb vb 0 AC -0.5 SIN(0 -0.08 1k)
+R1 va nminus 10k
+R2 nminus vout 10k
+R3 vb nplus 10k
+R4 nplus 0 10k
+O1 nplus nminus vout
+
+.op
+.ac dec 20 10 1meg
+.tran 5u 5m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(va)', 'V(vb)', 'V(vout)'],
+            ac: ['V(vout)'],
+            op: ['V(vout)', 'V(nplus)', 'V(nminus)'],
+        },
+        tour: [
+            {
+                title: 'Matched resistors',
+                body: 'The + input sees a divider from V(vb) to ground; the − input mixes V(va) and V(vout) through R1 and R2. When R3/R4 = R1/R2, common-mode terms cancel and the output tracks the differential input.',
+            },
+            {
+                title: 'Transient',
+                body: 'V(va) and V(vb) are equal sine waves but opposite sign, so V(vb)−V(va) is a sine at twice the single-ended amplitude. V(vout) should follow that difference in phase and magnitude (≈ 0.16 V peak here).',
+            },
+            {
+                title: 'Common-mode experiment',
+                body: 'Edit both sources to the same polarity (+0.08 V sine on each). The output should collapse toward zero — that is common-mode rejection. Mismatch R3 vs R1 by 10 % in the netlist to see CMRR degrade.',
+            },
+        ],
+    },
+    {
         id: 'rc-lp',
         title: 'RC low-pass filter',
         tagline: 'Simplest analog building block. Good warm-up for learning the UI.',
@@ -370,7 +579,7 @@ Q2   c2 bq2 0 QN
     {
         id: 'scope-rc',
         title: 'Oscilloscope: RC pulse response',
-        tagline: 'RC low-pass with a scope clipped to vout. Run → double-click the scope for a live waveform.',
+        tagline: 'RC low-pass with a dual-channel scope on vout (CH1). Run → double-click for the CRT viewer.',
         category: 'Introductory',
         netlist: `* RC low-pass filter with a pulse input, pre-probed with
 * a SCOPE on vout. Run .tran and double-click the scope on
@@ -412,11 +621,11 @@ C1 vout 0 100n
             },
             {
                 title: 'Open the waveform viewer',
-                body: 'Double-click the scope on the canvas — a dedicated CRT-style modal pops up showing just that node\'s waveform. Tick the Live box in the transient subbar before hitting Run for a streaming-replay effect.',
+                body: 'Double-click the scope — a CRT-style modal shows CH1 and CH2 on the same timebase (shared Y autoscale). Tick Live before Run for a streaming-replay effect.',
             },
             {
                 title: 'Move the scope',
-                body: 'Drag the scope by its body — the tip stretches to follow without detaching. Drop the tip on V_in (to the left of R1) to probe the input pulse instead; the modal updates on the next Run.',
+                body: 'Drag the scope by its body — both tips move together. Drop CH1 or CH2 onto different nets; the modal updates on the next Run.',
             },
         ],
     },

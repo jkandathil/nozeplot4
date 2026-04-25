@@ -5,7 +5,7 @@ import {
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
-    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu
+    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu, LayoutGrid
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -318,14 +318,19 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
         });
 
     return (
-        <aside className="sidebar" style={{ 
-            width: isCollapsed ? 60 : sidebarWidth, 
-            minWidth: isCollapsed ? 60 : sidebarWidth,
-            flexShrink: 0,
-            position: 'relative', 
-            overflow: 'hidden',
-            transition: 'width 0.4s cubic-bezier(0.33, 1, 0.68, 1)'
-        }}>
+        <aside
+            className="sidebar"
+            style={{
+                /* Only set width — do NOT set minWidth to the same value: it defeats App.css
+                   max-width: min(45vw, 380px) on narrow viewports (min > max → min wins → rail
+                   overflows and shoves the shell sideways). flexShrink: 0 already prevents flex squeeze. */
+                width: isCollapsed ? 60 : sidebarWidth,
+                flexShrink: 0,
+                position: 'relative',
+                overflow: 'hidden',
+                transition: 'width 0.4s cubic-bezier(0.33, 1, 0.68, 1)',
+            }}
+        >
             {/* Drag Handle */}
             {!isCollapsed && (
                 <div
@@ -390,6 +395,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'codeStudio', title: 'Code Studio — Python & text in Codes folder', Icon: Code2 },
                         { page: 'flowLab', title: 'Flow Lab — 2D gas-path designer & CFD', Icon: Wind },
                         { page: 'circuitStudio', title: 'Circuit Studio — SPICE-style analog simulator', Icon: Cpu },
+                        { page: 'pcbStudio', title: 'PCB Studio — 2-layer layout & Gerber export', Icon: LayoutGrid },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
@@ -596,6 +602,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Circuit Studio — SPICE-style analog circuit simulator (DC, AC, transient)"
                 >
                     <Cpu size={13} /> Circuit Studio
+                </button>
+                <button
+                    onClick={() => onPageChange?.('pcbStudio')}
+                    {...toolBtnProps(activePage === 'pcbStudio', 'rgba(99, 102, 241, 0.2)', '#a5b4fc')}
+                    title="PCB Studio — board outline, footprints, manual route, Gerber + drill ZIP"
+                >
+                    <LayoutGrid size={13} /> PCB Studio
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}

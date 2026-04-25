@@ -118,6 +118,14 @@
   min-width: 0;
 }
 
+/* Persistent lazy-mount shells — must not widen the main column past the flex budget */
+.persistent-page {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
 /* Serial monitor: only the log panel scrolls; keep controls + disconnect reachable */
 .content-area:has(.serial-monitor-root) {
   display: flex;

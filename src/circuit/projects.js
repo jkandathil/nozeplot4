@@ -8,7 +8,7 @@
  *                                      componentCount }
  *   circuitStudio:project:<id>     → full project blob
  *                                    { id, name, doc, analysis,
- *                                      tranOverride, createdAt,
+ *                                      tranOverride, acOverride?, createdAt,
  *                                      updatedAt, selectedSignals? }
  *   circuitStudio:currentProjectId → pointer to the slot the top-bar
  *                                    Save button writes to.
@@ -303,7 +303,13 @@ export function toExportEnvelope(project) {
             doc: project.doc,
             analysis: project.analysis,
             tranOverride: project.tranOverride,
+            acOverride: project.acOverride,
             sweep: project.sweep,
+            monte: project.monte,
+            acNoise: project.acNoise,
+            goalSeek: project.goalSeek,
+            traceMath: project.traceMath,
+            spiceLibs: project.spiceLibs,
             selectedSignals: project.selectedSignals,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,

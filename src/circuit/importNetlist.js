@@ -93,8 +93,12 @@ function pinNodesFor(el) {
  * Returns { doc, nodes, warnings } where `nodes` is the node list
  * from the auto-layout (used by the canvas to draw labels).
  */
-export function importNetlistToDoc(netlistText) {
-    const parsed = parseNetlist(netlistText);
+/**
+ * @param {string} netlistText
+ * @param {{ includeFiles?: Record<string, string> }} [options] — same as {@link parseNetlist}
+ */
+export function importNetlistToDoc(netlistText, options = {}) {
+    const parsed = parseNetlist(netlistText, { includeFiles: options.includeFiles });
     const layout = layoutSchematic(parsed);
 
     const doc = emptyDoc();
@@ -235,6 +239,10 @@ export function importNetlistToDoc(netlistText) {
         }
     }
 
+    // Pin-stamped labels + visual-only wires (see import header). Net
+    // resolution must stay label-authoritative for this doc.
+    doc.meta.labelNetAuthority = true;
+
     return {
         doc,
         width: layout.width,
@@ -252,7 +260,9 @@ function directiveToText(d) {
         case 'dc':   return `.dc ${d.src} ${fv(d.start)} ${fv(d.stop)} ${fv(d.step)}`;
         case 'ac':   return `.ac ${d.mode} ${fv(d.n)} ${fv(d.fStart)} ${fv(d.fStop)}`;
         case 'tran': return `.tran ${fv(d.tstep)} ${fv(d.tstop)}${d.tstart ? ' ' + fv(d.tstart) : ''}${d.uic ? ' UIC' : ''}`;
-        case 'step': return `.step ${d.target} ${fv(d.start)} ${fv(d.stop)} ${fv(d.inc)}`;
+        // Parser stores the increment as `step` (see netlist.js); older
+        // drafts may have used `inc`.
+        case 'step': return `.step ${d.target} ${fv(d.start)} ${fv(d.stop)} ${fv(d.step ?? d.inc)}`;
         case 'model': return d.raw || '.model';
         default: return d.raw || '';
     }

@@ -22,7 +22,7 @@
  *     short:        2-3 char badge shown on palette tile ("R", "Q")
  *     category:     'Passive' | 'Source' | 'Semiconductor' | 'Analog IC' | 'Power' | 'Probe'
  *     description:  hover tooltip, one short sentence
- *     elementType:  solver element letter (R, C, L, V, I, D, Q, M, O, E, G)
+ *     elementType:  solver element letter (R, C, L, V, I, D, Q, M, O, E, G, REG)
  *     symbolKey:    key in SYMBOLS used for rendering
  *     refPrefix:    reference designator prefix ('R', 'C', 'Q', …)
  *     defaultValue: starting value (number, in SI base units — 1e3 = 1k)
@@ -62,6 +62,66 @@ export const CATEGORIES = [
     { id: 'Power',         name: 'Power & ground'     },
     { id: 'Probe',         name: 'Probes & labels'    },
 ];
+
+/** @type {object[]} Session-only parts merged into {@link getPart} (from SPICE library rows). */
+let USER_SESSION_LIBRARY = [];
+
+/** Replace session library extensions (called from CircuitStudio when `spiceLibs` changes). */
+export function setUserLibrarySessionParts(parts) {
+    USER_SESSION_LIBRARY = Array.isArray(parts) ? parts : [];
+}
+
+export function getUserLibrarySessionParts() {
+    return USER_SESSION_LIBRARY;
+}
+
+/**
+ * If a downloaded palette part defines this SPICE model name, return its
+ * `{ name, type, params }` for merging into `doc.userModels`.
+ * @param {string} modelName
+ * @returns {{ name: string, type: string, params: Record<string, number> }|null}
+ */
+export function getContributedUserModelForName(modelName) {
+    if (!modelName) return null;
+    const key = String(modelName).toLowerCase();
+    const part = USER_SESSION_LIBRARY.find(
+        (p) => p.modelRef && String(p.modelRef).toLowerCase() === key,
+    );
+    return part?.contributesUserModel || null;
+}
+
+/** Built-in + doc `userModels` names suitable for the model &lt;select&gt;. */
+export function modelChoicesForElement(elementType, userModels = []) {
+    const all = Object.keys(BUILTIN_MODELS);
+    let builtins;
+    switch (elementType) {
+        case 'D':
+            builtins = all.filter((k) => /^D/i.test(k) && !/^Q/i.test(k));
+            break;
+        case 'Q':
+            builtins = all.filter((k) => /^Q/i.test(k));
+            break;
+        case 'M':
+            builtins = all.filter((k) => /^M/i.test(k));
+            break;
+        default:
+            builtins = all;
+    }
+    const out = [...builtins];
+    const want = (t) => {
+        const u = String(t || '').toUpperCase();
+        if (elementType === 'Q') return u === 'NPN' || u === 'PNP';
+        if (elementType === 'D') return u === 'D';
+        if (elementType === 'M') return u === 'NMOS' || u === 'PMOS';
+        return false;
+    };
+    for (const m of userModels || []) {
+        const n = m?.name;
+        if (!n || !want(m?.type)) continue;
+        if (!out.some((x) => String(x).toLowerCase() === String(n).toLowerCase())) out.push(n);
+    }
+    return out;
+}
 
 export const LIBRARY = [
     // ---------- Passives ----------
@@ -136,7 +196,9 @@ export const LIBRARY = [
         elementType: 'V',
         symbolKey: 'V',
         refPrefix: 'V',
-        sourceSpec: [{ kind: 'dc', v: 5 }],
+        // AC 1 0: harmless for DC/tran; gives a default small-signal input
+        // for .ac sweeps without opening the source editor.
+        sourceSpec: [{ kind: 'dc', v: 5 }, { kind: 'ac', mag: 1, phase: 0 }],
     },
     {
         id: 'V_ac',
@@ -158,7 +220,10 @@ export const LIBRARY = [
         elementType: 'V',
         symbolKey: 'V',
         refPrefix: 'V',
-        sourceSpec: [{ kind: 'sin', vo: 0, va: 1, f: 1e3, td: 0, theta: 0 }],
+        sourceSpec: [
+            { kind: 'sin', vo: 0, va: 1, f: 1e3, td: 0, theta: 0 },
+            { kind: 'ac', mag: 1, phase: 0 },
+        ],
     },
     {
         id: 'V_pulse',
@@ -169,7 +234,10 @@ export const LIBRARY = [
         elementType: 'V',
         symbolKey: 'V',
         refPrefix: 'V',
-        sourceSpec: [{ kind: 'pulse', v1: 0, v2: 5, td: 0, tr: 1e-6, tf: 1e-6, pw: 1e-3, per: 2e-3 }],
+        sourceSpec: [
+            { kind: 'pulse', v1: 0, v2: 5, td: 0, tr: 1e-6, tf: 1e-6, pw: 1e-3, per: 2e-3 },
+            { kind: 'ac', mag: 1, phase: 0 },
+        ],
     },
     {
         id: 'I_dc',
@@ -335,10 +403,12 @@ export const LIBRARY = [
         name: 'Oscilloscope',
         short: 'OSC',
         category: 'Probe',
-        description: 'Clip onto any node. After Run, double-click the scope to pop a live waveform viewer for its attached signal.',
+        description: 'Scope: CH1 (left tip) and optional CH2 (right tip). Set single vs dual channel in properties; double-click after Run for the CRT viewer.',
         elementType: 'SCOPE',
         symbolKey: 'SCOPE',
         refPrefix: 'X',
+        /** Initial value for `scopeChannelMode` on the placed component. */
+        scopeChannelMode: 'dual',
     },
 
     // ---------- Power & ground ----------
@@ -364,11 +434,134 @@ export const LIBRARY = [
         sourceSpec: [{ kind: 'dc', v: 5 }],
         autoGround: true, // emit-netlist injects GND as n2
     },
+
+    // ---------- Linear regulators (ideal fixed Vout) -----------------
+    // Emitted as V(OUT)−V(GND)=nominal; IN pin is schematic-only (no dropout / IQ).
+    {
+        id: 'reg_7805',
+        name: 'LM7805 (+5 V)',
+        short: '7805',
+        category: 'Power',
+        description: 'Positive fixed 5 V (78xx class). Ideal V(OUT)−V(GND)=5 V. IN pin is not in the netlist — wire it to your raw supply for documentation; dropout is not modeled.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 5,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7809',
+        name: 'LM7809 (+9 V)',
+        short: '7809',
+        category: 'Power',
+        description: 'Positive fixed 9 V (78xx). Ideal output vs GND pin; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 9,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7812',
+        name: 'LM7812 (+12 V)',
+        short: '7812',
+        category: 'Power',
+        description: 'Positive fixed 12 V (78xx). Ideal output vs GND pin; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 12,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7815',
+        name: 'LM7815 (+15 V)',
+        short: '7815',
+        category: 'Power',
+        description: 'Positive fixed 15 V (78xx). Ideal output vs GND pin; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 15,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7824',
+        name: 'LM7824 (+24 V)',
+        short: '7824',
+        category: 'Power',
+        description: 'Positive fixed 24 V (78xx). Ideal output vs GND pin; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 24,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7905',
+        name: 'LM7905 (−5 V)',
+        short: '7905',
+        category: 'Power',
+        description: 'Negative fixed −5 V (79xx). Ideal V(OUT)−V(GND)=−5 V. IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7905',
+        refPrefix: 'U',
+        defaultValue: -5,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_7912',
+        name: 'LM7912 (−12 V)',
+        short: '7912',
+        category: 'Power',
+        description: 'Negative fixed −12 V (79xx). Ideal V(OUT)−V(GND)=−12 V. IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7905',
+        refPrefix: 'U',
+        defaultValue: -12,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_1117_33',
+        name: 'AMS1117-3.3 (+3.3 V)',
+        short: '3V3',
+        category: 'Power',
+        description: 'Common LDO, +3.3 V fixed. Ideal V(OUT)−V(GND)=3.3 V; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 3.3,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_1117_50',
+        name: 'AMS1117-5.0 (+5 V)',
+        short: '1117',
+        category: 'Power',
+        description: 'Common LDO, +5 V fixed. Ideal V(OUT)−V(GND)=5 V; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 5,
+        valueUnit: 'V',
+    },
+    {
+        id: 'reg_1117_18',
+        name: 'AMS1117-1.8 (+1.8 V)',
+        short: '1V8',
+        category: 'Power',
+        description: 'Common LDO, +1.8 V fixed. Ideal V(OUT)−V(GND)=1.8 V; IN pin schematic-only.',
+        elementType: 'REG',
+        symbolKey: 'REG7805',
+        refPrefix: 'U',
+        defaultValue: 1.8,
+        valueUnit: 'V',
+    },
 ];
 
 /** Look up a library entry by id. Returns null if not found. */
 export function getPart(id) {
-    return LIBRARY.find((p) => p.id === id) || null;
+    return USER_SESSION_LIBRARY.find((p) => p.id === id) || LIBRARY.find((p) => p.id === id) || null;
 }
 
 /** Library entries grouped by category, in the order declared above. */
@@ -395,4 +588,24 @@ export function searchLibrary(q) {
         || p.description.toLowerCase().includes(needle)
         || p.elementType.toLowerCase() === needle
     );
+}
+
+/**
+ * Search static {@link LIBRARY} plus extra parts (e.g. downloaded models).
+ * Matches part number, SPICE model name, name, short, description, element type.
+ */
+export function searchAllLibraryParts(q, extraParts = []) {
+    const needle = String(q || '').trim().toLowerCase();
+    const merged = [...LIBRARY, ...(extraParts || [])];
+    if (!needle) return merged;
+    return merged.filter((p) => {
+        const pn = String(p.partNumber || '').toLowerCase();
+        const mn = String(p.spiceModelName || p.modelRef || '').toLowerCase();
+        return p.name.toLowerCase().includes(needle)
+            || p.short.toLowerCase().includes(needle)
+            || (p.description && p.description.toLowerCase().includes(needle))
+            || p.elementType.toLowerCase() === needle
+            || (pn && pn.includes(needle))
+            || (mn && mn.includes(needle));
+    });
 }

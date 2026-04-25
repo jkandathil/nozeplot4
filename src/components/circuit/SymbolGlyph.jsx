@@ -36,10 +36,10 @@ export function SymbolGlyph({ symbol, size = 52, partType, partId }) {
 function GroundGlyph({ size = 52 }) {
     return (
         <svg viewBox="-20 -20 40 40" width={size} height={size} style={{ display: 'block' }}>
-            <line x1={0} y1={-16} x2={0} y2={-2} stroke="var(--sch-wire)" strokeWidth={1.8} />
-            <line x1={-12} y1={-2} x2={12} y2={-2} stroke="var(--sch-wire)" strokeWidth={2.2} />
-            <line x1={-8} y1={3} x2={8} y2={3} stroke="var(--sch-wire)" strokeWidth={1.8} />
-            <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-wire)" strokeWidth={1.8} />
+            <line x1={0} y1={-16} x2={0} y2={-2} stroke="var(--sch-stroke)" strokeWidth={1.8} />
+            <line x1={-12} y1={-2} x2={12} y2={-2} stroke="var(--sch-stroke)" strokeWidth={2.2} />
+            <line x1={-8} y1={3} x2={8} y2={3} stroke="var(--sch-stroke)" strokeWidth={1.8} />
+            <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-stroke)" strokeWidth={1.8} />
         </svg>
     );
 }
@@ -47,11 +47,19 @@ function GroundGlyph({ size = 52 }) {
 /** Ground marker rendered directly on the canvas. */
 export function GroundMarker({ x, y, selected }) {
     return (
-        <g transform={`translate(${x}, ${y})`} className={`cs-gnd ${selected ? 'is-selected' : ''}`}>
-            <line x1={0} y1={-10} x2={0} y2={0} stroke="var(--sch-wire)" strokeWidth={1.8} />
-            <line x1={-10} y1={0} x2={10} y2={0} stroke="var(--sch-wire)" strokeWidth={2.2} />
-            <line x1={-7} y1={4} x2={7} y2={4} stroke="var(--sch-wire)" strokeWidth={1.8} />
-            <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-wire)" strokeWidth={1.8} />
+        <g transform={`translate(${x}, ${y})`} className={`cs-gnd cs-comp-GND cs-canvas-comp ${selected ? 'is-selected' : ''}`}>
+            {selected ? (
+                <rect
+                    x={-16} y={-14} width={32} height={38} rx={3} ry={3}
+                    fill="color-mix(in srgb, var(--cs-accent) 12%, transparent)"
+                    stroke="var(--cs-accent)" strokeWidth={2} strokeDasharray="4 3"
+                    pointerEvents="none"
+                />
+            ) : null}
+            <line x1={0} y1={-10} x2={0} y2={0} stroke="var(--sch-stroke)" strokeWidth={1.8} />
+            <line x1={-10} y1={0} x2={10} y2={0} stroke="var(--sch-stroke)" strokeWidth={2.2} />
+            <line x1={-7} y1={4} x2={7} y2={4} stroke="var(--sch-stroke)" strokeWidth={1.8} />
+            <line x1={-4} y1={8} x2={4} y2={8} stroke="var(--sch-stroke)" strokeWidth={1.8} />
             <text x={0} y={22} fontSize={10} textAnchor="middle" fill="var(--sch-gnd-label)">GND</text>
         </g>
     );
