@@ -51,60 +51,6 @@ function fpLocalToWorld(pl, lx, ly) {
   return [x + pl.x, y + pl.y];
 }
 
-/** Liang–Barsky: returns [t0,t1] ⊂ [0,1] where segment lies inside axis-aligned rect, or null if disjoint. */
-function clipSegmentToAabbT(x0, y0, x1, y1, xmin, ymin, xmax, ymax) {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  let t0 = 0;
-  let t1 = 1;
-  const edge = (p, q) => {
-    if (Math.abs(p) < 1e-12) return q >= 0;
-    const r = q / p;
-    if (p < 0) {
-      if (r > t1) return false;
-      if (r > t0) t0 = r;
-    } else {
-      if (r < t0) return false;
-      if (r < t1) t1 = r;
-    }
-    return true;
-  };
-  if (!edge(-dx, x0 - xmin)) return null;
-  if (!edge(dx, xmax - x0)) return null;
-  if (!edge(-dy, y0 - ymin)) return null;
-  if (!edge(dy, ymax - y0)) return null;
-  if (t1 < t0) return null;
-  return [t0, t1];
-}
-
-/** Sub-segments of (p0→p1) that lie strictly outside the closed AABB (0–2 pieces). */
-function segmentPiecesOutsideAabb(x0, y0, x1, y1, xmin, ymin, xmax, ymax) {
-  const inside = clipSegmentToAabbT(x0, y0, x1, y1, xmin, ymin, xmax, ymax);
-  if (inside == null) return [[[x0, y0], [x1, y1]]];
-  const [ta, tb] = inside;
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const at = (t) => [x0 + t * dx, y0 + t * dy];
-  const out = [];
-  if (ta > 1e-5) out.push([[x0, y0], at(ta)]);
-  if (tb < 1 - 1e-5) out.push([at(tb), [x1, y1]]);
-  return out;
-}
-
-function mergeSegmentPiecesThroughAabbs(p0, p1, aabbs) {
-  let pieces = [[p0, p1]];
-  for (const bb of aabbs) {
-    const next = [];
-    for (const seg of pieces) {
-      const [[x0, y0], [x1, y1]] = seg;
-      next.push(...segmentPiecesOutsideAabb(x0, y0, x1, y1, bb.minX, bb.minY, bb.maxX, bb.maxY));
-    }
-    pieces = next;
-    if (!pieces.length) break;
-  }
-  return pieces;
-}
-
 function hexToRgba(hex, alpha) {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -152,27 +98,28 @@ function footprintBBox(pl) {
  * that looks like tiny copper slivers near pads/traces (not grid-related). Avoid
  * redundant overlapping holes (e.g. courtyard already covers per-pad rects).
  */
-/**
- * Add a CCW (counter-clockwise) rotated rectangle sub-path for even-odd cutout.
- * cx,cy = center; hw,hh = half-width/half-height; angleDeg = rotation.
- */
-function addCcwRect(ctx, cx, cy, hw, hh, angleDeg) {
-  const a = ((angleDeg || 0) * Math.PI) / 180;
-  const cos = Math.cos(a);
-  const sin = Math.sin(a);
-  // 4 corners of the rectangle, rotated
-  const corners = [
-    [-hw, -hh],
-    [-hw,  hh],
-    [ hw,  hh],
-    [ hw, -hh],
-  ]; // CCW winding order
-  const world = corners.map(([lx, ly]) => [
-    cx + lx * cos - ly * sin,
-    cy + lx * sin + ly * cos,
-  ]);
-  ctx.moveTo(world[0][0], world[0][1]);
-  for (let i = 1; i < 4; i++) ctx.lineTo(world[i][0], world[i][1]);
+/** CCW rounded rect in **world mm** (even-odd hole). `rad` capped by half-sides. */
+function addCcwRoundRectAabbHole(ctx, minX, minY, maxX, maxY, rad) {
+  const w = maxX - minX;
+  const h = maxY - minY;
+  const r = Math.min(Math.max(0, rad), w / 2, h / 2);
+  if (r <= 0) {
+    ctx.moveTo(minX, minY);
+    ctx.lineTo(minX, maxY);
+    ctx.lineTo(maxX, maxY);
+    ctx.lineTo(maxX, minY);
+    ctx.closePath();
+    return;
+  }
+  ctx.moveTo(minX + r, minY);
+  ctx.lineTo(maxX - r, minY);
+  ctx.arc(maxX - r, minY + r, r, -Math.PI / 2, 0, true);
+  ctx.lineTo(maxX, maxY - r);
+  ctx.arc(maxX - r, maxY - r, r, 0, Math.PI / 2, true);
+  ctx.lineTo(minX + r, maxY);
+  ctx.arc(minX + r, maxY - r, r, Math.PI / 2, Math.PI, true);
+  ctx.lineTo(minX, minY + r);
+  ctx.arc(minX + r, minY + r, r, Math.PI, (3 * Math.PI) / 2, true);
   ctx.closePath();
 }
 
@@ -195,18 +142,32 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
 
   ctx.save();
 
-  // Build a single path: outer polygon (CW) + clearance cutouts (CCW) for even-odd fill
-  ctx.beginPath();
+  const boardW = Number(doc.meta?.boardWmm) || 80;
+  const boardH = Number(doc.meta?.boardHmm) || 50;
+  const trf = ctx.getTransform();
+  const pxPerMm = Math.hypot(trf.a, trf.c) || 1;
+  const density = Math.min(10, Math.max(3, pxPerMm));
+  const pw = Math.min(4096, Math.ceil(boardW * density));
+  const ph = Math.min(4096, Math.ceil(boardH * density));
 
-  // Outer polygon — clockwise
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.closePath();
+  let osc;
+  try {
+    osc = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(pw, ph)
+      : Object.assign(document.createElement('canvas'), { width: pw, height: ph });
+  } catch {
+    osc = Object.assign(document.createElement('canvas'), { width: pw, height: ph });
+  }
+  const ox = osc.getContext('2d', { alpha: true });
+  ox.setTransform(density, 0, 0, density, 0, 0);
+  ox.clearRect(0, 0, boardW, boardH);
 
-  // Courtyard: one merged axis-aligned (footprint-local) hole per part that has
-  // any non-GND pad — no per-pad holes here (overlapping holes + even-odd = copper
-  // bleeding back). Track clearance quads must not overlap that same hole; we clip
-  // segments to the exterior of each courtyard world AABB before adding track cutouts.
+  // ── Offscreen: outer (CW) + courtyard (rounded world AABB) + vias (CCW), even-odd
+  ox.beginPath();
+  ox.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ox.lineTo(pts[i][0], pts[i][1]);
+  ox.closePath();
+
   const courtyardAABBs = [];
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
@@ -232,8 +193,6 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
       const cyL = (minLy + maxLy) / 2;
       const chw = (maxLx - minLx) / 2 + totalClear;
       const chh = (maxLy - minLy) / 2 + totalClear;
-      const [wcx, wcy] = padWorld(pl, { x: cxL, y: cyL });
-      addCcwRect(ctx, wcx, wcy, chw, chh, Number(pl.rot) || 0);
 
       const corners = [
         [cxL - chw, cyL - chh],
@@ -250,11 +209,12 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
         maxWY = Math.max(maxWY, wy);
       }
       courtyardAABBs.push({ minX: minWX, maxX: maxWX, minY: minWY, maxY: maxWY });
+      const span = Math.min(maxWX - minWX, maxWY - minWY);
+      const cornerRad = Math.min(0.55, Math.max(0.12, 0.22 * span));
+      addCcwRoundRectAabbHole(ox, minWX, minWY, maxWX, maxWY, cornerRad);
     }
   }
 
-  // Cutout: non-GND vias (skip if center lies inside a courtyard AABB — avoids
-  // even-odd overlap between via circle and courtyard rect.)
   for (const v of doc.vias || []) {
     if (!isNonGndNet(v.net)) continue;
     const insideCourtyard = courtyardAABBs.some(
@@ -262,12 +222,18 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     );
     if (insideCourtyard) continue;
     const ro = (Number(v.diamMm) || 0.8) / 2 + clearMm;
-    ctx.moveTo(v.x + ro, v.y);
-    ctx.arc(v.x, v.y, ro, 0, Math.PI * 2, true); // CCW
+    ox.moveTo(v.x + ro, v.y);
+    ox.arc(v.x, v.y, ro, 0, Math.PI * 2, true);
   }
 
-  // Cutout: non-GND tracks — quads only on portions **outside** courtyard AABBs so
-  // track holes never overlap courtyard holes (even-odd would refill copper there).
+  ox.fillStyle = layerColor.startsWith('#') && layerColor.length >= 7 ? layerColor : '#ef4444';
+  ox.fill('evenodd');
+
+  // Carve signal tracks with round joins (fixes outer-corner clearance vs even-odd quads)
+  ox.globalCompositeOperation = 'destination-out';
+  ox.lineCap = 'round';
+  ox.lineJoin = 'round';
+  ox.strokeStyle = '#000';
   for (const tr of doc.tracks || []) {
     if (tr.layer !== ly) continue;
     if (!isNonGndNet(tr.net)) continue;
@@ -275,32 +241,28 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     if (tpts.length < 2) continue;
     const tw = Number(tr.widthMm) || 0.35;
     const halfW = tw / 2 + clearMm;
-
-    for (let i = 0; i < tpts.length - 1; i++) {
-      const [sx0, sy0] = tpts[i];
-      const [sx1, sy1] = tpts[i + 1];
-      const subsegs = mergeSegmentPiecesThroughAabbs([sx0, sy0], [sx1, sy1], courtyardAABBs);
-      for (const [[x0, y0], [x1, y1]] of subsegs) {
-        const dx = x1 - x0;
-        const dy = y1 - y0;
-        const len = Math.hypot(dx, dy);
-        if (len < 0.001) continue;
-        const nx = -dy / len * halfW;
-        const ny = dx / len * halfW;
-
-        ctx.moveTo(x0 + nx, y0 + ny);
-        ctx.lineTo(x0 - nx, y0 - ny);
-        ctx.lineTo(x1 - nx, y1 - ny);
-        ctx.lineTo(x1 + nx, y1 + ny);
-        ctx.closePath();
-      }
-    }
+    ox.lineWidth = 2 * halfW;
+    ox.beginPath();
+    ox.moveTo(tpts[0][0], tpts[0][1]);
+    for (let i = 1; i < tpts.length; i++) ox.lineTo(tpts[i][0], tpts[i][1]);
+    ox.stroke();
   }
+  ox.globalCompositeOperation = 'source-over';
 
-  // Fill with even-odd: outer polygon fills, cutouts become holes
   const fillAlpha = isSel ? 0.7 : Math.max(0.5, polyFill * 2.0);
-  ctx.fillStyle = hexToRgba(layerColor, fillAlpha);
-  ctx.fill('evenodd');
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.clip();
+  const prevSmooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = fillAlpha;
+  ctx.drawImage(osc, 0, 0, pw, ph, 0, 0, boardW, boardH);
+  ctx.imageSmoothingEnabled = prevSmooth;
+  ctx.globalAlpha = 1;
+  ctx.restore();
 
   // Outline stroke
   ctx.beginPath();
