@@ -342,6 +342,138 @@ export function runDRC(doc, getFootprint, options = {}) {
   return deduplicateViolations(violations);
 }
 
+/**
+ * Copper clearance violations if `track` were merged into `doc` (track must not already be in doc.tracks).
+ * Same rules as runDRC track↔track / track↔pad on the track's layer.
+ * @returns {Array<{ type: string, severity: string, message: string, x: number, y: number }>}
+ */
+export function getCopperViolationsForProposedTrack(doc, getFootprint, track) {
+  const violations = [];
+  if (!track?.layer || !track.points || track.points.length < 2) return violations;
+  const dr = doc?.meta?.designRules || {};
+  const minClearance = Number(dr.minCopperClearanceMm) > 0 ? Number(dr.minCopperClearanceMm) : 0.2;
+  const spatialIdx = buildDrcIndex(doc, getFootprint);
+  const t1 = track;
+  const pts1 = t1.points;
+  const hw1 = (t1.widthMm || 0.35) / 2;
+
+  for (let s1 = 0; s1 < pts1.length - 1; s1++) {
+    const seg1 = [pts1[s1], pts1[s1 + 1]];
+    const minX = Math.min(seg1[0][0], seg1[1][0]) - hw1 - minClearance - 1;
+    const minY = Math.min(seg1[0][1], seg1[1][1]) - hw1 - minClearance - 1;
+    const maxX = Math.max(seg1[0][0], seg1[1][0]) + hw1 + minClearance + 1;
+    const maxY = Math.max(seg1[0][1], seg1[1][1]) + hw1 + minClearance + 1;
+
+    const nearby = spatialIdx.query(minX, minY, maxX, maxY);
+    for (const item of nearby) {
+      if (item.kind !== 'track_seg') continue;
+      if (item.layer !== t1.layer) continue;
+      if (item.net && t1.net && item.net === t1.net) continue;
+
+      const dist = segmentsDistance(seg1[0], seg1[1], item.seg[0], item.seg[1]);
+      const requiredClearance = hw1 + item.hw + minClearance;
+      const shareEndpoint =
+        dist2(seg1[0], item.seg[0]) < 0.001 || dist2(seg1[0], item.seg[1]) < 0.001 ||
+        dist2(seg1[1], item.seg[0]) < 0.001 || dist2(seg1[1], item.seg[1]) < 0.001;
+      if (shareEndpoint) continue;
+
+      if (dist < requiredClearance) {
+        violations.push({
+          type: 'track_clearance',
+          severity: 'error',
+          message: `Too close to another track on ${t1.layer} (${dist.toFixed(3)} mm < ${requiredClearance.toFixed(3)} mm). Widen spacing or assign the same net if this is intentional.`,
+          x: (seg1[0][0] + seg1[1][0] + item.seg[0][0] + item.seg[1][0]) / 4,
+          y: (seg1[0][1] + seg1[1][1] + item.seg[0][1] + item.seg[1][1]) / 4,
+        });
+      }
+    }
+  }
+
+  const pts = t1.points || [];
+  const hw = (t1.widthMm || 0.35) / 2;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const seg = [pts[i], pts[i + 1]];
+    const minX = Math.min(seg[0][0], seg[1][0]) - hw - minClearance - 2;
+    const minY = Math.min(seg[0][1], seg[1][1]) - hw - minClearance - 2;
+    const maxX = Math.max(seg[0][0], seg[1][0]) + hw + minClearance + 2;
+    const maxY = Math.max(seg[0][1], seg[1][1]) + hw + minClearance + 2;
+
+    for (const item of spatialIdx.query(minX, minY, maxX, maxY)) {
+      if (item.kind !== 'pad') continue;
+      if (item.net && t1.net && item.net === t1.net) continue;
+
+      const dist = distToSegment([item.x, item.y], seg[0], seg[1]);
+      const requiredClearance = hw + item.r + minClearance;
+      const onPad = dist2(pts[i], [item.x, item.y]) < 0.01 || dist2(pts[i + 1], [item.x, item.y]) < 0.01;
+      if (onPad) continue;
+
+      if (dist < requiredClearance) {
+        violations.push({
+          type: 'pad_clearance',
+          severity: 'error',
+          message: `Too close to pad ${item.ref}:${item.padNum} (${dist.toFixed(3)} mm).`,
+          x: item.x,
+          y: item.y,
+        });
+      }
+    }
+  }
+
+  return deduplicateViolations(violations);
+}
+
+/**
+ * Copper violations if `via` were added to `doc` (via must not already be in doc.vias).
+ * Uses the same via↔track and via↔via rules as runDRC.
+ */
+export function getCopperViolationsForProposedVia(doc, getFootprint, via) {
+  const violations = [];
+  if (via == null || !Number.isFinite(via.x) || !Number.isFinite(via.y)) return violations;
+  const dr = doc?.meta?.designRules || {};
+  const minClearance = Number(dr.minCopperClearanceMm) > 0 ? Number(dr.minCopperClearanceMm) : 0.2;
+  const spatialIdx = buildDrcIndex(doc, getFootprint);
+  const v = via;
+  const vr = (Number(v.diamMm) || 0.8) / 2;
+  const nearby = spatialIdx.query(v.x - vr - minClearance - 2, v.y - vr - minClearance - 2,
+    v.x + vr + minClearance + 2, v.y + vr + minClearance + 2);
+  for (const item of nearby) {
+    if (item.kind === 'track_seg') {
+      if (item.net && v.net && item.net === v.net) continue;
+      const dist = distToSegment([v.x, v.y], item.seg[0], item.seg[1]);
+      const requiredClearance = vr + item.hw + minClearance;
+      if (dist < requiredClearance) {
+        violations.push({
+          type: 'via_track_clearance',
+          severity: 'error',
+          message: `Via too close to a track on ${item.layer} (${dist.toFixed(3)} mm).`,
+          x: v.x,
+          y: v.y,
+        });
+      }
+    }
+  }
+
+  const vias = doc.vias || [];
+  for (let j = 0; j < vias.length; j++) {
+    const b = vias[j];
+    if (v.net && b.net && v.net === b.net) continue;
+    const dist = Math.hypot(v.x - b.x, v.y - b.y);
+    const ra = vr;
+    const rb = (Number(b.diamMm) || 0.8) / 2;
+    const req = ra + rb + minClearance;
+    if (dist < req) {
+      violations.push({
+        type: 'via_clearance',
+        severity: 'error',
+        message: `Via too close to another via (${dist.toFixed(3)} mm < ${req.toFixed(3)} mm).`,
+        x: (v.x + b.x) / 2,
+        y: (v.y + b.y) / 2,
+      });
+    }
+  }
+  return deduplicateViolations(violations);
+}
+
 function deduplicateViolations(violations) {
   const result = [];
   for (const v of violations) {

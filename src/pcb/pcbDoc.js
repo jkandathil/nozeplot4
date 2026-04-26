@@ -1,6 +1,7 @@
 /**
  * PCB document model for PCB Studio — up to 8 copper layers (signal + plane routing).
- * Stack order top → bottom: F.Cu, In1…In6, B.Cu (matches common 8-layer naming).
+ * Stack order top → bottom: F.Cu, In1…In6, B.Cu (KiCad-style ids).
+ * For a 4-layer board, In1.Cu / In2.Cu are presented as GND / VCC in the UI.
  */
 
 export const PCB_LAYERS = [
@@ -45,12 +46,41 @@ export function isCopperLayerVisible(doc, layerId) {
 
 /**
  * @param {object} doc
- * @returns {string[]} Active copper layer ids for this board (length = meta.copperLayerCount or 2).
+ * @returns {string[]} Active copper layer ids for this board (length = meta.copperLayerCount or 4 if unset/invalid).
  */
 export function activeCopperLayerIds(doc) {
     const n = Number(doc?.meta?.copperLayerCount);
-    const count = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 2;
+    const count = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
     return COPPER_LAYERS.slice(0, count);
+}
+
+/**
+ * User-facing copper name (editor labels). Canonical ids stay F.Cu / In1.Cu / … for export.
+ * @param {string} layerId
+ * @param {number} [copperLayerCount] active stack size (2, 4, 6, or 8)
+ */
+export function getCopperLayerDisplayName(layerId, copperLayerCount) {
+    const n = Number(copperLayerCount);
+    const count = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
+    const stack = COPPER_LAYERS.slice(0, count);
+    if (!stack.includes(layerId)) {
+        return String(layerId).replace(/\.Cu$/, '');
+    }
+    if (count === 2) {
+        if (layerId === 'F.Cu') return 'Top Cu';
+        if (layerId === 'B.Cu') return 'Bottom Cu';
+    }
+    if (count === 4) {
+        if (layerId === 'F.Cu') return 'Top Cu';
+        if (layerId === 'In1.Cu') return 'GND';
+        if (layerId === 'In2.Cu') return 'VCC';
+        if (layerId === 'B.Cu') return 'Bottom Cu';
+    }
+    if (layerId === 'F.Cu') return 'Top Cu';
+    if (layerId === 'B.Cu') return 'Bottom Cu';
+    const m = /^In(\d+)\.Cu$/.exec(layerId);
+    const inn = m ? Number(m[1]) : 1;
+    return `Inner ${inn}`;
 }
 
 /**
@@ -62,7 +92,7 @@ export function migratePcbDoc(doc) {
     const next = JSON.parse(JSON.stringify(doc));
     next.meta = next.meta || {};
     const n = Number(next.meta.copperLayerCount);
-    next.meta.copperLayerCount = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 2;
+    next.meta.copperLayerCount = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
     const allowed = new Set(activeCopperLayerIds(next));
     next.placements = Array.isArray(next.placements) ? next.placements : [];
     next.tracks = (Array.isArray(next.tracks) ? next.tracks : [])
@@ -100,7 +130,7 @@ export function emptyPcbDoc() {
             name: 'Untitled board',
             boardWmm: 80,
             boardHmm: 50,
-            copperLayerCount: 2,
+            copperLayerCount: 4,
             defaultTrackMm: 0.35,
             defaultViaDrillMm: 0.4,
             defaultViaDiamMm: 0.8,

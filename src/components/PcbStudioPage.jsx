@@ -48,6 +48,7 @@ import {
     parsePcbDocJson,
     activeCopperLayerIds,
     COPPER_LAYER_COUNT_OPTIONS,
+    getCopperLayerDisplayName,
     PCB_GRID_PRESETS_MM,
     isCopperLayerVisible,
 } from '../pcb/pcbDoc.js';
@@ -72,9 +73,19 @@ import {
 import { getFootprint, listFootprintSummaries, searchFootprints } from '../pcb/footprintLib.js';
 import { buildPcbFabricationZip, triggerBlobDownload } from '../pcb/gerberZip.js';
 import { exportPcbDocToKicadPcb } from '../pcb/kicadPcbExport.js';
-import { runDRC } from '../pcb/pcbDrc.js';
+import {
+    runDRC,
+    getCopperViolationsForProposedTrack,
+    getCopperViolationsForProposedVia,
+} from '../pcb/pcbDrc.js';
 import { autoRoute } from '../pcb/autoRouter.js';
-import { renderPcbCanvas, canvasToBoard, boardToCanvas, PCB_LAYER_COLORS } from '../pcb/canvasRenderer.js';
+import {
+    renderPcbCanvas,
+    canvasToBoard,
+    boardToCanvas,
+    PCB_LAYER_COLORS,
+    PCB_TRACE_LAYER_COLORS,
+} from '../pcb/canvasRenderer.js';
 import { createUndoManager } from '../pcb/undoManager.js';
 import { generateBomCsv, generatePickAndPlaceCsv, generateIpcD356, downloadTextFile } from '../pcb/bomExport.js';
 import OnlineComponentModal from './OnlineComponentModal.jsx';
@@ -667,7 +678,6 @@ function PcbStudioPage({ onBackToSchematic }) {
     /* ── Commit / cancel route draft ── */
     const commitRouteDraft = useCallback(() => {
         if (!routeDraft || routeDraft.length < 2) { setRouteDraft(null); return; }
-        undoMgrRef.current.push(doc);
         const newTrack = {
             id: newId('tr'),
             layer: activeLayer,
@@ -675,6 +685,13 @@ function PcbStudioPage({ onBackToSchematic }) {
             net: routeNetRef.current || '',
             points: routeDraft,
         };
+        const bad = getCopperViolationsForProposedTrack(doc, getFootprint, newTrack);
+        if (bad.length) {
+            const extra = bad.length > 1 ? ` (+${bad.length - 1} more)` : '';
+            window.alert(`${bad[0].message}${extra}\n\nAdjust the path or increase clearance in Design rules (sidebar).`);
+            return;
+        }
+        undoMgrRef.current.push(doc);
         setDoc((d) => ({ ...d, tracks: [...(d.tracks || []), newTrack] }));
         setRouteDraft(null);
     }, [routeDraft, doc, activeLayer]);
@@ -702,8 +719,6 @@ function PcbStudioPage({ onBackToSchematic }) {
         const dir = reverse ? -1 : 1;
         const targetLayer = stack[(curIdx + dir + stack.length) % stack.length];
 
-        undoMgrRef.current.push(doc);
-
         // If routing, commit current segment up to the via point, add via, start new draft on other layer
         if (routeDraft && routeDraft.length >= 1) {
             const draftWithVia = [...routeDraft, pt];
@@ -723,6 +738,20 @@ function PcbStudioPage({ onBackToSchematic }) {
                 diamMm: doc.meta?.defaultViaDiamMm || 0.8,
                 net,
             };
+            const trBad = getCopperViolationsForProposedTrack(doc, getFootprint, newTrack);
+            if (trBad.length) {
+                const extra = trBad.length > 1 ? ` (+${trBad.length - 1} more)` : '';
+                window.alert(`${trBad[0].message}${extra}`);
+                return;
+            }
+            const docWithTrack = { ...doc, tracks: [...(doc.tracks || []), newTrack] };
+            const viaBad = getCopperViolationsForProposedVia(docWithTrack, getFootprint, newVia);
+            if (viaBad.length) {
+                const extra = viaBad.length > 1 ? ` (+${viaBad.length - 1} more)` : '';
+                window.alert(`${viaBad[0].message}${extra}`);
+                return;
+            }
+            undoMgrRef.current.push(doc);
             setDoc((d) => ({
                 ...d,
                 tracks: [...(d.tracks || []), newTrack],
@@ -740,6 +769,13 @@ function PcbStudioPage({ onBackToSchematic }) {
                 diamMm: doc.meta?.defaultViaDiamMm || 0.8,
                 net,
             };
+            const soloBad = getCopperViolationsForProposedVia(doc, getFootprint, newVia);
+            if (soloBad.length) {
+                const extra = soloBad.length > 1 ? ` (+${soloBad.length - 1} more)` : '';
+                window.alert(`${soloBad[0].message}${extra}`);
+                return;
+            }
+            undoMgrRef.current.push(doc);
             setDoc((d) => ({ ...d, vias: [...(d.vias || []), newVia] }));
         }
         setActiveLayer(targetLayer);
@@ -999,6 +1035,20 @@ function PcbStudioPage({ onBackToSchematic }) {
                 routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackEndpointNet(doc, mx, my) || '';
                 setRouteDraft([spt]);
             } else {
+                const last = routeDraft[routeDraft.length - 1];
+                const segTrack = {
+                    id: '__draft_seg__',
+                    layer: activeLayer,
+                    widthMm: doc.meta?.defaultTrackMm || 0.35,
+                    net: routeNetRef.current || '',
+                    points: [last, spt],
+                };
+                const segBad = getCopperViolationsForProposedTrack(doc, getFootprint, segTrack);
+                if (segBad.length) {
+                    const extra = segBad.length > 1 ? ` (+${segBad.length - 1} more)` : '';
+                    window.alert(`${segBad[0].message}${extra}`);
+                    return;
+                }
                 setRouteDraft([...routeDraft, spt]);
             }
             return;
@@ -1031,7 +1081,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                 }
             }
         }
-    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint]);
+    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint, activeLayer]);
 
     /* ── Double-click: commit route/polygon ── */
     const onCanvasDoubleClick = useCallback((ev) => {
@@ -1317,10 +1367,30 @@ function PcbStudioPage({ onBackToSchematic }) {
             <div className="pcb-workspace">
                 <aside className="pcb-sidebar">
                     <h2>Copper Layers</h2>
+                    <label className="pcb-field-col pcb-layer-stack-field">
+                        Copper stack depth
+                        <select
+                            className="pcb-layer-stack-select"
+                            value={copperStack.length}
+                            onChange={(e) => {
+                                const nn = Number(e.target.value);
+                                if (!COPPER_LAYER_COUNT_OPTIONS.includes(nn)) return;
+                                setDoc((d) => ({ ...d, meta: { ...d.meta, copperLayerCount: nn } }));
+                            }}
+                            title="KiCad-style layer ids: F.Cu, In1…In6, B.Cu. Four layers = Top Cu, GND, VCC, Bottom Cu."
+                        >
+                            {COPPER_LAYER_COUNT_OPTIONS.map((n) => (
+                                <option key={n} value={n}>
+                                    {n} layers{n === 4 ? ' — Top / GND / VCC / Bottom' : n === 2 ? ' — Top / Bottom' : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                     <p className="pcb-dr-hint">
                         <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points. <strong>Nets:</strong> start on a pad (footprint pad nets from the schematic flow) or on an <strong>existing track end</strong> to inherit that net; otherwise the trace has no net until you type one in the sidebar after selecting the track.
-                        <strong> Change layer mid-route:</strong> move the cursor to the via location and press <kbd>V</kbd> or top bar <strong>Via layer</strong> — the current polyline is committed to that point, a via is added, the <strong>next</strong> copper layer in the stack is selected (wraps F→…→B), and routing continues from the via.
+                        <strong> Change layer mid-route:</strong> move the cursor to the via location and press <kbd>V</kbd> or top bar <strong>Via layer</strong> — the current polyline is committed to that point, a via is added, the <strong>next</strong> layer in the stack is selected (wraps top → … → bottom), and routing continues from the via.
                         <strong> Shift+V</strong> selects the <strong>previous</strong> layer instead. Finish with <kbd>Enter</kbd>, double-click, or right-click. Layer chips are disabled while a route is in progress — use <strong>Via layer</strong> only.
+                        <strong> Clearance:</strong> each new segment is checked against other nets (tracks / pads / vias) using <strong>Design rules → min copper clearance</strong>; illegal clicks are blocked to reduce accidental shorts.
                     </p>
                     <div className="pcb-layer-chips">
                         {copperStack.map((ly) => {
@@ -1330,6 +1400,11 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     key={ly}
                                     type="button"
                                     className={`pcb-layer-chip${activeLayer === ly ? ' is-active' : ''}`}
+                                    style={{
+                                        borderLeftWidth: 3,
+                                        borderLeftStyle: 'solid',
+                                        borderLeftColor: PCB_TRACE_LAYER_COLORS[ly] || PCB_LAYER_COLORS[ly] || '#64748b',
+                                    }}
                                     disabled={routing}
                                     onClick={() => {
                                         if (routing) return;
@@ -1338,13 +1413,36 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     title={
                                         routing
                                             ? 'While routing, use Via layer (V) to change copper — places a via and switches layer'
-                                            : 'Active layer for new tracks (use Via layer / V mid-route to hop layers with a via)'
+                                            : `${getCopperLayerDisplayName(ly, copperStack.length)} (${ly}) — active for new tracks; V mid-route hops layers`
                                     }
                                 >
-                                    {ly.replace('.Cu', '')}
+                                    {getCopperLayerDisplayName(ly, copperStack.length)}
                                 </button>
                             );
                         })}
+                    </div>
+                    <div className="pcb-layer-color-legend" aria-label="Trace color by copper layer">
+                        <span className="pcb-layer-color-legend-title">Trace color by layer (canvas)</span>
+                        <div className="pcb-layer-color-legend-items">
+                            {copperStack.map((ly) => (
+                                <span
+                                    key={ly}
+                                    className={`pcb-layer-legend-item${activeLayer === ly ? ' is-active' : ''}`}
+                                    title={`${getCopperLayerDisplayName(ly, copperStack.length)} (${ly})`}
+                                >
+                                    <span
+                                        className="pcb-layer-legend-swatch"
+                                        style={{
+                                            background: PCB_TRACE_LAYER_COLORS[ly] || PCB_LAYER_COLORS[ly] || '#64748b',
+                                        }}
+                                    />
+                                    <span>{getCopperLayerDisplayName(ly, copperStack.length)}</span>
+                                </span>
+                            ))}
+                        </div>
+                        <p className="pcb-layer-legend-note">
+                            Default <strong>4 layers</strong>: Top Cu → GND → VCC → Bottom Cu (file ids F.Cu, In1.Cu, In2.Cu, B.Cu). After <kbd>V</kbd>, the next segment uses the next layer color. Vias show concentric rings (outer = top copper).
+                        </p>
                     </div>
                     <div className="pcb-layer-visibility" role="group" aria-label="Copper layer visibility">
                         <span className="pcb-layer-visibility-label">Show on canvas</span>
@@ -1362,10 +1460,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                                         disabled={disableHide}
                                         title={
                                             locked
-                                                ? `${ly} is locked`
+                                                ? `${getCopperLayerDisplayName(ly, copperStack.length)} is locked`
                                                 : disableHide
                                                   ? 'At least one copper layer must stay visible'
-                                                  : `${on ? 'Hide' : 'Show'} ${ly} on canvas`
+                                                  : `${on ? 'Hide' : 'Show'} ${getCopperLayerDisplayName(ly, copperStack.length)} (${ly})`
                                         }
                                         onClick={() => {
                                             if (locked) {
@@ -1384,7 +1482,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                                         ) : (
                                             on ? <Eye size={13} /> : <EyeOff size={13} />
                                         )}
-                                        <span>{ly.replace('.Cu', '')}</span>
+                                        <span>{getCopperLayerDisplayName(ly, copperStack.length)}</span>
                                     </button>
                                 );
                             })}
@@ -1643,7 +1741,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                         <div className="pcb-sidebar-props">
                             <h3 className="pcb-subh">Track</h3>
                             <p className="pcb-sel-meta">
-                                <span className="pcb-sel-fp">{inspectorTarget.t.layer}</span>
+                                <span className="pcb-sel-fp">
+                                    {getCopperLayerDisplayName(inspectorTarget.t.layer, copperStack.length)}
+                                    <span className="pcb-sel-fp-id"> ({inspectorTarget.t.layer})</span>
+                                </span>
                             </p>
                             <label className="pcb-field-col">
                                 Width (mm)
@@ -1839,8 +1940,21 @@ function PcbStudioPage({ onBackToSchematic }) {
                             <span className="pcb-statusbar-seg pcb-statusbar-muted">Move pointer for dx/dy</span>
                         ) : null}
                         <span className="pcb-statusbar-seg pcb-statusbar-muted">
-                            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: PCB_LAYER_COLORS[activeLayer] || '#888', marginRight: 4, verticalAlign: 'middle' }} />
-                            {activeLayer} · grid {doc.meta.gridMm ?? 0.5}mm · {displayUnits}
+                            <span
+                                style={{
+                                    display: 'inline-block',
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: 2,
+                                    background: PCB_TRACE_LAYER_COLORS[activeLayer] || PCB_LAYER_COLORS[activeLayer] || '#888',
+                                    marginRight: 4,
+                                    verticalAlign: 'middle',
+                                }}
+                            />
+                            {getCopperLayerDisplayName(activeLayer, copperStack.length)}
+                            <span className="pcb-status-layer-id"> ({activeLayer})</span>
+                            {' '}
+                            · grid {doc.meta.gridMm ?? 0.5}mm · {displayUnits}
                         </span>
                         {routeDraft && (
                             <span className="pcb-statusbar-seg" style={{ color: '#a855f7' }}>

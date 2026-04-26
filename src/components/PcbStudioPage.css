@@ -553,6 +553,37 @@
     color: #64748b;
 }
 
+.pcb-layer-stack-field {
+    margin: 0 0 10px;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.pcb-layer-stack-select {
+    margin-top: 4px;
+    width: 100%;
+    max-width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.75);
+    color: #e2e8f0;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.pcb-layer-stack-select:focus {
+    outline: none;
+    border-color: rgba(168, 85, 247, 0.45);
+}
+
+.pcb-sel-fp-id,
+.pcb-status-layer-id {
+    font-weight: 500;
+    color: #64748b;
+    font-size: 0.85em;
+}
+
 .pcb-layer-chips {
     display: flex;
     flex-wrap: wrap;
@@ -561,7 +592,7 @@
 }
 
 .pcb-layer-chip {
-    padding: 3px 6px;
+    padding: 3px 8px;
     border-radius: 5px;
     border: 1px solid rgba(148, 163, 184, 0.15);
     background: rgba(30, 41, 59, 0.5);
@@ -585,6 +616,64 @@
     opacity: 0.4;
     cursor: not-allowed;
     pointer-events: none;
+}
+
+.pcb-layer-color-legend {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.pcb-layer-color-legend-title {
+    display: block;
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+    margin-bottom: 6px;
+}
+
+.pcb-layer-color-legend-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    align-items: center;
+}
+
+.pcb-layer-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: #94a3b8;
+}
+
+.pcb-layer-legend-item.is-active {
+    color: #e9d5ff;
+}
+
+.pcb-layer-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(0, 0, 0, 0.35);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.pcb-layer-legend-note {
+    margin: 8px 0 0;
+    font-size: 0.58rem;
+    line-height: 1.45;
+    color: #64748b;
+}
+
+.pcb-layer-legend-note kbd {
+    font-size: 0.55rem;
 }
 
 .pcb-layer-visibility {

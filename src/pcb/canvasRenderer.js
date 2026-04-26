@@ -6,18 +6,30 @@
  */
 
 import { getFootprint } from './footprintLib.js';
-import { activeCopperLayerIds, isCopperLayerVisible } from './pcbDoc.js';
+import { activeCopperLayerIds, getCopperLayerDisplayName, isCopperLayerVisible } from './pcbDoc.js';
 
-/* ─── Layer colors (matches KiCad-style scheme) ─── */
+/* ─── Layer colors (zones / polygons / UI chrome) ─── */
 export const PCB_LAYER_COLORS = {
   'F.Cu':   '#ef4444',
-  'In1.Cu': '#f59e0b',
-  'In2.Cu': '#eab308',
-  'In3.Cu': '#22c55e',
+  'In1.Cu': '#22c55e',
+  'In2.Cu': '#3b82f6',
+  'In3.Cu': '#eab308',
   'In4.Cu': '#06b6d4',
-  'In5.Cu': '#3b82f6',
+  'In5.Cu': '#f97316',
   'In6.Cu': '#6366f1',
   'B.Cu':   '#a855f7',
+};
+
+/** Saturated per-layer colors for tracks (max hue separation vs other layers). */
+export const PCB_TRACE_LAYER_COLORS = {
+  'F.Cu':   '#ff4d4d',
+  'In1.Cu': '#00e676',
+  'In2.Cu': '#2196ff',
+  'In3.Cu': '#ffd600',
+  'In4.Cu': '#00e5ff',
+  'In5.Cu': '#ff9100',
+  'In6.Cu': '#b388ff',
+  'B.Cu':   '#e040fb',
 };
 
 /* ─── Helpers ─── */
@@ -42,6 +54,18 @@ function hexToRgba(hex, alpha) {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** Darken hex toward black for track outline (t=1 → black). */
+function shadeHex(hex, tDark) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const f = 1 - Math.min(1, Math.max(0, tDark));
+  const rr = Math.round(r * f);
+  const gg = Math.round(g * f);
+  const bb = Math.round(b * f);
+  return `rgb(${rr},${gg},${bb})`;
 }
 
 function footprintBBox(pl) {
@@ -160,7 +184,7 @@ export function renderPcbCanvas(ctx, params) {
     ctx.restore();
 
     // Tracks: keep layer hue readable even when layer is not active (F.Cu vs B.Cu etc.)
-    const trackAlpha = isActive ? 1 : Math.min(1, inactiveCopperOpacity + 0.42);
+    const trackAlpha = isActive ? 1 : Math.min(1, inactiveCopperOpacity + 0.5);
     ctx.save();
     ctx.globalAlpha = trackAlpha;
     for (const tr of (doc.tracks || [])) {
@@ -169,16 +193,22 @@ export function renderPcbCanvas(ctx, params) {
       if (pts.length < 2) continue;
       const isSel = isSelected('track', tr.id);
       const schLink = tr.net && schCrossNets.has(String(tr.net).toLowerCase());
-      const stroke = isSel ? '#f472b6' : schLink ? '#c084fc' : layerColor;
+      const traceCol = PCB_TRACE_LAYER_COLORS[ly] || layerColor;
+      const stroke = isSel ? '#f472b6' : schLink ? '#c084fc' : traceCol;
       const tw = (tr.widthMm || 0.35) * (schLink && !isSel ? 1.35 : 1);
 
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = tw;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
+      if (!isSel && !schLink) {
+        ctx.strokeStyle = shadeHex(traceCol, 0.52);
+        ctx.lineWidth = tw + Math.max(0.05, tw * 0.28);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = tw;
       ctx.stroke();
     }
 
@@ -252,17 +282,21 @@ export function renderPcbCanvas(ctx, params) {
     ctx.setLineDash([]);
   }
 
-  // ─── Route draft ───
+  // ─── Route draft (color = active copper layer; changes after Via / V) ───
   if (routeDraft?.length) {
     const trackW = doc.meta?.defaultTrackMm || 0.35;
-    // Solid committed segments
+    const draftColor = PCB_TRACE_LAYER_COLORS[activeLayer] || PCB_LAYER_COLORS[activeLayer] || '#a855f7';
+    // Solid in-progress polyline
     ctx.beginPath();
     ctx.moveTo(routeDraft[0][0], routeDraft[0][1]);
     for (let i = 1; i < routeDraft.length; i++) ctx.lineTo(routeDraft[i][0], routeDraft[i][1]);
-    ctx.strokeStyle = PCB_LAYER_COLORS[activeLayer] || '#a855f7';
-    ctx.lineWidth = trackW;
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = trackW + Math.max(0.06, trackW * 0.22);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.strokeStyle = draftColor;
+    ctx.lineWidth = trackW;
     ctx.stroke();
     // Draw vertex dots
     for (const pt of routeDraft) {
@@ -273,16 +307,34 @@ export function renderPcbCanvas(ctx, params) {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+    // Layer label (board mm space): shows which layer this draft segment will commit to
+    if (scale > 4) {
+      const p0 = routeDraft[0];
+      const lab = getCopperLayerDisplayName(activeLayer || 'F.Cu', copperStack.length);
+      ctx.font = '600 1.05px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const tx = p0[0] + trackW * 1.1 + 0.25;
+      const ty = p0[1];
+      ctx.lineWidth = 0.2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.82)';
+      ctx.strokeText(lab, tx, ty);
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillText(lab, tx, ty);
+    }
     // Rubber-band line to cursor
     if (boardCursorMm) {
       const last = routeDraft[routeDraft.length - 1];
       ctx.beginPath();
       ctx.moveTo(last[0], last[1]);
       ctx.lineTo(boardCursorMm[0], boardCursorMm[1]);
-      ctx.strokeStyle = PCB_LAYER_COLORS[activeLayer] || '#a855f7';
-      ctx.lineWidth = trackW;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = trackW + Math.max(0.05, trackW * 0.2);
       ctx.setLineDash([0.3, 0.2]);
       ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.strokeStyle = draftColor;
+      ctx.lineWidth = trackW;
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -395,14 +447,14 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   ctx.lineWidth = 0.05;
   ctx.stroke();
 
-  // Layer rings
-  const visStack = copperStack.filter(ly => isCopperLayerVisible(doc, ly)).reverse();
+  // Layer rings: stack is top → bottom (F.Cu … B.Cu); draw outer ring = top copper color
+  const visStack = copperStack.filter(ly => isCopperLayerVisible(doc, ly));
   for (let idx = 0; idx < visStack.length; idx++) {
     const rr = ro - 0.04 - idx * 0.055;
     if (rr < holeR + 0.02) break;
     ctx.beginPath();
     ctx.arc(v.x, v.y, rr, 0, Math.PI * 2);
-    ctx.strokeStyle = PCB_LAYER_COLORS[visStack[idx]] || '#94a3b8';
+    ctx.strokeStyle = PCB_TRACE_LAYER_COLORS[visStack[idx]] || PCB_LAYER_COLORS[visStack[idx]] || '#94a3b8';
     ctx.lineWidth = 0.07;
     ctx.globalAlpha = isSel ? 0.95 : schLink ? 0.85 : 0.78;
     ctx.stroke();
