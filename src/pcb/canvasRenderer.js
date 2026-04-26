@@ -245,15 +245,38 @@ export function renderPcbCanvas(ctx, params) {
 
   // ─── Route draft ───
   if (routeDraft?.length) {
+    const trackW = doc.meta?.defaultTrackMm || 0.35;
+    // Solid committed segments
     ctx.beginPath();
     ctx.moveTo(routeDraft[0][0], routeDraft[0][1]);
     for (let i = 1; i < routeDraft.length; i++) ctx.lineTo(routeDraft[i][0], routeDraft[i][1]);
-    ctx.strokeStyle = '#a855f7';
-    ctx.lineWidth = doc.meta?.defaultTrackMm || 0.35;
-    ctx.setLineDash([0.3, 0.2]);
+    ctx.strokeStyle = PCB_LAYER_COLORS[activeLayer] || '#a855f7';
+    ctx.lineWidth = trackW;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.stroke();
-    ctx.setLineDash([]);
+    // Draw vertex dots
+    for (const pt of routeDraft) {
+      ctx.beginPath();
+      ctx.arc(pt[0], pt[1], trackW * 0.8, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = 0.5;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // Rubber-band line to cursor
+    if (boardCursorMm) {
+      const last = routeDraft[routeDraft.length - 1];
+      ctx.beginPath();
+      ctx.moveTo(last[0], last[1]);
+      ctx.lineTo(boardCursorMm[0], boardCursorMm[1]);
+      ctx.strokeStyle = PCB_LAYER_COLORS[activeLayer] || '#a855f7';
+      ctx.lineWidth = trackW;
+      ctx.setLineDash([0.3, 0.2]);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   // ─── Polygon draft ───
@@ -261,6 +284,8 @@ export function renderPcbCanvas(ctx, params) {
     ctx.beginPath();
     ctx.moveTo(polygonDraft[0][0], polygonDraft[0][1]);
     for (let i = 1; i < polygonDraft.length; i++) ctx.lineTo(polygonDraft[i][0], polygonDraft[i][1]);
+    // Rubber-band to cursor
+    if (boardCursorMm) ctx.lineTo(boardCursorMm[0], boardCursorMm[1]);
     ctx.strokeStyle = '#34d399';
     ctx.lineWidth = 0.15;
     ctx.setLineDash([0.25, 0.2]);
@@ -268,6 +293,17 @@ export function renderPcbCanvas(ctx, params) {
     ctx.lineJoin = 'round';
     ctx.stroke();
     ctx.setLineDash([]);
+    // Close preview
+    if (polygonDraft.length >= 3 && boardCursorMm) {
+      ctx.beginPath();
+      ctx.moveTo(boardCursorMm[0], boardCursorMm[1]);
+      ctx.lineTo(polygonDraft[0][0], polygonDraft[0][1]);
+      ctx.strokeStyle = 'rgba(52,211,153,0.3)';
+      ctx.lineWidth = 0.1;
+      ctx.setLineDash([0.15, 0.15]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   // ─── DRC violations ───

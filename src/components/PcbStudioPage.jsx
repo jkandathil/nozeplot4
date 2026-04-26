@@ -626,23 +626,140 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
     }, []);
 
+    /* ── Commit / cancel route draft ── */
+    const commitRouteDraft = useCallback(() => {
+        if (!routeDraft || routeDraft.length < 2) { setRouteDraft(null); return; }
+        undoMgrRef.current.push(doc);
+        const newTrack = {
+            id: newId('tr'),
+            layer: activeLayer,
+            widthMm: doc.meta?.defaultTrackMm || 0.35,
+            net: '',
+            points: routeDraft,
+        };
+        setDoc((d) => ({ ...d, tracks: [...(d.tracks || []), newTrack] }));
+        setRouteDraft(null);
+    }, [routeDraft, doc, activeLayer]);
+
+    const commitPolygonDraft = useCallback(() => {
+        if (!polygonDraft || polygonDraft.length < 3) { setPolygonDraft(null); return; }
+        undoMgrRef.current.push(doc);
+        const newPoly = {
+            id: newId('pg'),
+            layer: activeLayer,
+            net: '',
+            points: polygonDraft,
+        };
+        setDoc((d) => ({ ...d, polygons: [...(d.polygons || []), newPoly] }));
+        setPolygonDraft(null);
+    }, [polygonDraft, doc, activeLayer]);
+
+    /* ── Insert via at cursor and switch layer (V key during routing) ── */
+    const insertViaAndSwitchLayer = useCallback(() => {
+        const cursor = boardCursorMmRef.current || lastPointerBoardRef.current;
+        const pt = [snap(cursor[0]), snap(cursor[1])];
+        const copperStack = activeCopperLayerIds(doc);
+        // Determine target layer (toggle F.Cu ↔ B.Cu, or cycle)
+        const curIdx = copperStack.indexOf(activeLayer);
+        const targetLayer = curIdx === 0 ? copperStack[copperStack.length - 1] : copperStack[0];
+
+        undoMgrRef.current.push(doc);
+
+        // If routing, commit current segment up to the via point, add via, start new draft on other layer
+        if (routeDraft && routeDraft.length >= 1) {
+            const draftWithVia = [...routeDraft, pt];
+            const newTrack = {
+                id: newId('tr'),
+                layer: activeLayer,
+                widthMm: doc.meta?.defaultTrackMm || 0.35,
+                net: '',
+                points: draftWithVia,
+            };
+            const newVia = {
+                id: newId('via'),
+                x: pt[0],
+                y: pt[1],
+                drillMm: doc.meta?.defaultViaDrillMm || 0.4,
+                diamMm: doc.meta?.defaultViaDiamMm || 0.8,
+                net: '',
+            };
+            setDoc((d) => ({
+                ...d,
+                tracks: [...(d.tracks || []), newTrack],
+                vias: [...(d.vias || []), newVia],
+            }));
+            setRouteDraft([pt]); // start new draft from via point on new layer
+        } else {
+            // Not routing — just add a standalone via
+            const newVia = {
+                id: newId('via'),
+                x: pt[0],
+                y: pt[1],
+                drillMm: doc.meta?.defaultViaDrillMm || 0.4,
+                diamMm: doc.meta?.defaultViaDiamMm || 0.8,
+                net: '',
+            };
+            setDoc((d) => ({ ...d, vias: [...(d.vias || []), newVia] }));
+        }
+        setActiveLayer(targetLayer);
+    }, [routeDraft, doc, activeLayer, snap]);
+
     useEffect(() => {
+        // Don't capture keys when an input/select/textarea is focused
+        const isInput = () => {
+            const el = document.activeElement;
+            return el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA');
+        };
+
         const onKeyDown = (e) => {
+            /* ── Escape: cancel draft or clear selection ── */
+            if (e.key === 'Escape') {
+                if (routeDraft) { setRouteDraft(null); return; }
+                if (polygonDraft) { setPolygonDraft(null); return; }
+                if (measureStart || measureEnd) { setMeasureStart(null); setMeasureEnd(null); return; }
+                if (selected.length > 0) { setSelected([]); return; }
+                return;
+            }
+            /* ── Enter: commit draft ── */
+            if (e.key === 'Enter') {
+                if (routeDraft) { commitRouteDraft(); return; }
+                if (polygonDraft) { commitPolygonDraft(); return; }
+                return;
+            }
+            /* ── Ctrl+Z / Ctrl+Y ── */
             if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 if (e.shiftKey) handleRedo();
                 else handleUndo();
-            } else if (e.key === 'y' && (e.ctrlKey || e.metaKey)) {
+                return;
+            }
+            if (e.key === 'y' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 handleRedo();
-            } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+                return;
+            }
+            /* ── Ctrl+C / Ctrl+V ── */
+            if (e.key === 'c' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleCopy(); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'v') { e.preventDefault(); handlePaste(); return; }
+
+            if (isInput()) return; // Below this: letter keys that shouldn't fire in text fields
+
+            /* ── V (no modifier): insert via / switch layer during routing ── */
+            if (e.key === 'v' || e.key === 'V') {
+                if (tool === 'route') {
+                    insertViaAndSwitchLayer();
+                    return;
+                }
+            }
+            /* ── Delete / Backspace ── */
+            if (e.key === 'Delete' || e.key === 'Backspace') {
                 e.preventDefault();
-                handleCopy();
-            } else if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                handlePaste();
-            } else if (e.key === 'Delete' || e.key === 'Backspace') {
-                e.preventDefault();
+                // If routing, undo last point
+                if (routeDraft && routeDraft.length > 0) {
+                    if (routeDraft.length === 1) { setRouteDraft(null); }
+                    else { setRouteDraft(routeDraft.slice(0, -1)); }
+                    return;
+                }
                 if (selected.length > 0) {
                     undoMgrRef.current.push(doc);
                     setDoc((d) => ({
@@ -654,18 +771,12 @@ function PcbStudioPage({ onBackToSchematic }) {
                     }));
                     setSelected([]);
                 }
-            } else if (e.key === 'd' || e.key === 'D') {
+                return;
+            }
+            /* ── D: duplicate ── */
+            if (e.key === 'd' || e.key === 'D') {
                 if (selected.length > 0) {
                     undoMgrRef.current.push(doc);
-                    const refPoints = [];
-                    for (const sel of selected) {
-                        if (sel.kind === 'placement') {
-                            const p = doc.placements?.find((x) => x.id === sel.id);
-                            if (p) refPoints.push([p.x, p.y]);
-                        }
-                    }
-                    const refX = refPoints.length ? refPoints[0][0] : boardCursorMm?.[0] ?? 20;
-                    const refY = refPoints.length ? refPoints[0][1] : boardCursorMm?.[1] ?? 20;
                     const newSelections = [];
                     setDoc((d) => {
                         let newDoc = { ...d };
@@ -673,11 +784,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                             if (sel.kind === 'placement') {
                                 const p = newDoc.placements?.find((x) => x.id === sel.id);
                                 if (p) {
-                                    const dup = { ...p, id: newId(), x: p.x + 2, y: p.y + 2 };
-                                    newDoc = {
-                                        ...newDoc,
-                                        placements: [...(newDoc.placements || []), dup],
-                                    };
+                                    const dup = { ...p, id: newId('fp'), x: p.x + 2, y: p.y + 2 };
+                                    newDoc = { ...newDoc, placements: [...(newDoc.placements || []), dup] };
                                     newSelections.push({ kind: 'placement', id: dup.id });
                                 }
                             }
@@ -686,7 +794,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                     });
                     setSelected(newSelections);
                 }
-            } else if (e.key === 'r' || e.key === 'R') {
+                return;
+            }
+            /* ── R: rotate selected ── */
+            if (e.key === 'r' || e.key === 'R') {
                 if (selected.length > 0) {
                     undoMgrRef.current.push(doc);
                     setDoc((d) => ({
@@ -698,7 +809,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                         ),
                     }));
                 }
-            } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                return;
+            }
+            /* ── Arrow keys: nudge selected ── */
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 if (selected.length > 0) {
                     e.preventDefault();
                     undoMgrRef.current.push(doc);
@@ -717,136 +831,31 @@ function PcbStudioPage({ onBackToSchematic }) {
                         ),
                     }));
                 }
+                return;
             }
+            /* ── 1-8: quick layer switch ── */
+            if (e.key >= '1' && e.key <= '8') {
+                const idx = parseInt(e.key) - 1;
+                const stack = activeCopperLayerIds(doc);
+                if (idx < stack.length) setActiveLayer(stack[idx]);
+                return;
+            }
+            /* ── Tool shortcuts: S=select, T=route, P=place, M=measure, G=polygon ── */
+            if (e.key === 's' || e.key === 'S') { setTool('select'); return; }
+            if (e.key === 't' || e.key === 'T') { setTool('route'); return; }
+            if (e.key === 'p' || e.key === 'P') { setTool('place'); return; }
+            if (e.key === 'm' || e.key === 'M') { setTool('measure'); return; }
+            if (e.key === 'g' || e.key === 'G') { setTool('polygon'); return; }
+            /* ── F: fit view ── */
+            if (e.key === 'f' || e.key === 'F') { fitViewport(); return; }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [selected, doc, boardCursorMm, snap, handleCopy, handlePaste, handleUndo, handleRedo]);
+    }, [selected, doc, boardCursorMm, snap, handleCopy, handlePaste, handleUndo, handleRedo,
+        routeDraft, polygonDraft, measureStart, measureEnd, tool, activeLayer,
+        commitRouteDraft, commitPolygonDraft, insertViaAndSwitchLayer, fitViewport]);
 
-    const onCanvasMouseDown = useCallback((ev) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        const [mx, my] = canvasToBoard(
-            ev.clientX - rect.left,
-            ev.clientY - rect.top,
-            pcbViewport,
-            canvas.width / dpr,
-            canvas.height / dpr,
-            W,
-            H,
-            dpr
-        );
-
-        lastPointerBoardRef.current = [mx, my];
-
-        if (ev.button === 2) {
-            // right-click: pan
-            setPcbViewDrag(true);
-            ev.preventDefault();
-            return;
-        }
-
-        if (tool === 'pan') {
-            setPcbViewDrag(true);
-            return;
-        }
-
-        if (tool === 'measure') {
-            if (!measureStart) {
-                setMeasureStart([mx, my]);
-            } else {
-                setMeasureEnd([mx, my]);
-            }
-            return;
-        }
-
-        if (tool === 'place') {
-            undoMgrRef.current.push(doc);
-            const newPl = {
-                id: newId(),
-                ref: `?${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
-                footprintId: placeFootprintId,
-                x: snap(mx),
-                y: snap(my),
-                rot: 0,
-                padNets: {},
-            };
-            setDoc((d) => ({
-                ...d,
-                placements: [...(d.placements || []), newPl],
-            }));
-            setSelected([{ kind: 'placement', id: newPl.id }]);
-            return;
-        }
-
-        if (tool === 'route') {
-            const newRoute = routeDraft || [];
-            const pt = [snap(mx), snap(my)];
-            const updated = [...newRoute, pt];
-            setRouteDraft(updated);
-            return;
-        }
-
-        if (tool === 'polygon') {
-            const newPoly = polygonDraft || [];
-            const pt = [snap(mx), snap(my)];
-            const updated = [...newPoly, pt];
-            setPolygonDraft(updated);
-            return;
-        }
-
-        if (tool === 'select' || tool === 'boxselect') {
-            if (ev.shiftKey) {
-                // Shift-click multi-select
-                const pickResult = pickAtPoint(mx, my);
-                if (pickResult) {
-                    setSelected((prev) => toggleSelectionItem(prev, pickResult));
-                }
-            } else {
-                // Regular select
-                const pickResult = pickAtPoint(mx, my);
-                if (pickResult) {
-                    setSelected([pickResult]);
-                } else {
-                    setSelected([]);
-                }
-            }
-        }
-    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart]);
-
-    const onCanvasMouseMove = useCallback((ev) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        const [mx, my] = canvasToBoard(
-            ev.clientX - rect.left,
-            ev.clientY - rect.top,
-            pcbViewport,
-            canvas.width / dpr,
-            canvas.height / dpr,
-            W,
-            H,
-            dpr
-        );
-        setBoardCursorMm([mx, my]);
-        boardCursorMmRef.current = [mx, my];
-        renderDirtyRef.current = true;
-    }, [pcbViewport, W, H]);
-
-    const onCanvasMouseLeave = useCallback(() => {
-        setBoardCursorMm(null);
-        boardCursorMmRef.current = null;
-        renderDirtyRef.current = true;
-    }, []);
-
-    const onCanvasContextMenu = useCallback((ev) => {
-        ev.preventDefault();
-    }, []);
-
-    // Hit testing helper
+    /* ── Hit testing helper ── */
     const pickAtPoint = useCallback((mx, my) => {
         if (selectionFilter.placement) {
             for (const pl of (doc.placements || []).slice().reverse()) {
@@ -856,46 +865,189 @@ function PcbStudioPage({ onBackToSchematic }) {
                 }
             }
         }
-
         if (selectionFilter.track) {
             for (const tr of (doc.tracks || []).slice().reverse()) {
                 if (!isCopperLayerVisible(doc, tr.layer)) continue;
                 const w = (tr.widthMm || 0.35) / 2 + 0.1;
                 const pts = tr.points || [];
                 for (let i = 0; i < pts.length - 1; i++) {
-                    const [x0, y0] = pts[i];
-                    const [x1, y1] = pts[i + 1];
-                    const dist = pointToSegmentDistance([mx, my], [x0, y0], [x1, y1]);
+                    const dist = pointToSegmentDistance([mx, my], pts[i], pts[i + 1]);
                     if (dist <= w) return { kind: 'track', id: tr.id };
                 }
             }
         }
-
         if (selectionFilter.via) {
             for (const v of (doc.vias || []).slice().reverse()) {
                 const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
-                const ro = diam / 2 + 0.1;
-                const dist = Math.hypot(mx - v.x, my - v.y);
-                if (dist <= ro) return { kind: 'via', id: v.id };
+                if (Math.hypot(mx - v.x, my - v.y) <= diam / 2 + 0.1) return { kind: 'via', id: v.id };
             }
         }
-
         if (selectionFilter.polygon) {
             for (const pg of (doc.polygons || []).slice().reverse()) {
                 if (!isCopperLayerVisible(doc, pg.layer)) continue;
-                if (pointInPolygon([mx, my], pg.points || [])) {
-                    return { kind: 'polygon', id: pg.id };
-                }
+                if (pointInPolygon([mx, my], pg.points || [])) return { kind: 'polygon', id: pg.id };
             }
         }
-
         return null;
     }, [doc, selectionFilter]);
 
-    const pickAtPointForDrag = useCallback((mx, my) => {
-        const pickResult = pickAtPoint(mx, my);
-        return pickResult ? isItemSelected(selected, pickResult.kind, pickResult.id) : false;
-    }, [pickAtPoint, selected]);
+    /* ── Canvas → board coordinate helper (used in all mouse handlers) ── */
+    const canvasToBoardAt = useCallback((ev) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return null;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        return canvasToBoard(
+            ev.clientX - rect.left,
+            ev.clientY - rect.top,
+            pcbViewport,
+            canvas.width / dpr,
+            canvas.height / dpr,
+            W, H, dpr,
+        );
+    }, [pcbViewport, W, H]);
+
+    /* ── Drag state for moving placements ── */
+    const [dragMove, setDragMove] = useState(null); // { id, startX, startY, origX, origY }
+
+    const onCanvasMouseDown = useCallback((ev) => {
+        const pt = canvasToBoardAt(ev);
+        if (!pt) return;
+        const [mx, my] = pt;
+        lastPointerBoardRef.current = [mx, my];
+
+        /* Right-click or middle-click: always pan */
+        if (ev.button === 2 || ev.button === 1) {
+            setPcbViewDrag(true);
+            ev.preventDefault();
+            return;
+        }
+
+        if (tool === 'pan') { setPcbViewDrag(true); return; }
+
+        /* Measure tool */
+        if (tool === 'measure') {
+            if (!measureStart) { setMeasureStart([mx, my]); }
+            else { setMeasureEnd([mx, my]); }
+            return;
+        }
+
+        /* Place tool */
+        if (tool === 'place') {
+            undoMgrRef.current.push(doc);
+            const newPl = {
+                id: newId('fp'),
+                ref: `?${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+                footprintId: placeFootprintId,
+                x: snap(mx), y: snap(my), rot: 0, padNets: {},
+            };
+            setDoc((d) => ({ ...d, placements: [...(d.placements || []), newPl] }));
+            setSelected([{ kind: 'placement', id: newPl.id }]);
+            return;
+        }
+
+        /* Route tool */
+        if (tool === 'route') {
+            const spt = [snap(mx), snap(my)];
+            if (!routeDraft) {
+                // Start new route
+                setRouteDraft([spt]);
+            } else {
+                // Add point to existing route
+                setRouteDraft([...routeDraft, spt]);
+            }
+            return;
+        }
+
+        /* Polygon tool */
+        if (tool === 'polygon') {
+            const spt = [snap(mx), snap(my)];
+            setPolygonDraft((prev) => [...(prev || []), spt]);
+            return;
+        }
+
+        /* Select / BoxSelect tool */
+        if (tool === 'select' || tool === 'boxselect') {
+            const pickResult = pickAtPoint(mx, my);
+            if (ev.shiftKey) {
+                if (pickResult) setSelected((prev) => toggleSelectionItem(prev, pickResult));
+            } else {
+                if (pickResult) {
+                    setSelected([pickResult]);
+                    // Begin drag-to-move for placements
+                    if (pickResult.kind === 'placement') {
+                        const pl = doc.placements?.find((p) => p.id === pickResult.id);
+                        if (pl) {
+                            setDragMove({ id: pl.id, startX: mx, startY: my, origX: pl.x, origY: pl.y, pushed: false });
+                        }
+                    }
+                } else {
+                    setSelected([]);
+                }
+            }
+        }
+    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint]);
+
+    /* ── Double-click: commit route/polygon ── */
+    const onCanvasDoubleClick = useCallback((ev) => {
+        if (tool === 'route' && routeDraft && routeDraft.length >= 2) {
+            commitRouteDraft();
+            return;
+        }
+        if (tool === 'polygon' && polygonDraft && polygonDraft.length >= 3) {
+            commitPolygonDraft();
+            return;
+        }
+    }, [tool, routeDraft, polygonDraft, commitRouteDraft, commitPolygonDraft]);
+
+    const onCanvasMouseMove = useCallback((ev) => {
+        const pt = canvasToBoardAt(ev);
+        if (!pt) return;
+        const [mx, my] = pt;
+        setBoardCursorMm([mx, my]);
+        boardCursorMmRef.current = [mx, my];
+        renderDirtyRef.current = true;
+
+        /* Drag-to-move placement */
+        if (dragMove) {
+            if (!dragMove.pushed) {
+                undoMgrRef.current.push(doc);
+                setDragMove((d) => d ? { ...d, pushed: true } : null);
+            }
+            const dx = mx - dragMove.startX;
+            const dy = my - dragMove.startY;
+            setDoc((d) => ({
+                ...d,
+                placements: d.placements?.map((p) =>
+                    p.id === dragMove.id
+                        ? { ...p, x: snap(dragMove.origX + dx), y: snap(dragMove.origY + dy) }
+                        : p,
+                ),
+            }));
+        }
+    }, [pcbViewport, W, H, canvasToBoardAt, dragMove, doc, snap]);
+
+    /* ── Global mouseup to finish drag ── */
+    useEffect(() => {
+        if (!dragMove) return;
+        const onUp = () => setDragMove(null);
+        window.addEventListener('mouseup', onUp);
+        return () => window.removeEventListener('mouseup', onUp);
+    }, [dragMove]);
+
+    const onCanvasMouseLeave = useCallback(() => {
+        setBoardCursorMm(null);
+        boardCursorMmRef.current = null;
+        renderDirtyRef.current = true;
+    }, []);
+
+    const onCanvasContextMenu = useCallback((ev) => {
+        ev.preventDefault();
+        // Right-click while routing: commit the route (like KiCad)
+        if (tool === 'route' && routeDraft && routeDraft.length >= 2) {
+            commitRouteDraft();
+        }
+    }, [tool, routeDraft, commitRouteDraft]);
 
     // Mark render dirty when any state changes
     useEffect(() => { renderDirtyRef.current = true; }, [
@@ -977,7 +1129,12 @@ function PcbStudioPage({ onBackToSchematic }) {
         return { dx, dy, dist };
     }, [relativeOriginMm, boardCursorMm]);
 
-    const cursorClass = tool === 'pan' || pcbViewDrag ? 'is-grabbing' : 'is-default';
+    const cursorClass = pcbViewDrag ? 'pcb-cursor-grabbing'
+        : dragMove ? 'pcb-cursor-move'
+        : tool === 'pan' ? 'pcb-cursor-grab'
+        : tool === 'route' || tool === 'polygon' || tool === 'measure' ? 'pcb-cursor-cross'
+        : tool === 'place' ? 'pcb-cursor-cross'
+        : 'pcb-cursor-select';
 
     const inspectorTarget = selected.length === 1 && selected[0].kind === 'placement'
         ? { kind: 'placement', p: doc.placements?.find((x) => x.id === selected[0].id) }
@@ -1440,12 +1597,17 @@ function PcbStudioPage({ onBackToSchematic }) {
                             ref={canvasRef}
                             className={`pcb-board-canvas ${cursorClass}`}
                             onMouseDown={onCanvasMouseDown}
+                            onDoubleClick={onCanvasDoubleClick}
                             onMouseMove={onCanvasMouseMove}
                             onMouseLeave={onCanvasMouseLeave}
                             onContextMenu={onCanvasContextMenu}
                         />
                         <p className="pcb-hint">
-                            Canvas rendering enabled. Scroll to zoom, right-click to pan. Grid {doc.meta.gridMm ?? 0.5} mm.
+                            Scroll=zoom &middot; Right-drag=pan &middot; Grid {doc.meta.gridMm ?? 0.5}mm
+                            {tool === 'route' && ' · Click=add point · Dbl-click/Enter=finish · V=via+layer · Esc=cancel'}
+                            {tool === 'polygon' && ' · Click=add vertex · Dbl-click/Enter=close · Esc=cancel'}
+                            {tool === 'select' && ' · Drag=move · R=rotate · D=dupe · Del=delete'}
+                            {' · 1-8=layer · S/T/P/M/G=tool · F=fit'}
                         </p>
                     </div>
 
@@ -1486,8 +1648,14 @@ function PcbStudioPage({ onBackToSchematic }) {
                             <span className="pcb-statusbar-seg pcb-statusbar-muted">Move pointer for dx/dy</span>
                         ) : null}
                         <span className="pcb-statusbar-seg pcb-statusbar-muted">
-                            grid {doc.meta.gridMm ?? 0.5} mm · {displayUnits}
+                            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: PCB_LAYER_COLORS[activeLayer] || '#888', marginRight: 4, verticalAlign: 'middle' }} />
+                            {activeLayer} · grid {doc.meta.gridMm ?? 0.5}mm · {displayUnits}
                         </span>
+                        {routeDraft && (
+                            <span className="pcb-statusbar-seg" style={{ color: '#a855f7' }}>
+                                Routing: {routeDraft.length} pts
+                            </span>
+                        )}
                         {tool === 'measure' ? (
                             <span className="pcb-statusbar-seg pcb-statusbar-measure">
                                 Measure:{' '}
