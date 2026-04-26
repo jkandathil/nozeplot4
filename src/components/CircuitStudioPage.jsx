@@ -79,8 +79,9 @@ import {
 } from '../pcb/schematicBridge.js';
 import {
     CROSS_SELECT_EVENT,
+    CROSS_SELECT_KEY_PCB_TO_SCH,
     broadcastCrossSelect,
-    readCrossSelectPayload,
+    readCrossSelectFromPcbStorage,
     collectSchematicCrossPayload,
 } from '../pcb/crossSelectBridge.js';
 import { buildUserLibraryPartsFromSpiceLibs } from '../circuit/userLibraryParts.js';
@@ -450,7 +451,7 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
 
     useEffect(() => {
         const apply = () => {
-            const raw = readCrossSelectPayload();
+            const raw = readCrossSelectFromPcbStorage();
             if (!raw || raw.from !== 'pcb') {
                 setPcbCrossHighlight({ refs: [], nets: [] });
                 return;
@@ -464,6 +465,13 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
 
     useEffect(() => {
         const { refs, nets } = collectSchematicCrossPayload(doc, resolvedNets, selection);
+        if (refs.length > 0 || nets.length > 0) {
+            try {
+                sessionStorage.removeItem(CROSS_SELECT_KEY_PCB_TO_SCH);
+            } catch {
+                /* ignore */
+            }
+        }
         broadcastCrossSelect({ from: 'schematic', refs, nets });
     }, [doc, resolvedNets, selection]);
 

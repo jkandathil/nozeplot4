@@ -54,6 +54,7 @@ import {
 } from '../pcb/pcbDoc.js';
 import {
     snapBoard,
+    snapInteractiveRoutePoint,
     pickTrackAt,
     pickViaAt,
     pickPolygonAt,
@@ -66,8 +67,9 @@ import {
 } from '../pcb/schematicBridge.js';
 import {
     CROSS_SELECT_EVENT,
+    CROSS_SELECT_KEY_SCH_TO_PCB,
     broadcastCrossSelect,
-    readCrossSelectPayload,
+    readCrossSelectFromSchematicStorage,
     collectPcbCrossPayload,
 } from '../pcb/crossSelectBridge.js';
 import { getFootprint, listFootprintSummaries, searchFootprints } from '../pcb/footprintLib.js';
@@ -251,7 +253,7 @@ function PcbStudioPage({ onBackToSchematic }) {
 
     useEffect(() => {
         const apply = () => {
-            const raw = readCrossSelectPayload();
+            const raw = readCrossSelectFromSchematicStorage();
             if (!raw || raw.from !== 'schematic') {
                 setSchCrossHighlight({ refs: [], nets: [] });
                 return;
@@ -265,6 +267,13 @@ function PcbStudioPage({ onBackToSchematic }) {
 
     useEffect(() => {
         const { refs, nets } = collectPcbCrossPayload(doc, selected);
+        if (refs.length > 0 || nets.length > 0) {
+            try {
+                sessionStorage.removeItem(CROSS_SELECT_KEY_SCH_TO_PCB);
+            } catch {
+                /* ignore */
+            }
+        }
         broadcastCrossSelect({ from: 'pcb', refs, nets });
     }, [doc, selected]);
 
@@ -721,7 +730,14 @@ function PcbStudioPage({ onBackToSchematic }) {
     const insertViaAndSwitchLayer = useCallback((opts = {}) => {
         const reverse = !!opts.reverseLayer;
         const cursor = boardCursorMmRef.current || lastPointerBoardRef.current;
-        const pt = [snap(cursor[0]), snap(cursor[1])];
+        let cx = cursor[0];
+        let cy = cursor[1];
+        if (routeDraft && routeDraft.length >= 1) {
+            const last = routeDraft[routeDraft.length - 1];
+            const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
+            [cx, cy] = snapInteractiveRoutePoint(prev, last, cursor[0], cursor[1]);
+        }
+        const pt = [snap(cx), snap(cy)];
         const stack = activeCopperLayerIds(doc);
         const curIdx = Math.max(0, stack.indexOf(activeLayer));
         const dir = reverse ? -1 : 1;
@@ -1036,9 +1052,16 @@ function PcbStudioPage({ onBackToSchematic }) {
             return;
         }
 
-        /* Route tool */
+        /* Route tool — KiCad-style 45° corner snap from last vertex toward cursor, then grid snap */
         if (tool === 'route') {
-            const spt = [snap(mx), snap(my)];
+            let ax = mx;
+            let ay = my;
+            if (routeDraft?.length >= 1) {
+                const last = routeDraft[routeDraft.length - 1];
+                const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
+                [ax, ay] = snapInteractiveRoutePoint(prev, last, mx, my);
+            }
+            const spt = [snap(ax), snap(ay)];
             if (!routeDraft) {
                 routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackEndpointNet(doc, mx, my) || '';
                 setRouteDraft([spt]);
@@ -1396,7 +1419,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                         </select>
                     </label>
                     <p className="pcb-dr-hint">
-                        <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points. <strong>Nets:</strong> start on a pad (footprint pad nets from the schematic flow) or on an <strong>existing track end</strong> to inherit that net; otherwise the trace has no net until you type one in the sidebar after selecting the track.
+                        <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points. <strong>Bends:</strong> each new corner snaps to a <strong>45° family</strong> relative to the incoming segment (same idea as KiCad interactive 45° mode), then the grid — so you get orthogonal or 45° diagonals instead of random angles (better for manufacturability; not a full SI / length-matched router).
+                        <strong>Nets:</strong> start on a pad (footprint pad nets from the schematic flow) or on an <strong>existing track end</strong> to inherit that net; otherwise the trace has no net until you type one in the sidebar after selecting the track.
                         <strong> Change layer mid-route:</strong> move the cursor to the via location and press <kbd>V</kbd> or top bar <strong>Via layer</strong> — the current polyline is committed to that point, a via is added, the <strong>next</strong> layer in the stack is selected (wraps top → … → bottom), and routing continues from the via.
                         <strong> Shift+V</strong> selects the <strong>previous</strong> layer instead. Finish with <kbd>Enter</kbd>, double-click, or right-click. Layer chips are disabled while a route is in progress — use <strong>Via layer</strong> only.
                         <strong> Clearance:</strong> each new segment is checked against other nets (tracks / pads / vias) using <strong>Design rules → min copper clearance</strong>; illegal clicks are blocked to reduce accidental shorts.
@@ -1631,6 +1655,40 @@ function PcbStudioPage({ onBackToSchematic }) {
                                 }));
                             }}
                         />
+                        <span className="pcb-field-hint">Used for new routes and auto-route. Change a finished trace under Track in the sidebar.</span>
+                    </label>
+                    <label className="pcb-field-col">
+                        New via outer diameter (mm)
+                        <input
+                            type="number"
+                            min={0.2}
+                            max={4}
+                            step={0.05}
+                            value={doc.meta.defaultViaDiamMm ?? 0.8}
+                            onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isFinite(v)) return;
+                                const diam = Math.min(4, Math.max(0.2, v));
+                                setDoc((d) => ({ ...d, meta: { ...d.meta, defaultViaDiamMm: diam } }));
+                            }}
+                        />
+                    </label>
+                    <label className="pcb-field-col">
+                        New via drill (mm)
+                        <input
+                            type="number"
+                            min={0.1}
+                            max={3}
+                            step={0.05}
+                            value={doc.meta.defaultViaDrillMm ?? 0.4}
+                            onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isFinite(v)) return;
+                                const drill = Math.min(3, Math.max(0.1, v));
+                                setDoc((d) => ({ ...d, meta: { ...d.meta, defaultViaDrillMm: drill } }));
+                            }}
+                        />
+                        <span className="pcb-field-hint">Plated through-hole; annular ring = (diameter − drill) / 2. Edit placed vias in the Via section when one is selected.</span>
                     </label>
                     <label className="pcb-field-row">
                         <input

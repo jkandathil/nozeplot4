@@ -93,6 +93,84 @@ export function pickPolygonAt(doc, mx, my, tolMm = 0.4) {
     return null;
 }
 
+/**
+ * KiCad-style interactive routing: next vertex lies on a ray from `last` in one of eight
+ * directions — either world 0°/45°/… (no prior segment) or each multiple of 45° relative
+ * to the incoming segment `prev → last`. The ray point closest to (cx, cy) is chosen
+ * (then tie-break toward the cursor direction). Avoids arbitrary-angle bends and shallow
+ * corners compared to free-click routing; true SI (length match, diffpairs) is not modeled.
+ *
+ * @param {number[] | null} prev previous polyline vertex [x,y] or null/short
+ * @param {number[]} last current endpoint [x,y]
+ * @param {number} cx cursor x (mm)
+ * @param {number} cy cursor y (mm)
+ * @returns {[number, number]}
+ */
+export function snapInteractiveRoutePoint(prev, last, cx, cy) {
+    const lx = last[0];
+    const ly = last[1];
+
+    function uniqueDirectionsFromUnit(u0, u1) {
+        const dirs = [];
+        const seen = new Set();
+        for (let k = 0; k < 8; k++) {
+            const th = (k * Math.PI) / 4;
+            const ca = Math.cos(th);
+            const sa = Math.sin(th);
+            const dx = u0 * ca - u1 * sa;
+            const dy = u0 * sa + u1 * ca;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-9) continue;
+            const ux = dx / len;
+            const uy = dy / len;
+            const key = `${Math.round(ux * 1e6)},${Math.round(uy * 1e6)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            dirs.push([ux, uy]);
+        }
+        return dirs;
+    }
+
+    let dirs;
+    if (!prev || prev.length < 2) {
+        dirs = uniqueDirectionsFromUnit(1, 0);
+    } else {
+        const dx = lx - prev[0];
+        const dy = ly - prev[1];
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-6) dirs = uniqueDirectionsFromUnit(1, 0);
+        else dirs = uniqueDirectionsFromUnit(dx / len, dy / len);
+    }
+
+    const wx = cx - lx;
+    const wy = cy - ly;
+    const wlen = Math.hypot(wx, wy);
+    const wux = wlen > 1e-9 ? wx / wlen : 1;
+    const wuy = wlen > 1e-9 ? wy / wlen : 0;
+
+    let bestX = lx + wx;
+    let bestY = ly + wy;
+    let bestD2 = Infinity;
+    let bestAlign = -Infinity;
+
+    for (const [ux, uy] of dirs) {
+        const t = Math.max(0, wx * ux + wy * uy);
+        const px = lx + t * ux;
+        const py = ly + t * uy;
+        const ex = cx - px;
+        const ey = cy - py;
+        const d2 = ex * ex + ey * ey;
+        const align = ux * wux + uy * wuy;
+        if (d2 < bestD2 - 1e-12 || (Math.abs(d2 - bestD2) <= 1e-12 && align > bestAlign)) {
+            bestD2 = d2;
+            bestAlign = align;
+            bestX = px;
+            bestY = py;
+        }
+    }
+    return [bestX, bestY];
+}
+
 export function centroidClipboard(buf) {
     const xs = [];
     const ys = [];

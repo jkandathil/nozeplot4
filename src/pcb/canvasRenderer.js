@@ -7,6 +7,7 @@
 
 import { getFootprint } from './footprintLib.js';
 import { activeCopperLayerIds, getCopperLayerDisplayName, isCopperLayerVisible } from './pcbDoc.js';
+import { snapBoard, snapInteractiveRoutePoint } from './pcbEditorUtils.js';
 
 /* ─── Layer colors (zones / polygons / UI chrome) ─── */
 export const PCB_LAYER_COLORS = {
@@ -323,12 +324,18 @@ export function renderPcbCanvas(ctx, params) {
       ctx.fillStyle = '#f8fafc';
       ctx.fillText(lab, tx, ty);
     }
-    // Rubber-band line to cursor
+    // Rubber-band to snapped corner (same 45° logic as click placement)
     if (boardCursorMm) {
       const last = routeDraft[routeDraft.length - 1];
+      const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
+      let [ex, ey] = snapInteractiveRoutePoint(prev, last, boardCursorMm[0], boardCursorMm[1]);
+      const g = Number(doc.meta?.gridMm) > 0 ? Number(doc.meta.gridMm) : 0.5;
+      const sn = doc.meta?.snapToGrid !== false;
+      ex = snapBoard(ex, g, sn);
+      ey = snapBoard(ey, g, sn);
       ctx.beginPath();
       ctx.moveTo(last[0], last[1]);
-      ctx.lineTo(boardCursorMm[0], boardCursorMm[1]);
+      ctx.lineTo(ex, ey);
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = trackW + Math.max(0.05, trackW * 0.2);
       ctx.setLineDash([0.3, 0.2]);

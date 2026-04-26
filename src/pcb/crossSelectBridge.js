@@ -5,7 +5,12 @@
 
 import { componentPins } from '../circuit/schematicDoc.js';
 
+/** Legacy single key (pre split); read only for one-time migration. */
 export const CROSS_SELECT_KEY = 'nozeSchPcbCrossSelect:v1';
+/** Schematic → PCB Studio (pads / footprint refs from canvas selection). */
+export const CROSS_SELECT_KEY_SCH_TO_PCB = 'nozeSchPcbCrossSelect:v2:sch';
+/** PCB Studio → schematic (placement refs + track/via/polygon nets). */
+export const CROSS_SELECT_KEY_PCB_TO_SCH = 'nozeSchPcbCrossSelect:v2:pcb';
 export const CROSS_SELECT_EVENT = 'noze-sch-pcb-cross';
 
 /**
@@ -13,19 +18,37 @@ export const CROSS_SELECT_EVENT = 'noze-sch-pcb-cross';
  */
 export function broadcastCrossSelect(payload) {
     try {
-        sessionStorage.setItem(CROSS_SELECT_KEY, JSON.stringify({ ts: Date.now(), ...payload }));
+        const key = payload.from === 'pcb' ? CROSS_SELECT_KEY_PCB_TO_SCH : CROSS_SELECT_KEY_SCH_TO_PCB;
+        sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), ...payload }));
     } catch {
         /* quota / private mode */
     }
     window.dispatchEvent(new Event(CROSS_SELECT_EVENT));
 }
 
-/** @returns {{ from: string, refs?: string[], nets?: string[], ts?: number } | null} */
-export function readCrossSelectPayload() {
+/** PCB Studio: read last schematic-driven highlight (own key — not overwritten when Circuit mounts). */
+export function readCrossSelectFromSchematicStorage() {
     try {
-        const raw = sessionStorage.getItem(CROSS_SELECT_KEY);
-        if (!raw) return null;
-        return JSON.parse(raw);
+        const raw = sessionStorage.getItem(CROSS_SELECT_KEY_SCH_TO_PCB);
+        if (raw) return JSON.parse(raw);
+        const leg = sessionStorage.getItem(CROSS_SELECT_KEY);
+        if (!leg) return null;
+        const o = JSON.parse(leg);
+        return o?.from === 'schematic' ? o : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Circuit Studio: read last PCB-driven highlight (own key — not overwritten by schematic broadcast). */
+export function readCrossSelectFromPcbStorage() {
+    try {
+        const raw = sessionStorage.getItem(CROSS_SELECT_KEY_PCB_TO_SCH);
+        if (raw) return JSON.parse(raw);
+        const leg = sessionStorage.getItem(CROSS_SELECT_KEY);
+        if (!leg) return null;
+        const o = JSON.parse(leg);
+        return o?.from === 'pcb' ? o : null;
     } catch {
         return null;
     }
