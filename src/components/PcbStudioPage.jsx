@@ -657,14 +657,15 @@ function PcbStudioPage({ onBackToSchematic }) {
         setPolygonDraft(null);
     }, [polygonDraft, doc, activeLayer]);
 
-    /* ── Insert via at cursor and switch layer (V key during routing) ── */
-    const insertViaAndSwitchLayer = useCallback(() => {
+    /* ── Insert via at cursor and switch layer (V / top bar during routing) ── */
+    const insertViaAndSwitchLayer = useCallback((opts = {}) => {
+        const reverse = !!opts.reverseLayer;
         const cursor = boardCursorMmRef.current || lastPointerBoardRef.current;
         const pt = [snap(cursor[0]), snap(cursor[1])];
-        const copperStack = activeCopperLayerIds(doc);
-        // Determine target layer (toggle F.Cu ↔ B.Cu, or cycle)
-        const curIdx = copperStack.indexOf(activeLayer);
-        const targetLayer = curIdx === 0 ? copperStack[copperStack.length - 1] : copperStack[0];
+        const stack = activeCopperLayerIds(doc);
+        const curIdx = Math.max(0, stack.indexOf(activeLayer));
+        const dir = reverse ? -1 : 1;
+        const targetLayer = stack[(curIdx + dir + stack.length) % stack.length];
 
         undoMgrRef.current.push(doc);
 
@@ -747,10 +748,10 @@ function PcbStudioPage({ onBackToSchematic }) {
 
             if (isInput()) return; // Below this: letter keys that shouldn't fire in text fields
 
-            /* ── V (no modifier): insert via / switch layer during routing ── */
+            /* ── V: insert via + next copper layer (Shift+V = previous layer) ── */
             if (e.key === 'v' || e.key === 'V') {
                 if (tool === 'route') {
-                    insertViaAndSwitchLayer();
+                    insertViaAndSwitchLayer({ reverseLayer: e.shiftKey });
                     return;
                 }
             }
@@ -1176,6 +1177,19 @@ function PcbStudioPage({ onBackToSchematic }) {
                         );
                     })}
                 </div>
+                {tool === 'route' ? (
+                    <>
+                        <div className="pcb-sep" />
+                        <button
+                            type="button"
+                            className="pcb-topbtn"
+                            onClick={(e) => insertViaAndSwitchLayer({ reverseLayer: e.shiftKey })}
+                            title="Via + next copper layer (same as V). Commits the in-progress trace to the cursor, adds a via, switches to the next layer in the stack, and continues routing from the via. Shift+click or Shift+V: previous layer."
+                        >
+                            <CircleDot size={14} /> Via layer
+                        </button>
+                    </>
+                ) : null}
                 <div className="pcb-sep" />
                 <button
                     type="button"
@@ -1248,6 +1262,11 @@ function PcbStudioPage({ onBackToSchematic }) {
             <div className="pcb-workspace">
                 <aside className="pcb-sidebar">
                     <h2>Copper Layers</h2>
+                    <p className="pcb-dr-hint">
+                        <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points.
+                        <strong> Change layer mid-route:</strong> move the cursor to the via location and press <kbd>V</kbd> or top bar <strong>Via layer</strong> — the current polyline is committed to that point, a via is added, the <strong>next</strong> copper layer in the stack is selected (wraps F→…→B), and routing continues from the via.
+                        <strong> Shift+V</strong> selects the <strong>previous</strong> layer instead. Finish with <kbd>Enter</kbd>, double-click, or right-click. Avoid switching layer chips mid-polyline without a via (the whole run uses one layer until you finish or use Via layer).
+                    </p>
                     <div className="pcb-layer-chips">
                         {copperStack.map((ly) => (
                             <button
@@ -1255,7 +1274,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                                 type="button"
                                 className={`pcb-layer-chip${activeLayer === ly ? ' is-active' : ''}`}
                                 onClick={() => setActiveLayer(ly)}
-                                title="Tracks you draw go on this layer"
+                                title="Active layer for new tracks (use Via layer / V mid-route to hop layers with a via)"
                             >
                                 {ly.replace('.Cu', '')}
                             </button>
@@ -1607,7 +1626,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                         />
                         <p className="pcb-hint">
                             Scroll=zoom &middot; Right-drag=pan &middot; Grid {doc.meta.gridMm ?? 0.5}mm
-                            {tool === 'route' && ' · Click=add point · Dbl-click/Enter=finish · V=via+layer · Esc=cancel'}
+                            {tool === 'route' && ' · Click=add point · Dbl-click/Enter/right=finish · V=via+next layer · Shift+V=prev layer · Esc=cancel'}
                             {tool === 'polygon' && ' · Click=add vertex · Dbl-click/Enter=close · Esc=cancel'}
                             {tool === 'select' && ' · Drag=move · R=rotate · D=dupe · Del=delete'}
                             {' · 1-8=layer · S/T/P/M/G=tool · F=fit'}

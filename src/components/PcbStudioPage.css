@@ -634,6 +634,18 @@
     color: #64748b;
 }
 
+.pcb-dr-hint kbd {
+    display: inline-block;
+    padding: 0 4px;
+    margin: 0 1px;
+    border-radius: 3px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 42, 0.65);
+    font-size: 0.58rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #cbd5e1;
+}
+
 .pcb-field-col {
     display: flex;
     flex-direction: column;
