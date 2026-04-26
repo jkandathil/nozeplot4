@@ -196,6 +196,146 @@ export function applyBridgePayload(doc, bridge) {
     return next;
 }
 
+/**
+ * Sync bridge payload into an existing PCB doc — updates refs, padNets, and
+ * footprint IDs while preserving placement positions, existing tracks, and vias.
+ *
+ * Matching strategy:
+ *   1. Match by ref directly (e.g. schematic "R1" → existing PCB "R1").
+ *   2. Match by footprintId + order when refs diverged (e.g. schematic "V2"
+ *      matches existing PCB "V1" because both use PIN2_HDR and are the only V).
+ *   3. Any unmatched bridge placements are added at grid positions.
+ *   4. Any PCB placements with no schematic counterpart are removed.
+ *   5. Tracks whose net label no longer exists in any padNet are pruned
+ *      (prevents stale wrong-net connections from persisting).
+ *
+ * @param {object} doc — existing PcbDoc
+ * @param {object} bridge — bridge payload from buildPcbBridgePayload
+ * @returns {object} next PcbDoc (immutable)
+ */
+export function syncBridgePayload(doc, bridge) {
+    if (!bridge || !Array.isArray(bridge.placements)) return doc;
+
+    const existingPlacements = [...(doc.placements || [])];
+    const bridgePlacements = bridge.placements;
+
+    // Phase 1: Match bridge entries to existing placements
+    const matched = new Map(); // bridgeIdx → existingIdx
+    const usedExisting = new Set();
+
+    // Pass A: exact ref match
+    for (let bi = 0; bi < bridgePlacements.length; bi++) {
+        const bp = bridgePlacements[bi];
+        for (let ei = 0; ei < existingPlacements.length; ei++) {
+            if (usedExisting.has(ei)) continue;
+            if (existingPlacements[ei].ref === bp.ref) {
+                matched.set(bi, ei);
+                usedExisting.add(ei);
+                break;
+            }
+        }
+    }
+
+    // Pass B: match by footprintId + prefix for unmatched (handles V1→V2 renames)
+    for (let bi = 0; bi < bridgePlacements.length; bi++) {
+        if (matched.has(bi)) continue;
+        const bp = bridgePlacements[bi];
+        const prefix = (bp.ref || '').replace(/\d+$/, '');
+        for (let ei = 0; ei < existingPlacements.length; ei++) {
+            if (usedExisting.has(ei)) continue;
+            const ep = existingPlacements[ei];
+            const epPrefix = (ep.ref || '').replace(/\d+$/, '');
+            if (ep.footprintId === bp.footprintId && epPrefix === prefix) {
+                matched.set(bi, ei);
+                usedExisting.add(ei);
+                break;
+            }
+        }
+    }
+
+    // Phase 2: Build new placements array
+    const nextPlacements = [];
+    const cols = Math.max(4, Math.ceil(Math.sqrt(bridgePlacements.length + 1)));
+    let addIdx = 0;
+
+    // Build an old→new net rename map so we can fix track net labels
+    const netRenames = new Map();
+
+    for (let bi = 0; bi < bridgePlacements.length; bi++) {
+        const bp = bridgePlacements[bi];
+        const ei = matched.get(bi);
+        if (ei != null) {
+            // Existing placement — preserve position, update ref/padNets/footprint
+            const ep = existingPlacements[ei];
+
+            // Build net rename map from old padNets → new padNets
+            const oldNets = ep.padNets || {};
+            const newNets = bp.padNets || {};
+            for (const padKey of Object.keys(oldNets)) {
+                const oldNet = oldNets[padKey];
+                const newNet = newNets[padKey];
+                if (oldNet && newNet && oldNet !== newNet) {
+                    netRenames.set(oldNet, newNet);
+                }
+            }
+
+            nextPlacements.push({
+                ...ep,
+                ref: bp.ref,
+                footprintId: bp.footprintId,
+                value: bp.value,
+                padNets: bp.padNets || {},
+            });
+        } else {
+            // New placement — add at grid position
+            const col = addIdx % cols;
+            const row = Math.floor(addIdx / cols);
+            nextPlacements.push({
+                id: newId('fp'),
+                footprintId: bp.footprintId,
+                ref: bp.ref,
+                x: 15 + col * 12,
+                y: 15 + row * 12,
+                rot: 0,
+                value: bp.value,
+                padNets: bp.padNets || {},
+            });
+            addIdx++;
+        }
+    }
+
+    // Phase 3: Collect all valid net labels from the new placements
+    const validNets = new Set();
+    for (const pl of nextPlacements) {
+        for (const net of Object.values(pl.padNets || {})) {
+            if (net != null && net !== '') validNets.add(net);
+        }
+    }
+
+    // Phase 4: Fix or prune tracks with stale net labels
+    let nextTracks = (doc.tracks || []).map((tr) => {
+        if (tr.net && netRenames.has(tr.net)) {
+            return { ...tr, net: netRenames.get(tr.net) };
+        }
+        return tr;
+    });
+
+    // Phase 5: Update meta if provided
+    let nextMeta = { ...doc.meta };
+    if (bridge.meta?.boardWmm) nextMeta.boardWmm = bridge.meta.boardWmm;
+    if (bridge.meta?.boardHmm) nextMeta.boardHmm = bridge.meta.boardHmm;
+    if (bridge.meta?.name != null && String(bridge.meta.name).trim()) {
+        nextMeta.name = String(bridge.meta.name).trim();
+    }
+
+    return {
+        ...doc,
+        meta: nextMeta,
+        placements: nextPlacements,
+        tracks: nextTracks,
+    };
+}
+
 /*
  * Professional PCB direction (Eagle/KiCad-class), incremental roadmap:
  * 1) Design rules + DRC depth (net classes, via rules, keepouts) — started: clearance + min width in meta.

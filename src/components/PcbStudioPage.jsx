@@ -39,11 +39,13 @@ import {
     List,
     SquareDashed,
     Save,
+    RefreshCw,
 } from 'lucide-react';
 import {
     emptyPcbDoc,
     newId,
     applyBridgePayload,
+    syncBridgePayload,
     migratePcbDoc,
     parsePcbDocJson,
     activeCopperLayerIds,
@@ -346,15 +348,31 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
     }, [doc]);
 
+    const lastBridgeHashRef = useRef('');
+
     useEffect(() => {
         const consumeBridge = () => {
             try {
                 const raw = sessionStorage.getItem(PCB_BRIDGE_KEY);
                 if (!raw) return false;
+                // Skip if we already consumed this exact bridge payload
+                const hash = raw.length + ':' + raw.slice(0, 80);
+                if (hash === lastBridgeHashRef.current) return false;
+                lastBridgeHashRef.current = hash;
                 const bridge = JSON.parse(raw);
-                sessionStorage.removeItem(PCB_BRIDGE_KEY);
+                // Keep bridge in sessionStorage for manual Sync button re-reads
                 setPcbWorkflowDemo(bridge.workflowDemo === PCB_WORKFLOW_DEMO_ID);
-                setDoc(migratePcbDoc(applyBridgePayload(emptyPcbDoc(), bridge)));
+
+                const currentDoc = docRef.current;
+                const hasExisting = (currentDoc.placements || []).length > 0;
+
+                if (hasExisting) {
+                    // Sync: update refs, padNets, footprints while preserving layout
+                    setDoc(migratePcbDoc(syncBridgePayload(currentDoc, bridge)));
+                } else {
+                    // Fresh import: no existing layout, create from scratch
+                    setDoc(migratePcbDoc(applyBridgePayload(emptyPcbDoc(), bridge)));
+                }
                 setDrcViolations([]);
                 setSelected([]);
                 return true;
@@ -364,13 +382,18 @@ function PcbStudioPage({ onBackToSchematic }) {
         };
 
         const boot = () => {
-            if (consumeBridge()) return;
+            // Try loading from localStorage first, then consume bridge on top
             try {
                 const saved = localStorage.getItem(PCB_STORAGE_KEY);
-                if (saved) setDoc(migratePcbDoc(JSON.parse(saved)));
+                if (saved) {
+                    const restored = migratePcbDoc(JSON.parse(saved));
+                    setDoc(restored);
+                    docRef.current = restored;
+                }
             } catch {
                 /* ignore */
             }
+            consumeBridge();
         };
 
         boot();
@@ -561,19 +584,40 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
     }, [hasUnroutedRatsnest]);
 
+    const handleSyncSchematic = useCallback(() => {
+        try {
+            const raw = sessionStorage.getItem(PCB_BRIDGE_KEY);
+            if (!raw) {
+                window.alert('No schematic data found. Please open the Circuit Studio schematic first, then click "Send to PCB".');
+                return;
+            }
+            const bridge = JSON.parse(raw);
+            undoMgrRef.current.push(doc);
+            const synced = syncBridgePayload(doc, bridge);
+            setDoc(migratePcbDoc(synced));
+            setDrcViolations([]);
+            setSelected([]);
+        } catch (err) {
+            console.error('Sync failed:', err);
+            window.alert('Sync failed: ' + err.message);
+        }
+    }, [doc]);
+
     const handleAutoRoute = useCallback(() => {
         if (padCentersByNet.size === 0) {
             window.alert('No nets to route! Ensure your schematic components are wired together before sending to PCB Studio.');
             return;
         }
         undoMgrRef.current.push(doc);
-        const result = autoRoute(doc, padCentersByNet, { routeLayer: activeLayer });
+        // Clear existing tracks and vias before re-routing to prevent stale connections
+        const cleanDoc = { ...doc, tracks: [], vias: [] };
+        const result = autoRoute(cleanDoc, padCentersByNet, { routeLayer: activeLayer });
         const newTracks = result.tracks || [];
         const newVias = result.vias || [];
         setDoc((d) => ({
             ...d,
-            tracks: [...(d.tracks || []), ...newTracks],
-            vias: [...(d.vias || []), ...newVias],
+            tracks: newTracks,
+            vias: newVias,
         }));
     }, [doc, padCentersByNet, activeLayer]);
 
@@ -1524,6 +1568,14 @@ function PcbStudioPage({ onBackToSchematic }) {
                     ) : null}
                 </div>
                 <div className="pcb-sep" />
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    onClick={handleSyncSchematic}
+                    title="Re-sync component refs, net assignments, and footprints from the schematic without losing your placement layout."
+                >
+                    <RefreshCw size={14} /> Sync
+                </button>
                 <button
                     type="button"
                     className="pcb-topbtn"
