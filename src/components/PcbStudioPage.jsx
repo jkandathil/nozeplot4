@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import {
     Home,
     CircuitBoard,
@@ -9,6 +9,11 @@ import {
     Download,
     Trash2,
     Layers,
+    Eye,
+    EyeOff,
+    FileJson,
+    FileCode2,
+    Upload,
     AlertTriangle,
     Zap,
     Copy,
@@ -21,15 +26,30 @@ import {
     Maximize2,
     X,
     Route,
+    LayoutTemplate,
+    Ruler,
+    Grid3x3,
+    Lock,
+    Unlock,
+    RotateCcw,
+    Search,
+    FileText,
+    Package,
+    Undo2,
+    Redo2,
+    List,
+    SquareDashed,
 } from 'lucide-react';
 import {
     emptyPcbDoc,
     newId,
     applyBridgePayload,
     migratePcbDoc,
+    parsePcbDocJson,
     activeCopperLayerIds,
     COPPER_LAYER_COUNT_OPTIONS,
     PCB_GRID_PRESETS_MM,
+    isCopperLayerVisible,
 } from '../pcb/pcbDoc.js';
 import {
     snapBoard,
@@ -49,26 +69,21 @@ import {
     readCrossSelectPayload,
     collectPcbCrossPayload,
 } from '../pcb/crossSelectBridge.js';
-import { getFootprint, listFootprintSummaries } from '../pcb/footprintLib.js';
+import { getFootprint, listFootprintSummaries, searchFootprints } from '../pcb/footprintLib.js';
 import { buildPcbFabricationZip, triggerBlobDownload } from '../pcb/gerberZip.js';
+import { exportPcbDocToKicadPcb } from '../pcb/kicadPcbExport.js';
 import { runDRC } from '../pcb/pcbDrc.js';
 import { autoRoute } from '../pcb/autoRouter.js';
+import { renderPcbCanvas, canvasToBoard, boardToCanvas, PCB_LAYER_COLORS } from '../pcb/canvasRenderer.js';
+import { createUndoManager } from '../pcb/undoManager.js';
+import { initNetClasses, getNetClass, assignNetToClass, addNetClass } from '../pcb/netClasses.js';
+import { generateBomCsv, generatePickAndPlaceCsv, generateIpcD356, downloadTextFile } from '../pcb/bomExport.js';
 import OnlineComponentModal from './OnlineComponentModal.jsx';
 import FootprintImportModal from './FootprintImportModal.jsx';
+import BoardPreviewModal from './BoardPreviewModal.jsx';
 import './PcbStudioPage.css';
 
 const PCB_STORAGE_KEY = 'nozePcbDoc:v1';
-
-const PCB_LAYER_COLORS = {
-    'F.Cu': '#ef4444',
-    'In1.Cu': '#f59e0b',
-    'In2.Cu': '#eab308',
-    'In3.Cu': '#22c55e',
-    'In4.Cu': '#06b6d4',
-    'In5.Cu': '#3b82f6',
-    'In6.Cu': '#6366f1',
-    'B.Cu': '#a855f7',
-};
 
 function selectionKey(sel) {
     return `${sel.kind}:${sel.id}`;
@@ -97,19 +112,14 @@ function padWorld(pl, pad) {
     return [lx + pl.x, ly + pl.y];
 }
 
-function clientToSvgMm(svgEl, clientX, clientY) {
-    if (!svgEl) return [0, 0];
-    const pt = svgEl.createSVGPoint();
-    pt.x = clientX;
-    pt.y = clientY;
-    const ctm = svgEl.getScreenCTM();
-    if (!ctm) return [0, 0];
-    const p = pt.matrixTransform(ctm.inverse());
-    return [p.x, p.y];
-}
-
 function clamp(n, lo, hi) {
     return Math.min(hi, Math.max(lo, n));
+}
+
+const MM_PER_MIL = 0.0254;
+
+function mmToMil(mm) {
+    return mm / MM_PER_MIL;
 }
 
 function footprintBBox(pl) {
@@ -136,7 +146,6 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [tool, setTool] = useState('select');
     const [activeLayer, setActiveLayer] = useState('F.Cu');
     const [placeFootprintId, setPlaceFootprintId] = useState('R_0805');
-    /** @type {Array<{ kind: 'placement' | 'track' | 'via' | 'polygon', id: string }>} */
     const [selected, setSelected] = useState([]);
     const [routeDraft, setRouteDraft] = useState(null);
     const [polygonDraft, setPolygonDraft] = useState(null);
@@ -146,23 +155,42 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [showOnlineSearch, setShowOnlineSearch] = useState(false);
     const [showFootprintImport, setShowFootprintImport] = useState(false);
     const [libVersion, setLibVersion] = useState(0);
-    /** True after opening from the Circuit Studio "schematic → Gerber" tutorial demo. */
     const [pcbWorkflowDemo, setPcbWorkflowDemo] = useState(false);
-    const svgRef = useRef(null);
+    const [showBoardPreview, setShowBoardPreview] = useState(false);
+    const [boardPreview, setBoardPreview] = useState({
+        solderMask: true,
+        brightInactiveLayers: true,
+        boldSilk: true,
+    });
+    const [boardCursorMm, setBoardCursorMm] = useState(null);
+    const [showBoardGrid, setShowBoardGrid] = useState(true);
+    const [displayUnits, setDisplayUnits] = useState('mm');
+    const [relativeOriginMm, setRelativeOriginMm] = useState(null);
+    const [selectionFilter, setSelectionFilter] = useState({
+        placement: true,
+        track: true,
+        via: true,
+        polygon: true,
+    });
+    const [measureStart, setMeasureStart] = useState(null);
+    const [measureEnd, setMeasureEnd] = useState(null);
+    const [lockedLayers, setLockedLayers] = useState(new Set());
+    const [footprintSearchQuery, setFootprintSearchQuery] = useState('');
+    const [showNetClassesPanel, setShowNetClassesPanel] = useState(false);
+
+    const canvasRef = useRef(null);
     const canvasWrapRef = useRef(null);
-    const boardSizeRef = useRef({ W: 80, H: 50 });
+    const animFrameRef = useRef(null);
+    const boardJsonImportRef = useRef(null);
     const clipboardRef = useRef(null);
     const lastPointerBoardRef = useRef([20, 20]);
-    const snapRef = useRef({ gridMm: 0.5, snapToGrid: true });
+    const undoMgrRef = useRef(createUndoManager(64));
+    const netClassesRef = useRef(initNetClasses());
 
     const snap = useCallback(
         (v) => snapBoard(v, doc.meta?.gridMm ?? 0.5, doc.meta?.snapToGrid !== false),
         [doc.meta?.gridMm, doc.meta?.snapToGrid],
     );
-
-    useEffect(() => {
-        snapRef.current = { gridMm: doc.meta?.gridMm ?? 0.5, snapToGrid: doc.meta?.snapToGrid !== false };
-    }, [doc.meta?.gridMm, doc.meta?.snapToGrid]);
 
     const docRef = useRef(doc);
     const selectedRef = useRef(selected);
@@ -171,7 +199,6 @@ function PcbStudioPage({ onBackToSchematic }) {
         selectedRef.current = selected;
     }, [doc, selected]);
 
-    /** Highlights driven by Circuit Studio selection (designator + nets). */
     const [schCrossHighlight, setSchCrossHighlight] = useState({ refs: [], nets: [] });
 
     useEffect(() => {
@@ -202,8 +229,32 @@ function PcbStudioPage({ onBackToSchematic }) {
         [schCrossHighlight.nets],
     );
 
-    const fpSummaries = useMemo(() => listFootprintSummaries(), [libVersion]);
+    const fpSummaries = useMemo(() => {
+        if (footprintSearchQuery.trim()) {
+            return searchFootprints(footprintSearchQuery);
+        }
+        return listFootprintSummaries();
+    }, [libVersion, footprintSearchQuery]);
+
     const copperStack = useMemo(() => activeCopperLayerIds(doc), [doc.meta?.copperLayerCount]);
+    const layerDrawOrder = useMemo(() => [...copperStack].reverse(), [copperStack]);
+    const inactiveCopperOpacity = boardPreview.brightInactiveLayers ? 0.9 : 0.4;
+    const anyCopperLayerVisible = useMemo(
+        () => copperStack.some((ly) => isCopperLayerVisible(doc, ly)),
+        [copperStack, doc],
+    );
+
+    const toggleCopperLayerVisibility = useCallback((ly) => {
+        setDoc((d) => {
+            const stack = activeCopperLayerIds(d);
+            const nVis = stack.filter((l) => isCopperLayerVisible(d, l)).length;
+            if (nVis <= 1 && isCopperLayerVisible(d, ly)) return d;
+            const vis = { ...(d.meta.layerVisibility || {}) };
+            if (isCopperLayerVisible(d, ly)) vis[ly] = false;
+            else delete vis[ly];
+            return { ...d, meta: { ...d.meta, layerVisibility: vis } };
+        });
+    }, []);
 
     const handleRunDRC = useCallback(() => {
         const v = runDRC(doc, getFootprint);
@@ -253,6 +304,21 @@ function PcbStudioPage({ onBackToSchematic }) {
     }, [copperStack]);
 
     useEffect(() => {
+        if (tool !== 'measure') {
+            setMeasureStart(null);
+            setMeasureEnd(null);
+        }
+    }, [tool]);
+
+    useEffect(() => {
+        if (!copperStack.length) return;
+        if (!isCopperLayerVisible(doc, activeLayer)) {
+            const next = copperStack.find((ly) => isCopperLayerVisible(doc, ly));
+            if (next) setActiveLayer(next);
+        }
+    }, [doc.meta?.layerVisibility, copperStack, doc, activeLayer]);
+
+    useEffect(() => {
         setDrcViolations([]);
         const t = setTimeout(() => {
             try {
@@ -267,13 +333,8 @@ function PcbStudioPage({ onBackToSchematic }) {
     const W = Number(doc.meta?.boardWmm) || 80;
     const H = Number(doc.meta?.boardHmm) || 50;
 
-    /** Board view: zoom ≥1 = zoomed in (smaller viewBox window). Pan is viewBox min corner (mm). */
     const [pcbViewport, setPcbViewport] = useState({ zoom: 1, panX: 0, panY: 0 });
     const [pcbViewDrag, setPcbViewDrag] = useState(false);
-
-    useEffect(() => {
-        boardSizeRef.current = { W, H };
-    }, [W, H]);
 
     useEffect(() => {
         setPcbViewport((vp) => {
@@ -286,12 +347,6 @@ function PcbStudioPage({ onBackToSchematic }) {
             };
         });
     }, [W, H]);
-
-    const viewBoxStr = useMemo(() => {
-        const vw = W / pcbViewport.zoom;
-        const vh = H / pcbViewport.zoom;
-        return `${pcbViewport.panX} ${pcbViewport.panY} ${vw} ${vh}`;
-    }, [W, H, pcbViewport]);
 
     const fitViewport = useCallback(() => {
         setPcbViewport({ zoom: 1, panX: 0, panY: 0 });
@@ -315,49 +370,58 @@ function PcbStudioPage({ onBackToSchematic }) {
     }, [W, H]);
 
     useEffect(() => {
-        const el = canvasWrapRef.current;
-        if (!el) return;
+        const wrap = canvasWrapRef.current;
+        if (!wrap) return;
         const onWheel = (e) => {
-            const { W: Wb, H: Hb } = boardSizeRef.current;
-            const svg = svgRef.current;
-            if (!svg || Wb < 1 || Hb < 1) return;
+            if (!canvasRef.current || W < 1 || H < 1) return;
             e.preventDefault();
-            const [cx, cy] = clientToSvgMm(svg, e.clientX, e.clientY);
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            const [cx, cy] = canvasToBoard(
+                e.clientX - rect.left,
+                e.clientY - rect.top,
+                pcbViewport,
+                canvas.width / dpr,
+                canvas.height / dpr,
+                W,
+                H,
+                dpr
+            );
             const delta = e.deltaY;
             const factor = delta > 0 ? 0.92 : 1 / 0.92;
             setPcbViewport((vp) => {
                 const z = clamp(vp.zoom * factor, 0.2, 32);
-                const vw0 = Wb / vp.zoom;
-                const vh0 = Hb / vp.zoom;
-                const vw1 = Wb / z;
-                const vh1 = Hb / z;
+                const vw0 = W / vp.zoom;
+                const vh0 = H / vp.zoom;
+                const vw1 = W / z;
+                const vh1 = H / z;
                 const u = vw0 > 1e-9 ? (cx - vp.panX) / vw0 : 0.5;
                 const v = vh0 > 1e-9 ? (cy - vp.panY) / vh0 : 0.5;
                 let panX = cx - u * vw1;
                 let panY = cy - v * vh1;
-                panX = clamp(panX, 0, Math.max(0, Wb - vw1));
-                panY = clamp(panY, 0, Math.max(0, Hb - vh1));
+                panX = clamp(panX, 0, Math.max(0, W - vw1));
+                panY = clamp(panY, 0, Math.max(0, H - vh1));
                 return { zoom: z, panX, panY };
             });
         };
-        el.addEventListener('wheel', onWheel, { passive: false });
-        return () => el.removeEventListener('wheel', onWheel);
-    }, []);
+        wrap.addEventListener('wheel', onWheel, { passive: false });
+        return () => wrap.removeEventListener('wheel', onWheel);
+    }, [W, H, pcbViewport]);
 
     useEffect(() => {
         if (!pcbViewDrag) return;
         const onMove = (ev) => {
-            const svg = svgRef.current;
-            if (!svg) return;
-            const rect = svg.getBoundingClientRect();
-            const { W: Wb, H: Hb } = boardSizeRef.current;
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
             setPcbViewport((vp) => {
-                const vw = Wb / vp.zoom;
-                const vh = Hb / vp.zoom;
+                const vw = W / vp.zoom;
+                const vh = H / vp.zoom;
                 const dx = -(ev.movementX / Math.max(rect.width, 1)) * vw;
                 const dy = -(ev.movementY / Math.max(rect.height, 1)) * vh;
-                const panX = clamp(vp.panX + dx, 0, Math.max(0, Wb - vw));
-                const panY = clamp(vp.panY + dy, 0, Math.max(0, Hb - vh));
+                const panX = clamp(vp.panX + dx, 0, Math.max(0, W - vw));
+                const panY = clamp(vp.panY + dy, 0, Math.max(0, H - vh));
                 return { ...vp, panX, panY };
             });
         };
@@ -368,7 +432,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
-    }, [pcbViewDrag]);
+    }, [pcbViewDrag, W, H]);
 
     const padCentersByNet = useMemo(() => {
         const map = new Map();
@@ -392,699 +456,646 @@ function PcbStudioPage({ onBackToSchematic }) {
             window.alert('No nets to route! Ensure your schematic components are wired together before sending to PCB Studio.');
             return;
         }
-        const newTracks = autoRoute(doc, padCentersByNet);
+        undoMgrRef.current.push(doc);
+        const result = autoRoute(doc, padCentersByNet);
+        const newTracks = result.tracks || [];
+        const newVias = result.vias || [];
         setDoc((d) => ({
             ...d,
             tracks: [...(d.tracks || []), ...newTracks],
+            vias: [...(d.vias || []), ...newVias],
         }));
     }, [doc, padCentersByNet]);
 
     const handleExportZip = useCallback(async () => {
+        if (exportBusy) return;
         setExportBusy(true);
         try {
-            const blob = await buildPcbFabricationZip(doc, doc.meta?.name || 'pcb');
-            triggerBlobDownload(blob, `${(doc.meta?.name || 'pcb').replace(/[^\w\-]+/g, '_')}_gerber.zip`);
-        } catch (e) {
-            window.alert(e?.message || String(e));
+            const fab = buildPcbFabricationZip(doc);
+            triggerBlobDownload(fab, 'pcb-fab.zip');
+        } catch (err) {
+            console.error('Export failed:', err);
+            window.alert('Export failed: ' + err.message);
         } finally {
             setExportBusy(false);
         }
+    }, [doc, exportBusy]);
+
+    const handleExportKicad = useCallback(() => {
+        try {
+            const kicadText = exportPcbDocToKicadPcb(doc);
+            downloadTextFile(kicadText, 'board.kicad_pcb');
+        } catch (err) {
+            console.error('KiCad export failed:', err);
+            window.alert('KiCad export failed: ' + err.message);
+        }
     }, [doc]);
 
-    const pickPlacementAt = useCallback(
-        (x, y) => {
-            for (let i = (doc.placements || []).length - 1; i >= 0; i--) {
-                const pl = doc.placements[i];
-                const b = footprintBBox(pl);
-                if (x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY) return pl;
-            }
-            return null;
-        },
-        [doc.placements],
-    );
+    const handleExportBom = useCallback(() => {
+        try {
+            const csv = generateBomCsv(doc, getFootprint);
+            downloadTextFile(csv, 'bom.csv');
+        } catch (err) {
+            console.error('BOM export failed:', err);
+            window.alert('BOM export failed: ' + err.message);
+        }
+    }, [doc]);
 
-    const onSvgDown = useCallback(
-        (ev) => {
-            if (ev.button === 1) {
-                ev.preventDefault();
-                setPcbViewDrag(true);
-                return;
-            }
-            if (tool === 'pan' && ev.button === 0) {
-                ev.preventDefault();
-                setPcbViewDrag(true);
-                return;
-            }
-            if (ev.button !== 0) return;
+    const handleExportPickAndPlace = useCallback(() => {
+        try {
+            const csv = generatePickAndPlaceCsv(doc, getFootprint);
+            downloadTextFile(csv, 'pick-place.csv');
+        } catch (err) {
+            console.error('Pick & Place export failed:', err);
+            window.alert('Pick & Place export failed: ' + err.message);
+        }
+    }, [doc]);
 
-            const [mx, my] = clientToSvgMm(svgRef.current, ev.clientX, ev.clientY);
-            const { gridMm, snapToGrid } = snapRef.current;
-            const x = snapBoard(mx, gridMm, snapToGrid);
-            const y = snapBoard(my, gridMm, snapToGrid);
-            lastPointerBoardRef.current = [x, y];
-
-            if (tool === 'place') {
-                setDoc((d) => ({
-                    ...d,
-                    placements: [
-                        ...d.placements,
-                        {
-                            id: newId('fp'),
-                            footprintId: placeFootprintId,
-                            ref: `FP${d.placements.length + 1}`,
-                            x,
-                            y,
-                            rot: 0,
-                            padNets: {},
-                        },
-                    ],
-                }));
-                return;
-            }
-            if (tool === 'via') {
-                setDoc((d) => ({
-                    ...d,
-                    vias: [
-                        ...d.vias,
-                        {
-                            id: newId('via'),
-                            x,
-                            y,
-                            drillMm: d.meta.defaultViaDrillMm,
-                            diamMm: d.meta.defaultViaDiamMm,
-                            net: '',
-                        },
-                    ],
-                }));
-                return;
-            }
-            if (tool === 'route') {
-                setRouteDraft((prev) => {
-                    const next = prev ? [...prev, [x, y]] : [[x, y]];
-                    return next;
-                });
-                return;
-            }
-            if (tool === 'polygon') {
-                setPolygonDraft((prev) => {
-                    const next = prev ? [...prev, [x, y]] : [[x, y]];
-                    return next;
-                });
-                return;
-            }
-
-            const viaHit = pickViaAt(doc, mx, my);
-            const trHit = pickTrackAt(doc, mx, my);
-            const polyHit = pickPolygonAt(doc, mx, my);
-            const pl = pickPlacementAt(mx, my);
-
-            if (viaHit) {
-                const item = { kind: 'via', id: viaHit.id };
-                setSelected((prev) => (ev.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                setDrag(null);
-                return;
-            }
-            if (trHit) {
-                const item = { kind: 'track', id: trHit.id };
-                setSelected((prev) => (ev.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                setDrag(null);
-                return;
-            }
-            if (polyHit) {
-                const item = { kind: 'polygon', id: polyHit.id };
-                setSelected((prev) => (ev.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                setDrag(null);
-                return;
-            }
-            if (pl) {
-                const item = { kind: 'placement', id: pl.id };
-                setSelected((prev) => (ev.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                setDrag({
-                    id: pl.id,
-                    ox: pl.x,
-                    oy: pl.y,
-                    sx: mx,
-                    sy: my,
-                });
-                return;
-            }
-            if (!ev.shiftKey) setSelected([]);
-            setDrag(null);
-        },
-        [tool, placeFootprintId, pickPlacementAt, doc],
-    );
-
-    const viewCenterBoard = useMemo(() => {
-        const vw = W / pcbViewport.zoom;
-        const vh = H / pcbViewport.zoom;
-        return [pcbViewport.panX + vw / 2, pcbViewport.panY + vh / 2];
-    }, [W, H, pcbViewport]);
-
-    useEffect(() => {
-        if (!drag) return;
-        const onMove = (ev) => {
-            const [mx, my] = clientToSvgMm(svgRef.current, ev.clientX, ev.clientY);
-            const { gridMm, snapToGrid } = snapRef.current;
-            setDoc((d) => ({
-                ...d,
-                placements: d.placements.map((p) => {
-                    if (p.id !== drag.id) return p;
-                    const dx = snapBoard(mx - drag.sx, gridMm, snapToGrid);
-                    const dy = snapBoard(my - drag.sy, gridMm, snapToGrid);
-                    return {
-                        ...p,
-                        x: snapBoard(drag.ox + dx, gridMm, snapToGrid),
-                        y: snapBoard(drag.oy + dy, gridMm, snapToGrid),
-                    };
-                }),
-            }));
-        };
-        const onUp = () => setDrag(null);
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
-        return () => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-        };
-    }, [drag]);
-
-    const buildClipboardFromSelection = useCallback(
-        (d, sel) => {
-            const idSet = new Set(sel.map(selectionKey));
-            const placements = (d.placements || [])
-                .filter((p) => idSet.has(`placement:${p.id}`))
-                .map(({ id, ...rest }) => ({ ...rest }));
-            const tracks = (d.tracks || [])
-                .filter((t) => idSet.has(`track:${t.id}`))
-                .map(({ id, ...rest }) => ({ ...rest, points: (rest.points || []).map((pt) => [...pt]) }));
-            const vias = (d.vias || [])
-                .filter((v) => idSet.has(`via:${v.id}`))
-                .map(({ id, ...rest }) => ({ ...rest }));
-            const polygons = (d.polygons || [])
-                .filter((p) => idSet.has(`polygon:${p.id}`))
-                .map(({ id, ...rest }) => ({ ...rest, points: (rest.points || []).map((pt) => [...pt]) }));
-            return { placements, tracks, vias, polygons };
-        },
-        [],
-    );
+    const handleExportIpcD356 = useCallback(() => {
+        try {
+            const txt = generateIpcD356(doc);
+            downloadTextFile(txt, 'netlist.ipc');
+        } catch (err) {
+            console.error('IPC-D-356 export failed:', err);
+            window.alert('IPC-D-356 export failed: ' + err.message);
+        }
+    }, [doc]);
 
     const handleCopy = useCallback(() => {
-        setDoc((d) => {
-            const buf = buildClipboardFromSelection(d, selected);
-            if (
-                buf.placements.length + buf.tracks.length + buf.vias.length + buf.polygons.length ===
-                0
-            ) {
-                return d;
+        if (!selected.length) return;
+        const items = [];
+        for (const sel of selected) {
+            if (sel.kind === 'placement') {
+                const p = doc.placements?.find((x) => x.id === sel.id);
+                if (p) items.push({ kind: 'placement', obj: p });
+            } else if (sel.kind === 'track') {
+                const t = doc.tracks?.find((x) => x.id === sel.id);
+                if (t) items.push({ kind: 'track', obj: t });
+            } else if (sel.kind === 'via') {
+                const v = doc.vias?.find((x) => x.id === sel.id);
+                if (v) items.push({ kind: 'via', obj: v });
+            } else if (sel.kind === 'polygon') {
+                const p = doc.polygons?.find((x) => x.id === sel.id);
+                if (p) items.push({ kind: 'polygon', obj: p });
             }
-            clipboardRef.current = buf;
-            return d;
-        });
-    }, [selected, buildClipboardFromSelection]);
+        }
+        clipboardRef.current = items;
+    }, [doc, selected]);
 
     const handlePaste = useCallback(() => {
-        const buf = clipboardRef.current;
-        if (!buf) return;
-        const [tx, ty] = lastPointerBoardRef.current;
-        const [cx, cy] = centroidClipboard(buf);
-        const ox = tx - cx;
-        const oy = ty - cy;
+        if (!clipboardRef.current?.length || !boardCursorMm) return;
+        undoMgrRef.current.push(doc);
+        const [pasteX, pasteY] = boardCursorMm;
+        const items = clipboardRef.current;
+        const refPoints = [];
+        for (const item of items) {
+            if (item.kind === 'placement') refPoints.push([item.obj.x, item.obj.y]);
+            else if (item.kind === 'track' && item.obj.points?.length)
+                refPoints.push(item.obj.points[0]);
+            else if (item.kind === 'via') refPoints.push([item.obj.x, item.obj.y]);
+            else if (item.kind === 'polygon' && item.obj.points?.length)
+                refPoints.push(item.obj.points[0]);
+        }
+        const refX = refPoints.length ? refPoints[0][0] : 0;
+        const refY = refPoints.length ? refPoints[0][1] : 0;
+        const dx = pasteX - refX;
+        const dy = pasteY - refY;
+        const newSelections = [];
         setDoc((d) => {
-            const { gridMm, snapToGrid } = {
-                gridMm: d.meta?.gridMm ?? 0.5,
-                snapToGrid: d.meta?.snapToGrid !== false,
-            };
-            const snapPt = ([px, py]) => [snapBoard(px + ox, gridMm, snapToGrid), snapBoard(py + oy, gridMm, snapToGrid)];
-            const next = { ...d };
-            next.placements = [...(d.placements || [])];
-            next.tracks = [...(d.tracks || [])];
-            next.vias = [...(d.vias || [])];
-            next.polygons = [...(d.polygons || [])];
-            for (const p of buf.placements || []) {
-                const id = newId('fp');
-                const [x, y] = snapPt([p.x, p.y]);
-                next.placements.push({
-                    ...p,
-                    id,
-                    x,
-                    y,
-                    ref: `${p.ref || 'FP'}_copy`,
-                });
+            let newDoc = { ...d };
+            for (const item of items) {
+                if (item.kind === 'placement') {
+                    const p = { ...item.obj, id: newId(), x: item.obj.x + dx, y: item.obj.y + dy };
+                    newDoc = {
+                        ...newDoc,
+                        placements: [...(newDoc.placements || []), p],
+                    };
+                    newSelections.push({ kind: 'placement', id: p.id });
+                } else if (item.kind === 'track') {
+                    const t = {
+                        ...item.obj,
+                        id: newId(),
+                        points: item.obj.points?.map((pt) => [pt[0] + dx, pt[1] + dy]) || [],
+                    };
+                    newDoc = {
+                        ...newDoc,
+                        tracks: [...(newDoc.tracks || []), t],
+                    };
+                    newSelections.push({ kind: 'track', id: t.id });
+                } else if (item.kind === 'via') {
+                    const v = { ...item.obj, id: newId(), x: item.obj.x + dx, y: item.obj.y + dy };
+                    newDoc = {
+                        ...newDoc,
+                        vias: [...(newDoc.vias || []), v],
+                    };
+                    newSelections.push({ kind: 'via', id: v.id });
+                } else if (item.kind === 'polygon') {
+                    const pg = {
+                        ...item.obj,
+                        id: newId(),
+                        points: item.obj.points?.map((pt) => [pt[0] + dx, pt[1] + dy]) || [],
+                    };
+                    newDoc = {
+                        ...newDoc,
+                        polygons: [...(newDoc.polygons || []), pg],
+                    };
+                    newSelections.push({ kind: 'polygon', id: pg.id });
+                }
             }
-            for (const t of buf.tracks || []) {
-                next.tracks.push({
-                    ...t,
-                    id: newId('tr'),
-                    points: (t.points || []).map((pt) => snapPt(pt)),
-                });
-            }
-            for (const v of buf.vias || []) {
-                const [x, y] = snapPt([v.x, v.y]);
-                next.vias.push({ ...v, id: newId('via'), x, y });
-            }
-            for (const po of buf.polygons || []) {
-                next.polygons.push({
-                    ...po,
-                    id: newId('poly'),
-                    points: (po.points || []).map((pt) => snapPt(pt)),
-                });
-            }
-            return next;
+            return newDoc;
         });
-        setSelected([]);
+        setSelected(newSelections);
+    }, [doc, boardCursorMm]);
+
+    const handleUndo = useCallback(() => {
+        if (!undoMgrRef.current.canUndo()) return;
+        const prev = undoMgrRef.current.undo();
+        if (prev) {
+            setDoc(prev);
+            setSelected([]);
+        }
+    }, []);
+
+    const handleRedo = useCallback(() => {
+        if (!undoMgrRef.current.canRedo()) return;
+        const next = undoMgrRef.current.redo();
+        if (next) {
+            setDoc(next);
+            setSelected([]);
+        }
     }, []);
 
     useEffect(() => {
-        const onKey = (ev) => {
-            const t = ev.target;
-            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-
-            const mod = ev.metaKey || ev.ctrlKey;
-
-            if (ev.key === 'Escape') {
-                setRouteDraft(null);
-                setPolygonDraft(null);
-                setPcbViewDrag(false);
-                return;
-            }
-
-            if (!mod && (ev.key === '+' || ev.key === '=')) {
-                ev.preventDefault();
-                zoomViewportAt(1.12, viewCenterBoard[0], viewCenterBoard[1]);
-                return;
-            }
-            if (!mod && ev.key === '-') {
-                ev.preventDefault();
-                zoomViewportAt(1 / 1.12, viewCenterBoard[0], viewCenterBoard[1]);
-                return;
-            }
-            if (!mod && ev.key === '0') {
-                ev.preventDefault();
-                fitViewport();
-                return;
-            }
-
-            if (ev.key === 'Enter' && tool === 'route' && routeDraft?.length >= 2) {
-                const pts = routeDraft.map(([px, py]) => [snap(px), snap(py)]);
-                setDoc((d) => ({
-                    ...d,
-                    tracks: [
-                        ...d.tracks,
-                        {
-                            id: newId('tr'),
-                            layer: activeLayer,
-                            widthMm: d.meta.defaultTrackMm,
-                            net: '',
-                            points: pts,
-                        },
-                    ],
-                }));
-                setRouteDraft(null);
-                return;
-            }
-
-            if (ev.key === 'Enter' && tool === 'polygon' && polygonDraft?.length >= 3) {
-                const pts = polygonDraft.map(([px, py]) => [snap(px), snap(py)]);
-                setDoc((d) => ({
-                    ...d,
-                    polygons: [
-                        ...(d.polygons || []),
-                        {
-                            id: newId('poly'),
-                            layer: activeLayer,
-                            net: '',
-                            points: pts,
-                        },
-                    ],
-                }));
-                setPolygonDraft(null);
-                return;
-            }
-
-            if (mod && ev.key.toLowerCase() === 'c') {
-                ev.preventDefault();
+        const onKeyDown = (e) => {
+            if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (e.shiftKey) handleRedo();
+                else handleUndo();
+            } else if (e.key === 'y' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleRedo();
+            } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
                 handleCopy();
-                return;
-            }
-            if (mod && ev.key.toLowerCase() === 'v') {
-                ev.preventDefault();
+            } else if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
                 handlePaste();
-                return;
-            }
-            if (mod && ev.key.toLowerCase() === 'd') {
-                ev.preventDefault();
-                const buf = buildClipboardFromSelection(docRef.current, selectedRef.current);
-                if (
-                    buf.placements.length + buf.tracks.length + buf.vias.length + buf.polygons.length ===
-                    0
-                ) {
-                    return;
+            } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                e.preventDefault();
+                if (selected.length > 0) {
+                    undoMgrRef.current.push(doc);
+                    setDoc((d) => ({
+                        ...d,
+                        placements: d.placements?.filter((p) => !isItemSelected(selected, 'placement', p.id)) || [],
+                        tracks: d.tracks?.filter((t) => !isItemSelected(selected, 'track', t.id)) || [],
+                        vias: d.vias?.filter((v) => !isItemSelected(selected, 'via', v.id)) || [],
+                        polygons: d.polygons?.filter((pg) => !isItemSelected(selected, 'polygon', pg.id)) || [],
+                    }));
+                    setSelected([]);
                 }
-                clipboardRef.current = buf;
-                handlePaste();
-                return;
-            }
-
-            if ((ev.key === 'r' || ev.key === 'R') && selected.length) {
-                ev.preventDefault();
-                setDoc((d) => ({
-                    ...d,
-                    placements: d.placements.map((p) =>
-                        isItemSelected(selected, 'placement', p.id)
-                            ? { ...p, rot: (((Number(p.rot) || 0) + 90) % 360) }
-                            : p,
-                    ),
-                }));
-                return;
-            }
-
-            if ((ev.key === 'Delete' || ev.key === 'Backspace') && selected.length) {
-                ev.preventDefault();
-                const idSet = new Set(selected.map(selectionKey));
-                setDoc((d) => ({
-                    ...d,
-                    placements: (d.placements || []).filter((p) => !idSet.has(`placement:${p.id}`)),
-                    tracks: (d.tracks || []).filter((tr) => !idSet.has(`track:${tr.id}`)),
-                    vias: (d.vias || []).filter((v) => !idSet.has(`via:${v.id}`)),
-                    polygons: (d.polygons || []).filter((p) => !idSet.has(`polygon:${p.id}`)),
-                }));
-                setSelected([]);
+            } else if (e.key === 'd' || e.key === 'D') {
+                if (selected.length > 0) {
+                    undoMgrRef.current.push(doc);
+                    const refPoints = [];
+                    for (const sel of selected) {
+                        if (sel.kind === 'placement') {
+                            const p = doc.placements?.find((x) => x.id === sel.id);
+                            if (p) refPoints.push([p.x, p.y]);
+                        }
+                    }
+                    const refX = refPoints.length ? refPoints[0][0] : boardCursorMm?.[0] ?? 20;
+                    const refY = refPoints.length ? refPoints[0][1] : boardCursorMm?.[1] ?? 20;
+                    const newSelections = [];
+                    setDoc((d) => {
+                        let newDoc = { ...d };
+                        for (const sel of selected) {
+                            if (sel.kind === 'placement') {
+                                const p = newDoc.placements?.find((x) => x.id === sel.id);
+                                if (p) {
+                                    const dup = { ...p, id: newId(), x: p.x + 2, y: p.y + 2 };
+                                    newDoc = {
+                                        ...newDoc,
+                                        placements: [...(newDoc.placements || []), dup],
+                                    };
+                                    newSelections.push({ kind: 'placement', id: dup.id });
+                                }
+                            }
+                        }
+                        return newDoc;
+                    });
+                    setSelected(newSelections);
+                }
+            } else if (e.key === 'r' || e.key === 'R') {
+                if (selected.length > 0) {
+                    undoMgrRef.current.push(doc);
+                    setDoc((d) => ({
+                        ...d,
+                        placements: d.placements?.map((p) =>
+                            isItemSelected(selected, 'placement', p.id)
+                                ? { ...p, rot: (((Number(p.rot) || 0) + 90) % 360) }
+                                : p,
+                        ),
+                    }));
+                }
+            } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                if (selected.length > 0) {
+                    e.preventDefault();
+                    undoMgrRef.current.push(doc);
+                    const grid = doc.meta?.gridMm ?? 0.5;
+                    let dx = 0, dy = 0;
+                    if (e.key === 'ArrowUp') dy = -grid;
+                    else if (e.key === 'ArrowDown') dy = grid;
+                    else if (e.key === 'ArrowLeft') dx = -grid;
+                    else if (e.key === 'ArrowRight') dx = grid;
+                    setDoc((d) => ({
+                        ...d,
+                        placements: d.placements?.map((p) =>
+                            isItemSelected(selected, 'placement', p.id)
+                                ? { ...p, x: snap(p.x + dx), y: snap(p.y + dy) }
+                                : p,
+                        ),
+                    }));
+                }
             }
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [
-        tool,
-        routeDraft,
-        polygonDraft,
-        activeLayer,
-        selected,
-        snap,
-        handleCopy,
-        handlePaste,
-        buildClipboardFromSelection,
-        viewCenterBoard,
-        zoomViewportAt,
-        fitViewport,
-    ]);
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [selected, doc, boardCursorMm, snap, handleCopy, handlePaste, handleUndo, handleRedo]);
 
-    const gridLines = useMemo(() => {
-        const raw = Number(doc.meta?.gridMm) > 0 ? Number(doc.meta.gridMm) : 0.5;
-        const displayStep = Math.max(raw, Math.max(W, H) / 100);
-        const els = [];
-        let ix = 0;
-        for (let gx = 0; gx <= W + 1e-9; gx += displayStep, ix += 1) {
-            els.push(
-                <line
-                    key={`gv${ix}`}
-                    x1={gx}
-                    y1={0}
-                    x2={gx}
-                    y2={H}
-                    stroke={ix % 5 === 0 ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.06)'}
-                    strokeWidth={0.05}
-                />,
-            );
-        }
-        let iy = 0;
-        for (let gy = 0; gy <= H + 1e-9; gy += displayStep, iy += 1) {
-            els.push(
-                <line
-                    key={`gh${iy}`}
-                    x1={0}
-                    y1={gy}
-                    x2={W}
-                    y2={gy}
-                    stroke={iy % 5 === 0 ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.06)'}
-                    strokeWidth={0.05}
-                />,
-            );
-        }
-        return els;
-    }, [W, H, doc.meta?.gridMm]);
+    const onCanvasMouseDown = useCallback((ev) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const [mx, my] = canvasToBoard(
+            ev.clientX - rect.left,
+            ev.clientY - rect.top,
+            pcbViewport,
+            canvas.width / dpr,
+            canvas.height / dpr,
+            W,
+            H,
+            dpr
+        );
 
-    const ratsnest = useMemo(() => {
-        const out = [];
-        for (const [net, pts] of padCentersByNet) {
-            if (pts.length < 2) continue;
-            const hub = pts[0];
-            const linkNet = schCrossNets.has(String(net).toLowerCase());
-            for (let i = 1; i < pts.length; i++) {
-                out.push(
-                    <line
-                        key={`rn-${net}-${i}`}
-                        x1={hub[0]}
-                        y1={hub[1]}
-                        x2={pts[i][0]}
-                        y2={pts[i][1]}
-                        stroke={linkNet ? 'rgba(192,132,252,0.55)' : 'rgba(168,85,247,0.22)'}
-                        strokeWidth={linkNet ? 0.14 : 0.08}
-                        strokeDasharray="0.4 0.25"
-                    />,
-                );
+        lastPointerBoardRef.current = [mx, my];
+
+        if (ev.button === 2) {
+            // right-click: pan
+            setPcbViewDrag(true);
+            ev.preventDefault();
+            return;
+        }
+
+        if (tool === 'pan') {
+            setPcbViewDrag(true);
+            return;
+        }
+
+        if (tool === 'measure') {
+            if (!measureStart) {
+                setMeasureStart([mx, my]);
+            } else {
+                setMeasureEnd([mx, my]);
+            }
+            return;
+        }
+
+        if (tool === 'place') {
+            undoMgrRef.current.push(doc);
+            const newPl = {
+                id: newId(),
+                ref: `?${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+                footprintId: placeFootprintId,
+                x: snap(mx),
+                y: snap(my),
+                rot: 0,
+                padNets: {},
+            };
+            setDoc((d) => ({
+                ...d,
+                placements: [...(d.placements || []), newPl],
+            }));
+            setSelected([{ kind: 'placement', id: newPl.id }]);
+            return;
+        }
+
+        if (tool === 'route') {
+            const newRoute = routeDraft || [];
+            const pt = [snap(mx), snap(my)];
+            const updated = [...newRoute, pt];
+            setRouteDraft(updated);
+            return;
+        }
+
+        if (tool === 'polygon') {
+            const newPoly = polygonDraft || [];
+            const pt = [snap(mx), snap(my)];
+            const updated = [...newPoly, pt];
+            setPolygonDraft(updated);
+            return;
+        }
+
+        if (tool === 'select' || tool === 'boxselect') {
+            if (ev.shiftKey) {
+                // Shift-click multi-select
+                const pickResult = pickAtPoint(mx, my);
+                if (pickResult) {
+                    setSelected((prev) => toggleSelectionItem(prev, pickResult));
+                }
+            } else {
+                // Regular select
+                const pickResult = pickAtPoint(mx, my);
+                if (pickResult) {
+                    setSelected([pickResult]);
+                } else {
+                    setSelected([]);
+                }
             }
         }
-        return out;
-    }, [padCentersByNet, schCrossNets]);
+    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart]);
 
-    const cursorClass = pcbViewDrag
-        ? 'pcb-cursor-grabbing'
-        : tool === 'pan'
-          ? 'pcb-cursor-grab'
-          : tool === 'select'
-            ? drag
-                ? 'pcb-cursor-move'
-                : 'pcb-cursor-select'
-            : tool === 'polygon' || tool === 'route' || tool === 'place' || tool === 'via'
-              ? 'pcb-cursor-cross'
-              : '';
+    const onCanvasMouseMove = useCallback((ev) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const [mx, my] = canvasToBoard(
+            ev.clientX - rect.left,
+            ev.clientY - rect.top,
+            pcbViewport,
+            canvas.width / dpr,
+            canvas.height / dpr,
+            W,
+            H,
+            dpr
+        );
+        setBoardCursorMm([mx, my]);
+    }, [pcbViewport, W, H]);
 
-    const inspectorTarget = useMemo(() => {
-        if (selected.length !== 1) return null;
-        const s = selected[0];
-        if (s.kind === 'placement') {
-            const p = (doc.placements || []).find((x) => x.id === s.id);
-            return p ? { kind: 'placement', p } : null;
+    const onCanvasMouseLeave = useCallback(() => {
+        setBoardCursorMm(null);
+    }, []);
+
+    const onCanvasContextMenu = useCallback((ev) => {
+        ev.preventDefault();
+    }, []);
+
+    // Hit testing helper
+    const pickAtPoint = useCallback((mx, my) => {
+        if (selectionFilter.placement) {
+            for (const pl of (doc.placements || []).slice().reverse()) {
+                const bb = footprintBBox(pl);
+                if (mx >= bb.minX && mx <= bb.maxX && my >= bb.minY && my <= bb.maxY) {
+                    return { kind: 'placement', id: pl.id };
+                }
+            }
         }
-        if (s.kind === 'track') {
-            const t = (doc.tracks || []).find((x) => x.id === s.id);
-            return t ? { kind: 'track', t } : null;
+
+        if (selectionFilter.track) {
+            for (const tr of (doc.tracks || []).slice().reverse()) {
+                if (!isCopperLayerVisible(doc, tr.layer)) continue;
+                const w = (tr.widthMm || 0.35) / 2 + 0.1;
+                const pts = tr.points || [];
+                for (let i = 0; i < pts.length - 1; i++) {
+                    const [x0, y0] = pts[i];
+                    const [x1, y1] = pts[i + 1];
+                    const dist = pointToSegmentDistance([mx, my], [x0, y0], [x1, y1]);
+                    if (dist <= w) return { kind: 'track', id: tr.id };
+                }
+            }
         }
-        if (s.kind === 'via') {
-            const v = (doc.vias || []).find((x) => x.id === s.id);
-            return v ? { kind: 'via', v } : null;
+
+        if (selectionFilter.via) {
+            for (const v of (doc.vias || []).slice().reverse()) {
+                const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
+                const ro = diam / 2 + 0.1;
+                const dist = Math.hypot(mx - v.x, my - v.y);
+                if (dist <= ro) return { kind: 'via', id: v.id };
+            }
         }
-        if (s.kind === 'polygon') {
-            const po = (doc.polygons || []).find((x) => x.id === s.id);
-            return po ? { kind: 'polygon', po } : null;
+
+        if (selectionFilter.polygon) {
+            for (const pg of (doc.polygons || []).slice().reverse()) {
+                if (!isCopperLayerVisible(doc, pg.layer)) continue;
+                if (pointInPolygon([mx, my], pg.points || [])) {
+                    return { kind: 'polygon', id: pg.id };
+                }
+            }
+        }
+
+        return null;
+    }, [doc, selectionFilter]);
+
+    const pickAtPointForDrag = useCallback((mx, my) => {
+        const pickResult = pickAtPoint(mx, my);
+        return pickResult ? isItemSelected(selected, pickResult.kind, pickResult.id) : false;
+    }, [pickAtPoint, selected]);
+
+    // Canvas render loop
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+
+        const render = () => {
+            renderPcbCanvas(ctx, {
+                doc,
+                viewport: pcbViewport,
+                canvasWidth: canvas.width / dpr,
+                canvasHeight: canvas.height / dpr,
+                activeLayer,
+                selected,
+                routeDraft,
+                polygonDraft,
+                boardPreview,
+                showBoardGrid,
+                drcViolations,
+                padCentersByNet,
+                schCrossRefs,
+                schCrossNets,
+                measureStart,
+                measureEnd,
+                boardCursorMm,
+                lockedLayers,
+                dpr,
+            });
+            animFrameRef.current = requestAnimationFrame(render);
+        };
+
+        render();
+
+        return () => {
+            if (animFrameRef.current) {
+                cancelAnimationFrame(animFrameRef.current);
+            }
+        };
+    }, [
+        doc,
+        pcbViewport,
+        activeLayer,
+        selected,
+        routeDraft,
+        polygonDraft,
+        boardPreview,
+        showBoardGrid,
+        drcViolations,
+        padCentersByNet,
+        schCrossRefs,
+        schCrossNets,
+        measureStart,
+        measureEnd,
+        boardCursorMm,
+        lockedLayers,
+    ]);
+
+    // Canvas resize handler
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        const wrap = canvasWrapRef.current;
+        if (!canvas || !wrap) return;
+
+        const ro = new ResizeObserver(() => {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = wrap.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+        });
+
+        ro.observe(wrap);
+        return () => ro.disconnect();
+    }, []);
+
+    const measureDistanceMm = useMemo(() => {
+        if (measureStart && measureEnd) {
+            return Math.hypot(measureEnd[0] - measureStart[0], measureEnd[1] - measureStart[1]);
         }
         return null;
-    }, [selected, doc.placements, doc.tracks, doc.vias, doc.polygons]);
+    }, [measureStart, measureEnd]);
+
+    const pcbRelativeDelta = useMemo(() => {
+        if (!relativeOriginMm || !boardCursorMm) return null;
+        const dx = boardCursorMm[0] - relativeOriginMm[0];
+        const dy = boardCursorMm[1] - relativeOriginMm[1];
+        const dist = Math.hypot(dx, dy);
+        return { dx, dy, dist };
+    }, [relativeOriginMm, boardCursorMm]);
+
+    const cursorClass = tool === 'pan' || pcbViewDrag ? 'is-grabbing' : 'is-default';
+
+    const inspectorTarget = selected.length === 1 && selected[0].kind === 'placement'
+        ? { kind: 'placement', p: doc.placements?.find((x) => x.id === selected[0].id) }
+        : null;
+
+    const toolButtons = [
+        { id: 'select', icon: MousePointer2, label: 'Select' },
+        { id: 'boxselect', icon: LayoutTemplate, label: 'Box Select' },
+        { id: 'place', icon: CircleDot, label: 'Place' },
+        { id: 'route', icon: Route, label: 'Route' },
+        { id: 'polygon', icon: Pentagon, label: 'Polygon' },
+        { id: 'measure', icon: Ruler, label: 'Measure' },
+        { id: 'pan', icon: Hand, label: 'Pan' },
+    ];
 
     return (
-        <div className="pcb-root">
-            <header className="pcb-topbar">
-                <h1>PCB Studio</h1>
-                {onBackToSchematic ? (
-                    <div className="pcb-view-switch" role="group" aria-label="Schematic or board">
-                        <button type="button" className="pcb-view-switch-btn" onClick={() => onBackToSchematic()}>
-                            <Home size={13} /> Schematic
-                        </button>
-                        <span className="pcb-view-switch-btn is-active" aria-current="page">
-                            <CircuitBoard size={13} /> Board
-                        </span>
+        <div className="pcb-studio-page">
+            <nav className="pcb-header">
+                <div className="pcb-header-left">
+                    <button type="button" className="pcb-nav-btn" onClick={onBackToSchematic} title="Back to Circuit Studio">
+                        <Home size={16} /> Back
+                    </button>
+                    <div className="pcb-tool-group">
+                        {toolButtons.map((btn) => {
+                            const Icon = btn.icon;
+                            return (
+                                <button
+                                    key={btn.id}
+                                    type="button"
+                                    className={`pcb-tool-btn${tool === btn.id ? ' is-active' : ''}`}
+                                    onClick={() => setTool(btn.id)}
+                                    title={btn.label}
+                                >
+                                    <Icon size={14} />
+                                </button>
+                            );
+                        })}
                     </div>
-                ) : null}
-                <span className="pcb-sep" />
-                <label className="pcb-field pcb-field-stack">
-                    Stack
-                    <select
-                        value={doc.meta.copperLayerCount}
-                        onChange={(e) => {
-                            const v = Number(e.target.value);
-                            if (!COPPER_LAYER_COUNT_OPTIONS.includes(v)) return;
-                            setDoc((d) => ({ ...d, meta: { ...d.meta, copperLayerCount: v } }));
-                        }}
-                        title="Copper layer count (2–8)"
+                </div>
+                <div className="pcb-header-right">
+                    <button
+                        type="button"
+                        className="pcb-nav-btn"
+                        disabled={!undoMgrRef.current.canUndo()}
+                        onClick={handleUndo}
+                        title="Undo (Ctrl+Z)"
                     >
-                        {COPPER_LAYER_COUNT_OPTIONS.map((n) => (
-                            <option key={n} value={n}>
-                                {n} layers
-                            </option>
-                        ))}
-                    </select>
-                </label>
-                <label className="pcb-field">
-                    W mm
-                    <input
-                        type="number"
-                        min={20}
-                        max={500}
-                        value={doc.meta.boardWmm}
-                        onChange={(e) => {
-                            const v = Number(e.target.value);
-                            setDoc((d) => ({ ...d, meta: { ...d.meta, boardWmm: Number.isFinite(v) ? v : d.meta.boardWmm } }));
-                        }}
-                    />
-                </label>
-                <label className="pcb-field">
-                    H mm
-                    <input
-                        type="number"
-                        min={20}
-                        max={500}
-                        value={doc.meta.boardHmm}
-                        onChange={(e) => {
-                            const v = Number(e.target.value);
-                            setDoc((d) => ({ ...d, meta: { ...d.meta, boardHmm: Number.isFinite(v) ? v : d.meta.boardHmm } }));
-                        }}
-                    />
-                </label>
-                <span className="pcb-sep" />
-                <button type="button" className="pcb-topbtn" onClick={handleRunDRC}>
-                    <AlertTriangle size={14} color={drcViolations.length > 0 ? '#ef4444' : 'currentColor'} /> DRC{' '}
-                    {drcViolations.length > 0 ? `(${drcViolations.length})` : ''}
-                </button>
-                <button type="button" className="pcb-topbtn" disabled={exportBusy} onClick={() => void handleExportZip()}>
-                    <Download size={14} /> {exportBusy ? '…' : 'Gerber ZIP'}
-                </button>
-                <button type="button" className="pcb-topbtn" onClick={() => setShowOnlineSearch(true)} title="Search LCSC / SnapEDA style parts">
-                    <Download size={14} /> Find parts
-                </button>
-                <button type="button" className="pcb-topbtn" onClick={() => setShowFootprintImport(true)} title="JSON, KiCad mod, or URL">
-                    Import footprint
-                </button>
-                <button
-                    type="button"
-                    className="pcb-topbtn"
-                    onClick={() => {
-                        if (!window.confirm('Clear saved board and reset?')) return;
-                        const fresh = migratePcbDoc(emptyPcbDoc());
-                        setDoc(fresh);
-                        setPcbWorkflowDemo(false);
-                        try {
-                            localStorage.removeItem(PCB_STORAGE_KEY);
-                        } catch {
-                            /* */
-                        }
-                    }}
-                >
-                    <Trash2 size={14} /> New board
-                </button>
-            </header>
-
-            {pcbWorkflowDemo ? (
-                <div className="pcb-demo-banner" role="region" aria-label="Gerber walkthrough tips">
-                    <div className="pcb-demo-banner-icon" aria-hidden>
-                        <Route size={18} />
-                    </div>
-                    <div className="pcb-demo-banner-body">
-                        <strong>Gerber walkthrough</strong>
-                        <span className="pcb-demo-banner-lead">
-                            You opened this board from the Circuit Studio tutorial demo. Finish the flow here:
-                        </span>
-                        <ol className="pcb-demo-banner-steps">
-                            <li>
-                                <Zap size={14} aria-hidden /> Click <strong>Auto-route</strong> (lightning) in the left tool rail to add copper between pads on the same net.
-                            </li>
-                            <li>
-                                <Download size={14} aria-hidden /> Click <strong>Gerber ZIP</strong> above — your browser downloads fabrication layers (open in a Gerber viewer or fab upload).
-                            </li>
-                            <li>
-                                Optional: run <strong>DRC</strong> for a quick clearance check (demo router is simple, not production-grade).
-                            </li>
-                        </ol>
+                        <RotateCcw size={14} /> Undo
+                    </button>
+                    <button
+                        type="button"
+                        className="pcb-nav-btn"
+                        disabled={!undoMgrRef.current.canRedo()}
+                        onClick={handleRedo}
+                        title="Redo (Ctrl+Shift+Z)"
+                    >
+                        <RotateCw size={14} /> Redo
+                    </button>
+                    <button
+                        type="button"
+                        className="pcb-nav-btn"
+                        onClick={() => setShowBoardPreview(true)}
+                        title="Preview board appearance"
+                    >
+                        <CircuitBoard size={14} /> Preview
+                    </button>
+                    <button
+                        type="button"
+                        className="pcb-nav-btn"
+                        onClick={handleRunDRC}
+                        title="Run design rule check"
+                    >
+                        <AlertTriangle size={14} /> DRC
+                    </button>
+                    <div className="pcb-export-menu">
+                        <button type="button" className="pcb-nav-btn" title="Export options">
+                            <Download size={14} /> Export
+                        </button>
+                        <div className="pcb-dropdown">
+                            <button type="button" onClick={handleExportZip} disabled={exportBusy}>
+                                Gerber ZIP {exportBusy ? '...' : ''}
+                            </button>
+                            <button type="button" onClick={handleExportKicad}>
+                                KiCad .kicad_pcb
+                            </button>
+                            <button type="button" onClick={handleExportBom}>
+                                BOM (CSV)
+                            </button>
+                            <button type="button" onClick={handleExportPickAndPlace}>
+                                Pick & Place (CSV)
+                            </button>
+                            <button type="button" onClick={handleExportIpcD356}>
+                                IPC-D-356 Netlist
+                            </button>
+                        </div>
                     </div>
                     <button
                         type="button"
-                        className="pcb-demo-banner-dismiss"
-                        onClick={() => setPcbWorkflowDemo(false)}
-                        aria-label="Dismiss walkthrough tips"
+                        className="pcb-nav-btn"
+                        onClick={handleAutoRoute}
+                        title="Auto-route unconnected nets"
                     >
-                        <X size={16} />
+                        <Zap size={14} /> Route
                     </button>
                 </div>
-            ) : null}
+            </nav>
 
             <div className="pcb-workspace">
-                <nav className="pcb-command-rail" aria-label="Tools">
-                    <button
-                        type="button"
-                        className={`pcb-rail-btn${tool === 'select' ? ' is-active' : ''}`}
-                        title="Select / move — Shift+click multi-select"
-                        onClick={() => {
-                            setTool('select');
-                            setRouteDraft(null);
-                            setPolygonDraft(null);
-                        }}
-                    >
-                        <MousePointer2 size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        className={`pcb-rail-btn${tool === 'place' ? ' is-active' : ''}`}
-                        title="Place footprint"
-                        onClick={() => {
-                            setTool('place');
-                            setRouteDraft(null);
-                            setPolygonDraft(null);
-                        }}
-                    >
-                        <MapPin size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        className={`pcb-rail-btn${tool === 'route' ? ' is-active' : ''}`}
-                        title="Track — polyline, Enter to finish"
-                        onClick={() => {
-                            setTool('route');
-                            setRouteDraft(null);
-                            setPolygonDraft(null);
-                        }}
-                    >
-                        <GitBranch size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        className={`pcb-rail-btn${tool === 'polygon' ? ' is-active' : ''}`}
-                        title="Copper pour — vertices, Enter (≥3) closes polygon"
-                        onClick={() => {
-                            setTool('polygon');
-                            setRouteDraft(null);
-                            setPolygonDraft(null);
-                        }}
-                    >
-                        <Pentagon size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        className={`pcb-rail-btn${tool === 'via' ? ' is-active' : ''}`}
-                        title="Place via"
-                        onClick={() => {
-                            setTool('via');
-                            setRouteDraft(null);
-                            setPolygonDraft(null);
-                        }}
-                    >
-                        <CircleDot size={18} />
-                    </button>
-                    <div className="pcb-rail-spacer" />
-                    <button type="button" className="pcb-rail-btn" title="Auto-route nets (uses all copper layers)" onClick={handleAutoRoute}>
-                        <Zap size={18} />
-                    </button>
-                </nav>
-
                 <aside className="pcb-sidebar">
-                    <div className="pcb-sidebar-head">
-                        <h2>Library</h2>
-                        <button type="button" className="pcb-sidebar-import" onClick={() => setShowFootprintImport(true)}>
-                            + Import
-                        </button>
-                    </div>
-                    <p className="pcb-sidebar-lead">Pick a footprint, then Place on the board.</p>
-                    <h3 className="pcb-subh">
-                        <Layers size={12} /> Active copper
-                    </h3>
+                    <h2 className="pcb-sidebar-title">Copper Layers</h2>
                     <div className="pcb-layer-chips">
                         {copperStack.map((ly) => (
                             <button
@@ -1098,7 +1109,143 @@ function PcbStudioPage({ onBackToSchematic }) {
                             </button>
                         ))}
                     </div>
-                    <h3 className="pcb-subh">Board &amp; grid</h3>
+                    <div className="pcb-layer-visibility" role="group" aria-label="Copper layer visibility">
+                        <span className="pcb-layer-visibility-label">Show on canvas</span>
+                        <div className="pcb-layer-visibility-row">
+                            {copperStack.map((ly) => {
+                                const on = isCopperLayerVisible(doc, ly);
+                                const nVis = copperStack.filter((l) => isCopperLayerVisible(doc, l)).length;
+                                const disableHide = nVis <= 1 && on;
+                                const locked = lockedLayers.has(ly);
+                                return (
+                                    <button
+                                        key={ly}
+                                        type="button"
+                                        className={`pcb-layer-eye${on ? ' is-on' : ''}`}
+                                        disabled={disableHide}
+                                        title={
+                                            locked
+                                                ? `${ly} is locked`
+                                                : disableHide
+                                                  ? 'At least one copper layer must stay visible'
+                                                  : `${on ? 'Hide' : 'Show'} ${ly} on canvas`
+                                        }
+                                        onClick={() => {
+                                            if (locked) {
+                                                setLockedLayers((s) => {
+                                                    const ns = new Set(s);
+                                                    ns.delete(ly);
+                                                    return ns;
+                                                });
+                                            } else {
+                                                toggleCopperLayerVisibility(ly);
+                                            }
+                                        }}
+                                    >
+                                        {locked ? (
+                                            <Lock size={13} />
+                                        ) : (
+                                            on ? <Eye size={13} /> : <EyeOff size={13} />
+                                        )}
+                                        <span>{ly.replace('.Cu', '')}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <h3 className="pcb-subh">Board appearance</h3>
+                    <label className="pcb-field-row">
+                        <input
+                            type="checkbox"
+                            checked={boardPreview.solderMask}
+                            onChange={(e) => setBoardPreview((p) => ({ ...p, solderMask: e.target.checked }))}
+                        />
+                        Solder mask (green)
+                    </label>
+                    <label className="pcb-field-row">
+                        <input
+                            type="checkbox"
+                            checked={boardPreview.brightInactiveLayers}
+                            onChange={(e) => setBoardPreview((p) => ({ ...p, brightInactiveLayers: e.target.checked }))}
+                        />
+                        Bright inactive layers
+                    </label>
+                    <label className="pcb-field-row">
+                        <input
+                            type="checkbox"
+                            checked={boardPreview.boldSilk}
+                            onChange={(e) => setBoardPreview((p) => ({ ...p, boldSilk: e.target.checked }))}
+                        />
+                        Emphasize silkscreen
+                    </label>
+
+                    <h3 className="pcb-subh">Design rules</h3>
+                    <label className="pcb-field-col">
+                        Min copper clearance (mm)
+                        <input
+                            type="number"
+                            min={0.05}
+                            max={2}
+                            step={0.05}
+                            value={doc.meta.designRules?.minCopperClearanceMm ?? 0.2}
+                            onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isFinite(v)) return;
+                                const c = Math.min(2, Math.max(0.05, v));
+                                setDoc((d) => ({
+                                    ...d,
+                                    meta: {
+                                        ...d.meta,
+                                        designRules: { ...(d.meta.designRules || {}), minCopperClearanceMm: c },
+                                    },
+                                }));
+                            }}
+                        />
+                    </label>
+                    <label className="pcb-field-col">
+                        Min track width (mm)
+                        <input
+                            type="number"
+                            min={0.08}
+                            max={2}
+                            step={0.05}
+                            value={doc.meta.designRules?.minTrackWidthMm ?? 0.15}
+                            onChange={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isFinite(v)) return;
+                                const c = Math.min(2, Math.max(0.08, v));
+                                setDoc((d) => ({
+                                    ...d,
+                                    meta: {
+                                        ...d.meta,
+                                        designRules: { ...(d.meta.designRules || {}), minTrackWidthMm: c },
+                                    },
+                                }));
+                            }}
+                        />
+                    </label>
+
+                    <h3 className="pcb-subh">Selection filter</h3>
+                    <div className="pcb-sel-filter" role="group" aria-label="Selection filter">
+                        {[
+                            { key: 'placement', label: 'Footprints' },
+                            { key: 'track', label: 'Tracks' },
+                            { key: 'via', label: 'Vias' },
+                            { key: 'polygon', label: 'Zones' },
+                        ].map(({ key, label }) => (
+                            <label key={key} className="pcb-field-row pcb-sel-filter-row">
+                                <input
+                                    type="checkbox"
+                                    checked={selectionFilter[key]}
+                                    onChange={(e) => setSelectionFilter((f) => ({ ...f, [key]: e.target.checked }))}
+                                />
+                                {label}
+                            </label>
+                        ))}
+                    </div>
+
+                    <h3 className="pcb-subh">Board & grid</h3>
                     <label className="pcb-field-col">
                         Snap grid (mm)
                         <select
@@ -1141,21 +1288,31 @@ function PcbStudioPage({ onBackToSchematic }) {
                             }}
                         />
                     </label>
+                    <label className="pcb-field-row">
+                        <input
+                            type="checkbox"
+                            checked={showBoardGrid}
+                            onChange={(e) => setShowBoardGrid(e.target.checked)}
+                        />
+                        Show grid
+                    </label>
+
                     <h3 className="pcb-subh">Edit</h3>
                     <div className="pcb-edit-row">
                         <button type="button" onClick={handleCopy} title="Copy selection (⌘C / Ctrl+C)">
                             <Copy size={12} /> Copy
                         </button>
-                        <button type="button" onClick={handlePaste} title="Paste at last click (⌘V)">
+                        <button type="button" onClick={handlePaste} title="Paste at cursor (⌘V)">
                             <ClipboardPaste size={12} /> Paste
                         </button>
                         <button
                             type="button"
                             onClick={() => {
                                 if (!selected.length) return;
+                                undoMgrRef.current.push(doc);
                                 setDoc((d) => ({
                                     ...d,
-                                    placements: d.placements.map((p) =>
+                                    placements: d.placements?.map((p) =>
                                         isItemSelected(selected, 'placement', p.id)
                                             ? { ...p, rot: (((Number(p.rot) || 0) + 90) % 360) }
                                             : p,
@@ -1168,9 +1325,92 @@ function PcbStudioPage({ onBackToSchematic }) {
                         </button>
                     </div>
                     <p className="pcb-keys-hint">
-                        ⌘/Ctrl+C copy · V paste at pointer · D duplicate · R rotate · Shift+click multi · Del delete
+                        ⌘/Ctrl+C copy · V paste · D duplicate · R rotate · arrows nudge · Shift+click multi · Del delete
                     </p>
+
+                    {inspectorTarget?.kind === 'placement' ? (
+                        <div className="pcb-sidebar-props">
+                            <h3 className="pcb-subh">Placement</h3>
+                            <p className="pcb-sel-meta">
+                                <strong>{inspectorTarget.p.ref}</strong>
+                                <span className="pcb-sel-fp">{inspectorTarget.p.footprintId}</span>
+                            </p>
+                            <label className="pcb-field-col">
+                                X (mm)
+                                <input
+                                    type="number"
+                                    step={0.01}
+                                    value={inspectorTarget.p.x}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.p.id;
+                                        setDoc((d) => {
+                                            const g = d.meta?.gridMm ?? 0.5;
+                                            const sn = d.meta?.snapToGrid !== false;
+                                            const x = snapBoard(v, g, sn);
+                                            return {
+                                                ...d,
+                                                placements: d.placements?.map((p) => (p.id === id ? { ...p, x } : p)),
+                                            };
+                                        });
+                                    }}
+                                />
+                            </label>
+                            <label className="pcb-field-col">
+                                Y (mm)
+                                <input
+                                    type="number"
+                                    step={0.01}
+                                    value={inspectorTarget.p.y}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.p.id;
+                                        setDoc((d) => {
+                                            const g = d.meta?.gridMm ?? 0.5;
+                                            const sn = d.meta?.snapToGrid !== false;
+                                            const y = snapBoard(v, g, sn);
+                                            return {
+                                                ...d,
+                                                placements: d.placements?.map((p) => (p.id === id ? { ...p, y } : p)),
+                                            };
+                                        });
+                                    }}
+                                />
+                            </label>
+                            <label className="pcb-field-col">
+                                Rotation (°)
+                                <input
+                                    type="number"
+                                    step={1}
+                                    min={0}
+                                    max={359}
+                                    value={Number(inspectorTarget.p.rot) || 0}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.p.id;
+                                        let rot = Math.round(v) % 360;
+                                        if (rot < 0) rot += 360;
+                                        setDoc((d) => ({
+                                            ...d,
+                                            placements: d.placements?.map((p) => (p.id === id ? { ...p, rot } : p)),
+                                        }));
+                                    }}
+                                />
+                            </label>
+                        </div>
+                    ) : null}
+
                     <h3 className="pcb-subh">Footprints</h3>
+                    <input
+                        type="text"
+                        placeholder="Search footprints..."
+                        value={footprintSearchQuery}
+                        onChange={(e) => setFootprintSearchQuery(e.target.value)}
+                        className="pcb-fp-search"
+                    />
                     <ul className="pcb-fp-list">
                         {fpSummaries.map((f) => (
                             <li key={f.id}>
@@ -1185,203 +1425,117 @@ function PcbStudioPage({ onBackToSchematic }) {
                             </li>
                         ))}
                     </ul>
-                </aside>
-                <div className="pcb-canvas-wrap" ref={canvasWrapRef}>
-                    <svg
-                        ref={svgRef}
-                        className={`pcb-board-svg ${cursorClass}`}
-                        width={Math.min(920, Math.max(320, W * 8))}
-                        height={Math.min(640, Math.max(240, H * 8))}
-                        viewBox={viewBoxStr}
-                        onMouseDown={onSvgDown}
+
+                    <button
+                        type="button"
+                        className="pcb-sidebar-action"
+                        onClick={() => setShowOnlineSearch(true)}
                     >
-                        <rect x={0} y={0} width={W} height={H} fill="#1a1520" stroke="#4c1d95" strokeWidth={0.12} />
-                        {gridLines}
-                        <g className="pcb-ratsnest">{ratsnest}</g>
-                        {(doc.polygons || []).map((poly) => {
-                            const pts = poly.points || [];
-                            if (pts.length < 3) return null;
-                            const dPath = `${pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')} Z`;
-                            const baseCol = PCB_LAYER_COLORS[poly.layer] || '#94a3b8';
-                            const isSel = isItemSelected(selected, 'polygon', poly.id);
-                            const schLink =
-                                poly.net && schCrossNets.has(String(poly.net).toLowerCase());
-                            const stroke = isSel ? '#f472b6' : schLink ? '#c084fc' : baseCol;
-                            return (
-                                <path
-                                    key={poly.id}
-                                    d={dPath}
-                                    fill={baseCol}
-                                    fillOpacity={0.12}
-                                    stroke={stroke}
-                                    strokeWidth={isSel ? 0.12 : schLink ? 0.1 : 0.06}
-                                    opacity={poly.layer === activeLayer ? 1 : 0.35}
-                                    onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        const item = { kind: 'polygon', id: poly.id };
-                                        setSelected((prev) => (e.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                                        setDrag(null);
-                                    }}
-                                    style={{ cursor: 'pointer' }}
-                                />
-                            );
-                        })}
-                        {(doc.tracks || []).map((tr) => {
-                            const pts = tr.points || [];
-                            if (pts.length < 2) return null;
-                            const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
-                            const isSel = isItemSelected(selected, 'track', tr.id);
-                            const baseCol = PCB_LAYER_COLORS[tr.layer] || '#94a3b8';
-                            const schLink =
-                                tr.net && schCrossNets.has(String(tr.net).toLowerCase());
-                            const stroke = isSel ? '#f472b6' : schLink ? '#c084fc' : baseCol;
-                            return (
-                                <path
-                                    key={tr.id}
-                                    d={d}
-                                    fill="none"
-                                    stroke={stroke}
-                                    strokeWidth={(tr.widthMm || 0.35) * (schLink && !isSel ? 1.45 : 1)}
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    opacity={tr.layer === activeLayer ? 1 : 0.35}
-                                    onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        const item = { kind: 'track', id: tr.id };
-                                        setSelected((prev) => (e.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                                        setDrag(null);
-                                    }}
-                                    style={{ cursor: 'pointer' }}
-                                />
-                            );
-                        })}
-                        {(doc.vias || []).map((v) => {
-                            const isSel = isItemSelected(selected, 'via', v.id);
-                            const schLink = v.net && schCrossNets.has(String(v.net).toLowerCase());
-                            return (
-                                <g key={v.id} style={{ cursor: 'pointer' }}>
-                                    <circle
-                                        cx={v.x}
-                                        cy={v.y}
-                                        r={(v.diamMm || 0.8) / 2}
-                                        fill={
-                                            isSel
-                                                ? 'rgba(244,114,182,0.5)'
-                                                : schLink
-                                                  ? 'rgba(192,132,252,0.45)'
-                                                  : 'rgba(250,204,21,0.35)'
-                                        }
-                                        stroke={schLink && !isSel ? '#c084fc' : '#facc15'}
-                                        strokeWidth={0.06}
-                                        onMouseDown={(e) => {
-                                            e.stopPropagation();
-                                            const item = { kind: 'via', id: v.id };
-                                            setSelected((prev) => (e.shiftKey ? toggleSelectionItem(prev, item) : [item]));
-                                            setDrag(null);
-                                        }}
-                                    />
-                                </g>
-                            );
-                        })}
-                        {(doc.placements || []).map((pl) => {
-                            const fp = getFootprint(pl.footprintId);
-                            const isSel = isItemSelected(selected, 'placement', pl.id);
-                            const b = footprintBBox(pl);
-                            const schRef =
-                                pl.ref && schCrossRefs.has(String(pl.ref).toUpperCase());
-                            return (
-                                <g
-                                    key={pl.id}
-                                    onMouseDown={(e) => {
-                                        if (tool === 'route' || tool === 'polygon') e.stopPropagation();
-                                    }}
+                        <Zap size={12} /> Find components online
+                    </button>
+                    <button
+                        type="button"
+                        className="pcb-sidebar-action"
+                        onClick={() => setShowFootprintImport(true)}
+                    >
+                        <Upload size={12} /> Import footprint
+                    </button>
+                </aside>
+
+                <div className="pcb-stage">
+                    <div className="pcb-canvas-wrap" ref={canvasWrapRef}>
+                        <canvas
+                            ref={canvasRef}
+                            className={`pcb-board-canvas ${cursorClass}`}
+                            onMouseDown={onCanvasMouseDown}
+                            onMouseMove={onCanvasMouseMove}
+                            onMouseLeave={onCanvasMouseLeave}
+                            onContextMenu={onCanvasContextMenu}
+                        />
+                        <p className="pcb-hint">
+                            Canvas rendering enabled. Scroll to zoom, right-click to pan. Grid {doc.meta.gridMm ?? 0.5} mm.
+                        </p>
+                    </div>
+
+                    <footer className="pcb-statusbar" aria-live="polite">
+                        <span className="pcb-statusbar-seg">
+                            {boardCursorMm ? (
+                                displayUnits === 'mm' ? (
+                                    <>
+                                        X <strong>{boardCursorMm[0].toFixed(2)}</strong> Y <strong>{boardCursorMm[1].toFixed(2)}</strong> mm
+                                    </>
+                                ) : (
+                                    <>
+                                        X <strong>{mmToMil(boardCursorMm[0]).toFixed(1)}</strong> Y{' '}
+                                        <strong>{mmToMil(boardCursorMm[1]).toFixed(1)}</strong> mil
+                                    </>
+                                )
+                            ) : (
+                                <span className="pcb-statusbar-muted">—</span>
+                            )}
+                        </span>
+                        {pcbRelativeDelta ? (
+                            <span className="pcb-statusbar-seg">
+                                dx{' '}
+                                {displayUnits === 'mm'
+                                    ? pcbRelativeDelta.dx.toFixed(2)
+                                    : mmToMil(pcbRelativeDelta.dx).toFixed(1)}{' '}
+                                dy{' '}
+                                {displayUnits === 'mm'
+                                    ? pcbRelativeDelta.dy.toFixed(2)
+                                    : mmToMil(pcbRelativeDelta.dy).toFixed(1)}{' '}
+                                dist{' '}
+                                {displayUnits === 'mm'
+                                    ? pcbRelativeDelta.dist.toFixed(3)
+                                    : mmToMil(pcbRelativeDelta.dist).toFixed(2)}{' '}
+                                {displayUnits === 'mm' ? 'mm' : 'mil'}
+                            </span>
+                        ) : relativeOriginMm ? (
+                            <span className="pcb-statusbar-seg pcb-statusbar-muted">Move pointer for dx/dy</span>
+                        ) : null}
+                        <span className="pcb-statusbar-seg pcb-statusbar-muted">
+                            grid {doc.meta.gridMm ?? 0.5} mm · {displayUnits}
+                        </span>
+                        {tool === 'measure' ? (
+                            <span className="pcb-statusbar-seg pcb-statusbar-measure">
+                                Measure:{' '}
+                                {measureStart == null
+                                    ? 'click A'
+                                    : measureEnd == null
+                                      ? 'click B'
+                                      : displayUnits === 'mm'
+                                        ? `${measureDistanceMm?.toFixed(3) ?? '—'} mm`
+                                        : `${measureDistanceMm != null ? mmToMil(measureDistanceMm).toFixed(2) : '—'} mil`}
+                            </span>
+                        ) : null}
+                        <span className="pcb-statusbar-actions">
+                            <button
+                                type="button"
+                                className="pcb-statusbar-btn"
+                                disabled={!boardCursorMm}
+                                title="Set relative origin at cursor (dx/dy/dist from here)"
+                                onClick={() => {
+                                    if (!boardCursorMm) return;
+                                    setRelativeOriginMm([boardCursorMm[0], boardCursorMm[1]]);
+                                }}
+                            >
+                                Set rel
+                            </button>
+                            {relativeOriginMm ? (
+                                <button
+                                    type="button"
+                                    className="pcb-statusbar-btn"
+                                    title="Clear relative origin"
+                                    onClick={() => setRelativeOriginMm(null)}
                                 >
-                                    {isSel ? (
-                                        <rect
-                                            x={b.minX - 0.3}
-                                            y={b.minY - 0.3}
-                                            width={b.maxX - b.minX + 0.6}
-                                            height={b.maxY - b.minY + 0.6}
-                                            fill="none"
-                                            stroke="#f472b6"
-                                            strokeWidth={0.08}
-                                            strokeDasharray="0.2 0.15"
-                                        />
-                                    ) : schRef ? (
-                                        <rect
-                                            x={b.minX - 0.35}
-                                            y={b.minY - 0.35}
-                                            width={b.maxX - b.minX + 0.7}
-                                            height={b.maxY - b.minY + 0.7}
-                                            fill="none"
-                                            stroke="#a855f7"
-                                            strokeWidth={0.1}
-                                            strokeDasharray="0.25 0.18"
-                                        />
-                                    ) : null}
-                                    {fp?.pads?.map((pad) => {
-                                        const [px, py] = padWorld(pl, pad);
-                                        return (
-                                            <rect
-                                                key={pad.id}
-                                                x={px - pad.w / 2}
-                                                y={py - pad.h / 2}
-                                                width={pad.w}
-                                                height={pad.h}
-                                                fill="#334155"
-                                                stroke="#94a3b8"
-                                                strokeWidth={0.04}
-                                            />
-                                        );
-                                    })}
-                                    <text
-                                        x={pl.x}
-                                        y={pl.y - 2}
-                                        textAnchor="middle"
-                                        fill="#e2e8f0"
-                                        fontSize="0.9px"
-                                        style={{ fontFamily: 'system-ui, sans-serif' }}
-                                    >
-                                        {pl.ref}
-                                    </text>
-                                </g>
-                            );
-                        })}
-                        {routeDraft?.length ? (
-                            <path
-                                d={routeDraft.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')}
-                                fill="none"
-                                stroke="#a855f7"
-                                strokeWidth={doc.meta.defaultTrackMm}
-                                strokeDasharray="0.3 0.2"
-                                strokeLinecap="round"
-                            />
-                        ) : null}
-                        {polygonDraft?.length ? (
-                            <path
-                                d={polygonDraft.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ')}
-                                fill="none"
-                                stroke="#34d399"
-                                strokeWidth={0.15}
-                                strokeDasharray="0.25 0.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            />
-                        ) : null}
-                        {drcViolations.map((v, i) => (
-                            <g key={`drc-${i}`}>
-                                <circle cx={v.x} cy={v.y} r={1.5} fill="none" stroke="#ef4444" strokeWidth={0.3} strokeDasharray="0.5 0.5" />
-                                <text x={v.x} y={v.y - 2} fill="#ef4444" fontSize="1px" textAnchor="middle">{v.type}</text>
-                            </g>
-                        ))}
-                    </svg>
+                                    Clear O
+                                </button>
+                            ) : null}
+                        </span>
+                    </footer>
                 </div>
-                <p className="pcb-hint">
-                    Library → place → route / copper pour → Gerber. Snap grid {doc.meta.gridMm ?? 0.5} mm
-                    {doc.meta.snapToGrid === false ? ' (snap off)' : ''}. Selection in Circuit Studio highlights matching refs / nets here (violet). Send-to-PCB
-                    still merges once when you open this page from the schematic.
-                </p>
             </div>
+
             {showOnlineSearch && (
                 <OnlineComponentModal
                     onClose={() => setShowOnlineSearch(false)}
@@ -1398,8 +1552,33 @@ function PcbStudioPage({ onBackToSchematic }) {
                     onLibraryChanged={() => setLibVersion((v) => v + 1)}
                 />
             )}
+            {showBoardPreview && <BoardPreviewModal open={showBoardPreview} onClose={() => setShowBoardPreview(false)} />}
         </div>
     );
+}
+
+// Helper: point-to-segment distance
+function pointToSegmentDistance(p, a, b) {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
+    const cx = a[0] + t * dx;
+    const cy = a[1] + t * dy;
+    return Math.hypot(p[0] - cx, p[1] - cy);
+}
+
+// Helper: point in polygon (ray casting)
+function pointInPolygon(p, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], yi = poly[i][1];
+        const xj = poly[j][0], yj = poly[j][1];
+        const intersect = ((yi > p[1]) !== (yj > p[1])) && (p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
 }
 
 export default PcbStudioPage;

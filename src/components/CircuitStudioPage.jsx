@@ -45,7 +45,7 @@ import {
 } from '../circuit/measurements.js';
 import {
     emptyDoc, resolveNets, addComponent, updateComponent, rotateComponent,
-    removeComponent, removeWire, removeLabel, componentPins,
+    removeComponent, removeWire, removeLabel, componentPins, GRID,
 } from '../circuit/schematicDoc.js';
 import { emitNetlist } from '../circuit/emitNetlist.js';
 import { importNetlistToDoc } from '../circuit/importNetlist.js';
@@ -236,6 +236,9 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     // external load events (demo / blank / apply-netlist); incremental
     // editing keeps the viewport stable.
     const [fitNonce, setFitNonce] = useState(0);
+    /** Schematic canvas pointer (world px, same grid as {@link GRID}). */
+    const [schPointerWorld, setSchPointerWorld] = useState(null);
+    const [schRelOrigin, setSchRelOrigin] = useState(null);
     const [ampCoachDismissed, setAmpCoachDismissed] = useState(() => (
         typeof sessionStorage !== 'undefined' && sessionStorage.getItem('cs-amp-coach-dismiss') === '1'
     ));
@@ -490,6 +493,13 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
         () => mergeSolverDiagnostic(validation, solverRunDiagnostic),
         [validation, solverRunDiagnostic],
     );
+
+    const schRelDelta = useMemo(() => {
+        if (!schPointerWorld || !schRelOrigin) return null;
+        const dx = schPointerWorld.x - schRelOrigin.x;
+        const dy = schPointerWorld.y - schRelOrigin.y;
+        return { dx, dy, dist: Math.hypot(dx, dy) };
+    }, [schPointerWorld, schRelOrigin]);
 
     const scopeComponentsInDoc = useMemo(
         () => (doc?.components ?? []).filter((c) => c.elementType === 'SCOPE'),
@@ -1899,7 +1909,56 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                         onNetLabelClick={handleNetLabelProbe}
                         crossHighlightRefSet={boardCrossRefs}
                         crossHighlightNetSet={boardCrossNets}
+                        onPointerWorld={setSchPointerWorld}
                     />
+
+                    <footer className="cs-sch-statusbar" aria-live="polite">
+                        <span className="cs-sch-statusbar-seg">
+                            {schPointerWorld ? (
+                                <>
+                                    X <strong>{Math.round(schPointerWorld.x)}</strong> Y{' '}
+                                    <strong>{Math.round(schPointerWorld.y)}</strong>
+                                </>
+                            ) : (
+                                <span className="cs-sch-statusbar-muted">—</span>
+                            )}
+                        </span>
+                        {schRelDelta ? (
+                            <span className="cs-sch-statusbar-seg">
+                                dx {Math.round(schRelDelta.dx)} dy {Math.round(schRelDelta.dy)} dist{' '}
+                                {schRelDelta.dist.toFixed(1)}
+                            </span>
+                        ) : schRelOrigin ? (
+                            <span className="cs-sch-statusbar-seg cs-sch-statusbar-muted">Move pointer for dx/dy</span>
+                        ) : null}
+                        <span className="cs-sch-statusbar-seg cs-sch-statusbar-muted">
+                            grid {GRID} · sch px
+                        </span>
+                        <span className="cs-sch-statusbar-actions">
+                            <button
+                                type="button"
+                                className="cs-sch-statusbar-btn"
+                                disabled={!schPointerWorld}
+                                title="Set relative origin at cursor"
+                                onClick={() => {
+                                    if (!schPointerWorld) return;
+                                    setSchRelOrigin({ ...schPointerWorld });
+                                }}
+                            >
+                                Set rel
+                            </button>
+                            {schRelOrigin ? (
+                                <button
+                                    type="button"
+                                    className="cs-sch-statusbar-btn"
+                                    title="Clear relative origin"
+                                    onClick={() => setSchRelOrigin(null)}
+                                >
+                                    Clear O
+                                </button>
+                            ) : null}
+                        </span>
+                    </footer>
 
                     {editPopup && (
                         <PropertyPopup

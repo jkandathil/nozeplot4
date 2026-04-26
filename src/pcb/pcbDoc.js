@@ -18,6 +18,31 @@ export const COPPER_LAYER_COUNT_OPTIONS = [2, 4, 6, 8];
 /** Preset grid steps (mm) for the board editor. */
 export const PCB_GRID_PRESETS_MM = [0.05, 0.1, 0.25, 0.5, 1.0];
 
+/** Default design rules (Eagle/KiCad-style fields — full DRC suite). */
+export const DEFAULT_DESIGN_RULES = {
+    /** Minimum copper-to-copper clearance (mm). */
+    minCopperClearanceMm: 0.2,
+    /** Minimum track width (mm). */
+    minTrackWidthMm: 0.15,
+    /** Minimum via drill diameter (mm). */
+    minViaDrillMm: 0.2,
+    /** Minimum via annular ring (mm). */
+    minAnnularRingMm: 0.125,
+    /** Minimum clearance from board edge (mm). */
+    edgeClearanceMm: 0.25,
+};
+
+/**
+ * Whether a copper layer is shown on the canvas (editor visibility, not manufacturing).
+ * @param {object} doc
+ * @param {string} layerId — e.g. F.Cu
+ */
+export function isCopperLayerVisible(doc, layerId) {
+    const vis = doc?.meta?.layerVisibility;
+    if (vis == null || vis[layerId] === undefined) return true;
+    return vis[layerId] !== false;
+}
+
 /**
  * @param {object} doc
  * @returns {string[]} Active copper layer ids for this board (length = meta.copperLayerCount or 2).
@@ -50,6 +75,21 @@ export function migratePcbDoc(doc) {
     const g = Number(next.meta.gridMm);
     next.meta.gridMm = PCB_GRID_PRESETS_MM.includes(g) ? g : 0.5;
     if (typeof next.meta.snapToGrid !== 'boolean') next.meta.snapToGrid = true;
+    next.meta.designRules = {
+        ...DEFAULT_DESIGN_RULES,
+        ...(next.meta.designRules && typeof next.meta.designRules === 'object' ? next.meta.designRules : {}),
+    };
+    const c = Number(next.meta.designRules.minCopperClearanceMm);
+    next.meta.designRules.minCopperClearanceMm = Number.isFinite(c) ? Math.min(2, Math.max(0.05, c)) : DEFAULT_DESIGN_RULES.minCopperClearanceMm;
+    const tw = Number(next.meta.designRules.minTrackWidthMm);
+    next.meta.designRules.minTrackWidthMm = Number.isFinite(tw) ? Math.min(2, Math.max(0.08, tw)) : DEFAULT_DESIGN_RULES.minTrackWidthMm;
+    if (next.meta.layerVisibility == null || typeof next.meta.layerVisibility !== 'object') {
+        next.meta.layerVisibility = {};
+    }
+    const stack = activeCopperLayerIds(next);
+    if (stack.length && stack.every((ly) => !isCopperLayerVisible(next, ly))) {
+        next.meta.layerVisibility = {};
+    }
     return next;
 }
 
@@ -66,6 +106,10 @@ export function emptyPcbDoc() {
             defaultViaDiamMm: 0.8,
             gridMm: 0.5,
             snapToGrid: true,
+            /** Per-copper-layer canvas visibility (Eagle-style layer display). */
+            layerVisibility: {},
+            /** Professional DRC inputs (extensible). */
+            designRules: { ...DEFAULT_DESIGN_RULES },
         },
         /** @type {Array<{ id: string, footprintId: string, ref: string, x: number, y: number, rot: number, value?: string }>} */
         placements: [],
@@ -81,6 +125,17 @@ export function emptyPcbDoc() {
 
 export function newId(prefix) {
     return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Parse a saved board JSON string into a migrated, valid PcbDoc.
+ * @param {string} text
+ * @returns {object}
+ */
+export function parsePcbDocJson(text) {
+    const raw = JSON.parse(String(text));
+    if (!raw || typeof raw !== 'object') throw new Error('Board file must be a JSON object');
+    return migratePcbDoc(raw);
 }
 
 export function applyBridgePayload(doc, bridge) {
@@ -110,3 +165,12 @@ export function applyBridgePayload(doc, bridge) {
     }
     return next;
 }
+
+/*
+ * Professional PCB direction (Eagle/KiCad-class), incremental roadmap:
+ * 1) Design rules + DRC depth (net classes, via rules, keepouts) — started: clearance + min width in meta.
+ * 2) Layer system (silk/mask/paste, visibility, locked layers) — started: copper visibility.
+ * 3) Library & footprints (pad stacks, courtyards, 3D) + in-app footprint editor.
+ * 4) Routing (push-shove, diffpairs, teardrops) + copper pour keepouts.
+ * 5) Manufacturing (full stack Gerber/Drill, IPC-D-356, pick-and-place) — JSON import/export round-trip started.
+ */

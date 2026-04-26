@@ -43,7 +43,7 @@ export function parseNozeFootprintJson(text) {
 export function parseKiCadModFootprint(text, opts = {}) {
     const src = String(text || '');
     if (!src.includes('(footprint') && !src.includes('(module')) {
-        throw new Error('Paste a .kicad_mod body (should contain (footprint or legacy (module))');
+        throw new Error('Paste a footprint module body (should contain (footprint or legacy (module))');
     }
     const idMatch = src.match(/\(footprint\s+"([^"]+)"/) || src.match(/\(module\s+"([^"]+)"/);
     const id = (opts.id || idMatch?.[1] || 'imported_fp').replace(/[^\w\-]+/g, '_');
@@ -77,7 +77,7 @@ export function parseKiCadModFootprint(text, opts = {}) {
     return {
         id,
         name,
-        family: 'KiCad',
+        family: 'Import',
         pads,
         silk: [],
     };

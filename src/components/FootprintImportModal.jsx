@@ -86,15 +86,15 @@ export default function FootprintImportModal({ onClose, onLibraryChanged }) {
                     </button>
                 </div>
                 <p className="pcb-import-lead">
-                    Eagle-style flow: grow your library, then place parts on the board. Use JSON (Noze shape), paste a KiCad{' '}
-                    <code>.kicad_mod</code>, or fetch a raw file when CORS allows.
+                    Grow your library, then place parts on the board. Use JSON (Noze shape), paste a footprint module{' '}
+                    (<code>.kicad_mod</code>), or fetch a raw file when CORS allows.
                 </p>
                 <div className="pcb-import-tabs">
                     <button type="button" className={tab === 'json' ? 'is-on' : ''} onClick={() => setTab('json')}>
                         <FileJson size={14} /> JSON
                     </button>
                     <button type="button" className={tab === 'kicad' ? 'is-on' : ''} onClick={() => setTab('kicad')}>
-                        <FileCode size={14} /> KiCad mod
+                        <FileCode size={14} /> Footprint module
                     </button>
                     <button type="button" className={tab === 'url' ? 'is-on' : ''} onClick={() => setTab('url')}>
                         <Link2 size={14} /> URL
@@ -114,7 +114,7 @@ export default function FootprintImportModal({ onClose, onLibraryChanged }) {
                 )}
                 {tab === 'kicad' && (
                     <>
-                        <label className="pcb-import-label">Paste .kicad_mod (pads with (at) and (size))</label>
+                        <label className="pcb-import-label">Paste module text — pads with (at) and (size), e.g. .kicad_mod</label>
                         <textarea className="pcb-import-ta" value={text} onChange={(e) => setText(e.target.value)} rows={14} spellCheck={false} />
                         <button type="button" className="pcb-import-primary" onClick={handleParseKicad}>
                             Parse & add to library

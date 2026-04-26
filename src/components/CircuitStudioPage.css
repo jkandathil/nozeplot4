@@ -1545,6 +1545,57 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
     min-width: 0;
     padding: 0;
 }
+
+/* KiCad-style readout under schematic canvas */
+.cs-sch-statusbar {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 5px 10px 6px;
+    border-top: 1px solid var(--cs-panel-border);
+    background: rgba(10, 14, 26, 0.88);
+    font-size: 0.72rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #cbd5e1;
+}
+.cs-sch-statusbar strong {
+    font-weight: 700;
+    color: #f1f5f9;
+}
+.cs-sch-statusbar-seg {
+    white-space: nowrap;
+}
+.cs-sch-statusbar-muted {
+    color: #64748b;
+    font-weight: 500;
+}
+.cs-sch-statusbar-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.cs-sch-statusbar-btn {
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(30, 41, 59, 0.75);
+    color: #e2e8f0;
+    font-size: 0.65rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+}
+.cs-sch-statusbar-btn:hover:not(:disabled) {
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #fff;
+}
+.cs-sch-statusbar-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
 .cs-canvas {
     flex: 1 1 auto;
     position: relative;

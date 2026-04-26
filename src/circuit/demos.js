@@ -673,7 +673,7 @@ C1 vout 0 100n
             },
             {
                 title: 'Gerber ZIP',
-                body: 'Use Gerber ZIP in the top bar. Your browser downloads a zip of copper and outline layers you can open in KiCad GerbView, a web Gerber viewer, or send to a fab for quoting.',
+                body: 'Use Gerber ZIP in the top bar. Your browser downloads a zip of copper and outline layers you can open in any Gerber viewer or send to a fab for quoting.',
             },
             {
                 title: 'Iterate',

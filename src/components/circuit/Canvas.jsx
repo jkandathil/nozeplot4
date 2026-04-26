@@ -188,6 +188,8 @@ export default function Canvas({
     crossHighlightRefSet = null,
     /** PCB-side selection: net names (lowercase Set) to tint wires / labels. */
     crossHighlightNetSet = null,
+    /** Fired on pointer move / leave with schematic world coords (same units as grid). */
+    onPointerWorld = null,
 }) {
     const svgRef = useRef(null);
     const [tool, setTool] = useState('select'); // 'select' | 'wire' | 'pan'
@@ -517,6 +519,7 @@ export default function Canvas({
     const onPointerMove = (ev) => {
         const world = clientToWorld(ev);
         setMousePos(world);
+        onPointerWorld?.(world);
         if (dragState?.kind === 'pan') {
             const dx = (ev.clientX - dragState.startClient.x) / zoom;
             const dy = (ev.clientY - dragState.startClient.y) / zoom;
@@ -940,6 +943,7 @@ export default function Canvas({
                 data-cs-canvas-svg=""
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
+                onPointerLeave={() => onPointerWorld?.(null)}
                 onPointerUp={onPointerUp}
                 onPointerCancel={onPointerUp}
                 onContextMenu={(ev) => { ev.preventDefault(); }}
