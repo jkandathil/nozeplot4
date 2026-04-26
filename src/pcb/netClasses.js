@@ -43,7 +43,8 @@ export const DIFF_PAIR_NET_CLASS = {
  * @returns {object} Updated doc with netClasses
  */
 export function initNetClasses(doc) {
-  if (doc.meta?.netClasses) return doc;
+  if (!doc?.meta) return doc;
+  if (doc.meta.netClasses) return doc;
   return {
     ...doc,
     meta: {

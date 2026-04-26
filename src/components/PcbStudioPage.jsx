@@ -76,7 +76,6 @@ import { runDRC } from '../pcb/pcbDrc.js';
 import { autoRoute } from '../pcb/autoRouter.js';
 import { renderPcbCanvas, canvasToBoard, boardToCanvas, PCB_LAYER_COLORS } from '../pcb/canvasRenderer.js';
 import { createUndoManager } from '../pcb/undoManager.js';
-import { initNetClasses, getNetClass, assignNetToClass, addNetClass } from '../pcb/netClasses.js';
 import { generateBomCsv, generatePickAndPlaceCsv, generateIpcD356, downloadTextFile } from '../pcb/bomExport.js';
 import OnlineComponentModal from './OnlineComponentModal.jsx';
 import FootprintImportModal from './FootprintImportModal.jsx';
@@ -185,7 +184,6 @@ function PcbStudioPage({ onBackToSchematic }) {
     const clipboardRef = useRef(null);
     const lastPointerBoardRef = useRef([20, 20]);
     const undoMgrRef = useRef(createUndoManager(64));
-    const netClassesRef = useRef(initNetClasses());
 
     const snap = useCallback(
         (v) => snapBoard(v, doc.meta?.gridMm ?? 0.5, doc.meta?.snapToGrid !== false),
