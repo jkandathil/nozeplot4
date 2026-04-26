@@ -135,3 +135,10 @@ export function getFootprint(id) {
 export function listFootprintSummaries() {
     return FOOTPRINTS.map((f) => ({ id: f.id, name: f.name, family: f.family }));
 }
+
+export function addFootprint(footprintDef) {
+    if (!BY_ID[footprintDef.id]) {
+        FOOTPRINTS.push(footprintDef);
+        BY_ID[footprintDef.id] = footprintDef;
+    }
+}

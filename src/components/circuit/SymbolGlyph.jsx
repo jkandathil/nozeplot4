@@ -45,9 +45,24 @@ function GroundGlyph({ size = 52 }) {
 }
 
 /** Ground marker rendered directly on the canvas. */
-export function GroundMarker({ x, y, selected }) {
+export function GroundMarker({ x, y, selected, crossLinked = false }) {
     return (
-        <g transform={`translate(${x}, ${y})`} className={`cs-gnd cs-comp-GND cs-canvas-comp ${selected ? 'is-selected' : ''}`}>
+        <g transform={`translate(${x}, ${y})`} className={`cs-gnd cs-comp-GND cs-canvas-comp ${selected ? 'is-selected' : ''}${crossLinked ? ' is-cross-link' : ''}`}>
+            {crossLinked && !selected ? (
+                <rect
+                    x={-16}
+                    y={-14}
+                    width={32}
+                    height={38}
+                    rx={3}
+                    ry={3}
+                    fill="none"
+                    stroke="#a855f7"
+                    strokeWidth={1.6}
+                    strokeDasharray="4 3"
+                    pointerEvents="none"
+                />
+            ) : null}
             {selected ? (
                 <rect
                     x={-16} y={-14} width={32} height={38} rx={3} ry={3}

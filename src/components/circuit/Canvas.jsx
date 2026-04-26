@@ -15,6 +15,9 @@ import {
 } from '../../circuit/schematicDoc.js';
 import { renderShape } from './renderShape.jsx';
 import { GroundMarker } from './SymbolGlyph.jsx';
+import { inferWireNetLabel } from '../../pcb/crossSelectBridge.js';
+
+const EMPTY_CROSS_SET = new Set();
 
 /** Axis-aligned rect from two world-space corners (inclusive). */
 function normalizeWorldRect(a, b) {
@@ -181,6 +184,10 @@ export default function Canvas({
     highlightNetLabel = null,
     /** Click a net label to probe (e.g. add matching `V(net)` to the plot selection). */
     onNetLabelClick = null,
+    /** PCB-side selection: designator refs (uppercase Set) to outline on the schematic. */
+    crossHighlightRefSet = null,
+    /** PCB-side selection: net names (lowercase Set) to tint wires / labels. */
+    crossHighlightNetSet = null,
 }) {
     const svgRef = useRef(null);
     const [tool, setTool] = useState('select'); // 'select' | 'wire' | 'pan'
@@ -203,6 +210,8 @@ export default function Canvas({
     const [dragDelta, setDragDelta] = useState(null); // { dx, dy }
 
     const wrapperRef = useRef(null);
+    const crossRefSet = crossHighlightRefSet || EMPTY_CROSS_SET;
+    const crossNetSet = crossHighlightNetSet || EMPTY_CROSS_SET;
     /** Copy/paste buffer: payloads from {@link componentToPastePayload} (null = empty). */
     const [copiedComponentPayloads, setCopiedComponentPayloads] = useState(null);
 
@@ -978,9 +987,12 @@ export default function Canvas({
                     {doc.wires.map((w) => {
                         const selected = isWireSelected(w.id);
                         const flagged = flaggedWireIds.has(w.id);
+                        const wl = resolvedNets ? inferWireNetLabel(doc, resolvedNets, w.id) : null;
+                        const crossWire = wl && crossNetSet.has(String(wl).toLowerCase());
                         let stroke = 'var(--sch-wire)';
                         if (selected) stroke = 'var(--cs-accent)';
                         else if (flagged) stroke = 'var(--cs-danger, #ef4444)';
+                        else if (crossWire) stroke = '#a855f7';
 
                         // Localized drag preview: compute the point
                         // list this wire should render *right now*.
@@ -1006,11 +1018,24 @@ export default function Canvas({
                                         opacity={dragging ? 0.85 : 1}
                                     />
                                 ) : null}
+                                {crossWire && !selected ? (
+                                    <polyline
+                                        points={ptsStr}
+                                        fill="none"
+                                        stroke="#a855f7"
+                                        strokeOpacity={0.35}
+                                        strokeWidth={4.5}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        pointerEvents="none"
+                                        opacity={dragging ? 0.85 : 1}
+                                    />
+                                ) : null}
                                 <polyline
                                     points={ptsStr}
                                     fill="none"
                                     stroke={stroke}
-                                    strokeWidth={selected ? 2 : 1.25}
+                                    strokeWidth={selected || crossWire ? 2 : 1.25}
                                     strokeLinecap="round"
                                     strokeLinejoin="round"
                                     opacity={dragging ? 0.85 : 1}
@@ -1076,9 +1101,10 @@ export default function Canvas({
                         const follows = !!(dragDelta && followSet && followSet.has(l.id));
                         const tx = follows ? dragDelta.dx : 0;
                         const ty = follows ? dragDelta.dy : 0;
-                        const hi = highlightNetLabel
+                        const hiBoard = crossNetSet.has(String(l.name || '').toLowerCase());
+                        const hi = (highlightNetLabel
                             && l.name
-                            && String(l.name).toLowerCase() === String(highlightNetLabel).toLowerCase();
+                            && String(l.name).toLowerCase() === String(highlightNetLabel).toLowerCase()) || hiBoard;
                         const tw = Math.max(14, (l.name?.length || 0) * 6.5 + 4);
                         const onLabClick = onNetLabelClick
                             ? (ev) => {
@@ -1143,6 +1169,11 @@ export default function Canvas({
                                 key={`comp-${c.id}`}
                                 comp={c}
                                 selected={isComponentSelected(c.id)}
+                                crossLinked={
+                                    !!(c.ref && crossRefSet.has(String(c.ref).toUpperCase())) ||
+                                    (c.elementType === 'GND' &&
+                                        (crossNetSet.has('gnd') || crossNetSet.has('0')))
+                                }
                                 flagged={flaggedComponentIds.has(c.id)}
                                 floatingIds={floatingIds}
                                 dx={dragging ? dragDelta.dx : 0}
@@ -1254,9 +1285,16 @@ function ToolButton({ active, disabled, onClick, title, children }) {
     );
 }
 
-function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0, dy = 0, ghost = false }) {
+function CanvasComponent({ comp, selected, crossLinked = false, flagged = false, floatingIds, dx = 0, dy = 0, ghost = false }) {
     if (comp.elementType === 'GND') {
-        return <GroundMarker x={comp.pos.x + dx} y={comp.pos.y + dy} selected={selected} />;
+        return (
+            <GroundMarker
+                x={comp.pos.x + dx}
+                y={comp.pos.y + dy}
+                selected={selected}
+                crossLinked={crossLinked}
+            />
+        );
     }
     const sym = symbolForSchematic(comp) || SYMBOLS[comp.symbolKey] || SYMBOLS[comp.elementType];
     if (!sym) return null;
@@ -1266,7 +1304,7 @@ function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0,
     const cx = comp.pos.x + dx;
     const cy = comp.pos.y + dy;
     return (
-        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}${ghost ? ' is-ghost' : ''}${flagged ? ' is-flagged' : ''}`}
+        <g className={`cs-canvas-comp cs-comp-${comp.elementType}${selected ? ' is-selected' : ''}${crossLinked ? ' is-cross-link' : ''}${ghost ? ' is-ghost' : ''}${flagged ? ' is-flagged' : ''}`}
            opacity={ghost ? 0.85 : 1}>
             <g transform={`translate(${cx}, ${cy}) rotate(${comp.rot})`}>
                 {sym.shapes.map((s, i) => renderShape(s, i))}
@@ -1281,6 +1319,21 @@ function CanvasComponent({ comp, selected, flagged = false, floatingIds, dx = 0,
                         strokeWidth={1.2}
                         strokeDasharray="3 2"
                         opacity={0.9}
+                    />
+                )}
+                {crossLinked && !selected && (
+                    <rect
+                        x={-sym.width / 2 - 4}
+                        y={-sym.height / 2 - 4}
+                        width={sym.width + 8}
+                        height={sym.height + 8}
+                        fill="none"
+                        stroke="#a855f7"
+                        strokeWidth={1.6}
+                        strokeDasharray="4 3"
+                        rx={2}
+                        ry={2}
+                        opacity={0.95}
                     />
                 )}
                 {selected && (

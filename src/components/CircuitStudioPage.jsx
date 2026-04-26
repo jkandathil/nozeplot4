@@ -27,7 +27,7 @@ import {
     BookOpen, Copy, Plus, FileText, Activity, Monitor,
     SlidersHorizontal, LayoutGrid, Terminal, Undo, Redo,
     Save, FolderOpen, FilePlus, Download, Image as ImageIcon, FileJson, Trash2,
-    Maximize2, Minimize2, Layers,
+    Maximize2, Minimize2, Layers, CircuitBoard,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
 import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
@@ -72,6 +72,12 @@ import {
     exportCanvasSvg, exportCanvasPng,
 } from '../circuit/exporters.js';
 import { buildPcbBridgePayload, PCB_BRIDGE_KEY } from '../pcb/schematicBridge.js';
+import {
+    CROSS_SELECT_EVENT,
+    broadcastCrossSelect,
+    readCrossSelectPayload,
+    collectSchematicCrossPayload,
+} from '../pcb/crossSelectBridge.js';
 import { buildUserLibraryPartsFromSpiceLibs } from '../circuit/userLibraryParts.js';
 import { setUserLibrarySessionParts } from '../circuit/library.js';
 import './CircuitStudioPage.css';
@@ -430,6 +436,37 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
         try { return resolveNets(doc); }
         catch { return null; }
     }, [doc]);
+
+    /** Highlights driven by PCB Studio selection (ref + net names). */
+    const [pcbCrossHighlight, setPcbCrossHighlight] = useState({ refs: [], nets: [] });
+
+    useEffect(() => {
+        const apply = () => {
+            const raw = readCrossSelectPayload();
+            if (!raw || raw.from !== 'pcb') {
+                setPcbCrossHighlight({ refs: [], nets: [] });
+                return;
+            }
+            setPcbCrossHighlight({ refs: raw.refs || [], nets: raw.nets || [] });
+        };
+        apply();
+        window.addEventListener(CROSS_SELECT_EVENT, apply);
+        return () => window.removeEventListener(CROSS_SELECT_EVENT, apply);
+    }, []);
+
+    useEffect(() => {
+        const { refs, nets } = collectSchematicCrossPayload(doc, resolvedNets, selection);
+        broadcastCrossSelect({ from: 'schematic', refs, nets });
+    }, [doc, resolvedNets, selection]);
+
+    const boardCrossRefs = useMemo(
+        () => new Set(pcbCrossHighlight.refs.map((r) => String(r).toUpperCase())),
+        [pcbCrossHighlight.refs],
+    );
+    const boardCrossNets = useMemo(
+        () => new Set(pcbCrossHighlight.nets.map((n) => String(n).toLowerCase())),
+        [pcbCrossHighlight.nets],
+    );
 
     // Design-rule check layered on top of resolvedNets. Feeds the canvas
     // (visual markers) and the results drawer (textual summary).
@@ -1331,6 +1368,20 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                     {projectName || 'Untitled'}
                 </button>
 
+                <div className="cs-view-switch" role="group" aria-label="Schematic or board">
+                    <span className="cs-view-switch-btn is-active" aria-current="page">
+                        Schematic
+                    </span>
+                    <button
+                        type="button"
+                        className="cs-view-switch-btn"
+                        onClick={() => (typeof onOpenPcbLayout === 'function' ? onOpenPcbLayout() : undefined)}
+                        title="Open PCB layout (same session — selection cross-highlights)"
+                    >
+                        <CircuitBoard size={13} /> Board
+                    </button>
+                </div>
+
                 <div className="cs-topbar-sep" />
                 <div className="cs-analysis-group">
                     <SlidersHorizontal size={14} />
@@ -1822,6 +1873,8 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                         fitNonce={fitNonce}
                         highlightNetLabel={canvasNetHighlight}
                         onNetLabelClick={handleNetLabelProbe}
+                        crossHighlightRefSet={boardCrossRefs}
+                        crossHighlightNetSet={boardCrossNets}
                     />
 
                     {editPopup && (

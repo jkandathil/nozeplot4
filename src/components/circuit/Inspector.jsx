@@ -23,6 +23,7 @@ export default function Inspector({
     selectedComp, onUpdate, onRotate, onDelete,
     bulkSelection, onBulkDelete,
     netWarnings, analysisPane,
+    userModels = [],
 }) {
     if (!selectedComp) {
         const nBulk = bulkSelection

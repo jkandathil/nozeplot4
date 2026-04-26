@@ -332,6 +332,41 @@
     margin: 0 4px;
 }
 
+/* Schematic ↔ board workspace switcher */
+.cs-view-switch {
+    display: inline-flex;
+    align-items: stretch;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.75);
+}
+
+.cs-view-switch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.cs-view-switch-btn:hover:not(.is-active):not(:disabled) {
+    background: rgba(51, 65, 85, 0.55);
+    color: #e2e8f0;
+}
+
+.cs-view-switch-btn.is-active {
+    background: rgba(56, 189, 248, 0.16);
+    color: #7dd3fc;
+    cursor: default;
+}
+
 .cs-topbar-spacer { flex: 1 1 auto; }
 
 /* Scrollable strip under the top bar so AC coach + sweep + Monte + goal seek
