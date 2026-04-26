@@ -121,9 +121,14 @@ function addCcwRect(ctx, cx, cy, hw, hh, angleDeg) {
 function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink) {
   const pts = poly.points || [];
   if (pts.length < 3) return;
+
+  // Use generous clearance — 0.5 mm default to prevent shorts around pads
   const clearMm = Number(doc.meta?.designRules?.minCopperClearanceMm) > 0
-    ? Number(doc.meta.designRules.minCopperClearanceMm)
-    : 0.2;
+    ? Math.max(Number(doc.meta.designRules.minCopperClearanceMm), 0.35)
+    : 0.5;
+
+  // Extra courtyard margin beyond individual pad clearance (mm)
+  const courtyardExtra = 0.3;
 
   const isNonGndNet = (net) => {
     const s = net != null ? String(net).trim() : '';
@@ -140,19 +145,53 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
 
-  // Cutout: non-GND pads — conformal rectangles matching exact pad shape + clearance
+  // Cutout strategy:
+  // 1. For every component that has ANY non-GND pad, cut out the entire
+  //    component courtyard (bounding box around all pads + clearance).
+  //    This prevents copper from flowing between pads of the same part.
+  // 2. Individual pad cutouts provide extra safety for each non-GND pad.
+  // 3. Components where ALL pads are GND keep full copper connection.
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
     const compRot = Number(pl.rot) || 0;
+
+    // Check if this component has ANY non-GND pad
+    const hasNonGnd = fp.pads.some((pad) => {
+      const net = nets[pad.num] || nets[pad.id];
+      return isNonGndNet(net);
+    });
+
+    if (hasNonGnd) {
+      // Compute courtyard bounding box in local footprint coordinates
+      let minLx = Infinity, minLy = Infinity, maxLx = -Infinity, maxLy = -Infinity;
+      for (const pad of fp.pads) {
+        const hw = pad.w / 2;
+        const hh = pad.h / 2;
+        minLx = Math.min(minLx, pad.x - hw);
+        minLy = Math.min(minLy, pad.y - hh);
+        maxLx = Math.max(maxLx, pad.x + hw);
+        maxLy = Math.max(maxLy, pad.y + hh);
+      }
+      // Add clearance + courtyard margin
+      const totalClear = clearMm + courtyardExtra;
+      const cxL = (minLx + maxLx) / 2;
+      const cyL = (minLy + maxLy) / 2;
+      const chw = (maxLx - minLx) / 2 + totalClear;
+      const chh = (maxLy - minLy) / 2 + totalClear;
+      // Transform center to world coords
+      const [wcx, wcy] = padWorld(pl, { x: cxL, y: cyL });
+      addCcwRect(ctx, wcx, wcy, chw, chh, compRot);
+    }
+
+    // Individual pad cutouts for non-GND pads (belt and suspenders)
     for (const pad of fp.pads) {
       const net = nets[pad.num] || nets[pad.id];
       if (!isNonGndNet(net)) continue;
       const [px, py] = padWorld(pl, pad);
       const hw = pad.w / 2 + clearMm;
       const hh = pad.h / 2 + clearMm;
-      // Pad inherits component rotation; rectangular cutout matches pad orientation
       addCcwRect(ctx, px, py, hw, hh, compRot);
     }
   }
