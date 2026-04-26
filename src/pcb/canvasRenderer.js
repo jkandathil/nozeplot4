@@ -381,33 +381,50 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   ctx.stroke();
 }
 
-/* ─── Solder mask ─── */
+/* ─── Solder mask (drawn as semi-transparent overlay with holes) ─── */
 function drawSolderMask(ctx, doc, W, H) {
-  // Create an offscreen canvas for mask compositing
   const expand = 0.12;
+  const maskColor = 'rgba(13,79,45,0.68)';
+
+  // Draw mask as a path with cutouts using even-odd fill rule
   ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = 'rgba(13,79,45,0.78)';
-  ctx.fillRect(0, 0, W, H);
-  // Cut out pad openings
-  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  // Outer rectangle (clockwise)
+  ctx.moveTo(0, 0);
+  ctx.lineTo(W, 0);
+  ctx.lineTo(W, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+
+  // Cut out pad openings (counter-clockwise for even-odd)
   for (const pl of (doc.placements || [])) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     for (const pad of fp.pads) {
       const [px, py] = padWorld(pl, pad);
-      ctx.fillStyle = 'rgba(0,0,0,1)';
-      ctx.fillRect(px - pad.w / 2 - expand, py - pad.h / 2 - expand, pad.w + 2 * expand, pad.h + 2 * expand);
+      const hw = pad.w / 2 + expand;
+      const hh = pad.h / 2 + expand;
+      // Counter-clockwise rect cutout
+      ctx.moveTo(px - hw, py - hh);
+      ctx.lineTo(px - hw, py + hh);
+      ctx.lineTo(px + hw, py + hh);
+      ctx.lineTo(px + hw, py - hh);
+      ctx.closePath();
     }
   }
-  // Cut out via holes
+
+  // Cut out via openings
   for (const v of (doc.vias || [])) {
     const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
-    ctx.beginPath();
-    ctx.arc(v.x, v.y, diam / 2 + expand, 0, Math.PI * 2);
-    ctx.fill();
+    const r = diam / 2 + expand;
+    // Counter-clockwise arc for cutout
+    ctx.moveTo(v.x + r, v.y);
+    ctx.arc(v.x, v.y, r, 0, Math.PI * 2, true);
+    ctx.closePath();
   }
-  ctx.globalCompositeOperation = 'source-over';
+
+  ctx.fillStyle = maskColor;
+  ctx.fill('evenodd');
   ctx.restore();
 }
 

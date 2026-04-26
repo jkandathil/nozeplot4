@@ -611,17 +611,40 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    overflow: auto;
-    padding: 12px;
-    background: repeating-linear-gradient(
-        0deg,
-        rgba(15, 23, 42, 0.35),
-        rgba(15, 23, 42, 0.35) 12px,
-        rgba(30, 41, 59, 0.25) 12px,
-        rgba(30, 41, 59, 0.25) 24px
-    );
+    overflow: hidden;
+    padding: 0;
+    background: #0a0f18;
 }
 
+/* Canvas 2D board element */
+.pcb-board-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+.pcb-board-canvas.pcb-cursor-select {
+    cursor: default;
+}
+
+.pcb-board-canvas.pcb-cursor-move {
+    cursor: move;
+}
+
+.pcb-board-canvas.pcb-cursor-cross {
+    cursor: crosshair;
+}
+
+.pcb-board-canvas.pcb-cursor-grab {
+    cursor: grab;
+}
+
+.pcb-board-canvas.pcb-cursor-grabbing {
+    cursor: grabbing;
+}
+
+/* Legacy SVG support */
 .pcb-board-svg {
     display: block;
     box-shadow:

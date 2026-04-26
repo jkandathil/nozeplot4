@@ -184,6 +184,9 @@ function PcbStudioPage({ onBackToSchematic }) {
     const clipboardRef = useRef(null);
     const lastPointerBoardRef = useRef([20, 20]);
     const undoMgrRef = useRef(createUndoManager(64));
+    /** Refs for fast-changing state used in render loop (avoids effect restarts) */
+    const boardCursorMmRef = useRef(null);
+    const renderDirtyRef = useRef(true);
 
     const snap = useCallback(
         (v) => snapBoard(v, doc.meta?.gridMm ?? 0.5, doc.meta?.snapToGrid !== false),
@@ -829,10 +832,14 @@ function PcbStudioPage({ onBackToSchematic }) {
             dpr
         );
         setBoardCursorMm([mx, my]);
+        boardCursorMmRef.current = [mx, my];
+        renderDirtyRef.current = true;
     }, [pcbViewport, W, H]);
 
     const onCanvasMouseLeave = useCallback(() => {
         setBoardCursorMm(null);
+        boardCursorMmRef.current = null;
+        renderDirtyRef.current = true;
     }, []);
 
     const onCanvasContextMenu = useCallback((ev) => {
@@ -890,64 +897,49 @@ function PcbStudioPage({ onBackToSchematic }) {
         return pickResult ? isItemSelected(selected, pickResult.kind, pickResult.id) : false;
     }, [pickAtPoint, selected]);
 
-    // Canvas render loop
+    // Mark render dirty when any state changes
+    useEffect(() => { renderDirtyRef.current = true; }, [
+        doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
+        boardPreview, showBoardGrid, drcViolations, padCentersByNet,
+        schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
+    ]);
+
+    // Stable refs for render loop (avoids restarting rAF)
+    const renderStateRef = useRef({});
+    renderStateRef.current = {
+        doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
+        boardPreview, showBoardGrid, drcViolations, padCentersByNet,
+        schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
+    };
+
+    // Single persistent rAF loop — never restarts
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-
         const ctx = canvas.getContext('2d');
-        const dpr = window.devicePixelRatio || 1;
+        let running = true;
 
-        const render = () => {
-            renderPcbCanvas(ctx, {
-                doc,
-                viewport: pcbViewport,
-                canvasWidth: canvas.width / dpr,
-                canvasHeight: canvas.height / dpr,
-                activeLayer,
-                selected,
-                routeDraft,
-                polygonDraft,
-                boardPreview,
-                showBoardGrid,
-                drcViolations,
-                padCentersByNet,
-                schCrossRefs,
-                schCrossNets,
-                measureStart,
-                measureEnd,
-                boardCursorMm,
-                lockedLayers,
-                dpr,
-            });
-            animFrameRef.current = requestAnimationFrame(render);
-        };
-
-        render();
-
-        return () => {
-            if (animFrameRef.current) {
-                cancelAnimationFrame(animFrameRef.current);
+        const loop = () => {
+            if (!running) return;
+            if (renderDirtyRef.current && canvas.width > 0 && canvas.height > 0) {
+                renderDirtyRef.current = false;
+                const dpr = window.devicePixelRatio || 1;
+                const s = renderStateRef.current;
+                renderPcbCanvas(ctx, {
+                    ...s,
+                    viewport: s.pcbViewport,
+                    canvasWidth: canvas.width / dpr,
+                    canvasHeight: canvas.height / dpr,
+                    boardCursorMm: boardCursorMmRef.current,
+                    dpr,
+                });
             }
+            animFrameRef.current = requestAnimationFrame(loop);
         };
-    }, [
-        doc,
-        pcbViewport,
-        activeLayer,
-        selected,
-        routeDraft,
-        polygonDraft,
-        boardPreview,
-        showBoardGrid,
-        drcViolations,
-        padCentersByNet,
-        schCrossRefs,
-        schCrossNets,
-        measureStart,
-        measureEnd,
-        boardCursorMm,
-        lockedLayers,
-    ]);
+        loop();
+
+        return () => { running = false; cancelAnimationFrame(animFrameRef.current); };
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Canvas resize handler
     useEffect(() => {
@@ -958,10 +950,12 @@ function PcbStudioPage({ onBackToSchematic }) {
         const ro = new ResizeObserver(() => {
             const dpr = window.devicePixelRatio || 1;
             const rect = wrap.getBoundingClientRect();
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
+            if (rect.width < 1 || rect.height < 1) return;
+            canvas.width = Math.round(rect.width * dpr);
+            canvas.height = Math.round(rect.height * dpr);
             canvas.style.width = rect.width + 'px';
             canvas.style.height = rect.height + 'px';
+            renderDirtyRef.current = true;
         });
 
         ro.observe(wrap);
