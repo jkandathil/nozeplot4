@@ -79,6 +79,7 @@ import {
     getCopperViolationsForProposedVia,
 } from '../pcb/pcbDrc.js';
 import { autoRoute } from '../pcb/autoRouter.js';
+import { buildRatsnestHubsByNet } from '../pcb/pcbRatsnest.js';
 import {
     renderPcbCanvas,
     canvasToBoard,
@@ -484,6 +485,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         };
     }, [pcbViewDrag, W, H]);
 
+    /** Full pad list per net (auto-router targets). */
     const padCentersByNet = useMemo(() => {
         const map = new Map();
         for (const pl of doc.placements || []) {
@@ -500,6 +502,12 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
         return map;
     }, [doc.placements]);
+
+    /** Hub points per net for dashed ratsnest only between islands not yet linked by copper. */
+    const ratsnestPadCentersByNet = useMemo(
+        () => buildRatsnestHubsByNet(doc, getFootprint),
+        [doc.placements, doc.tracks, doc.vias],
+    );
 
     const handleAutoRoute = useCallback(() => {
         if (padCentersByNet.size === 0) {
@@ -1147,7 +1155,7 @@ function PcbStudioPage({ onBackToSchematic }) {
     // Mark render dirty when any state changes
     useEffect(() => { renderDirtyRef.current = true; }, [
         doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
-        boardPreview, showBoardGrid, drcViolations, padCentersByNet,
+        boardPreview, showBoardGrid, drcViolations, ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
     ]);
 
@@ -1155,7 +1163,8 @@ function PcbStudioPage({ onBackToSchematic }) {
     const renderStateRef = useRef({});
     renderStateRef.current = {
         doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
-        boardPreview, showBoardGrid, drcViolations, padCentersByNet,
+        boardPreview, showBoardGrid, drcViolations,
+        padCentersByNet: ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
     };
 

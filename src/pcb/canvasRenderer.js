@@ -2,7 +2,7 @@
  * Professional Canvas 2D Renderer for PCB Studio.
  * Replaces SVG rendering with high-performance hardware-accelerated Canvas 2D.
  * Handles: grid, layers, tracks, vias, pads, polygons, silkscreen, board frame,
- * selection highlights, DRC markers, ratsnest, measure tool, and draft previews.
+ * selection highlights, DRC markers, ratsnest (unconnected pad islands), measure tool, and draft previews.
  */
 
 import { getFootprint } from './footprintLib.js';
@@ -103,6 +103,7 @@ export function renderPcbCanvas(ctx, params) {
     boardPreview = {},
     showBoardGrid = true,
     drcViolations = [],
+    /** @type {Map<string, number[][]>} net → hub [x,y] per island (connectivity-filtered before draw). */
     padCentersByNet = new Map(),
     schCrossRefs = new Set(),
     schCrossNets = new Set(),
