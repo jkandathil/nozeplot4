@@ -93,6 +93,10 @@ function footprintBBox(pl) {
  * Uses even-odd fill rule: outer polygon is clockwise, clearance cutouts are
  * counter-clockwise circles/rects. This avoids the `destination-out` compositing
  * bug that destroyed underlying canvas content.
+ *
+ * Important: with `evenodd`, overlapping cutouts **cancel** where they cross —
+ * that looks like tiny copper slivers near pads/traces (not grid-related). Avoid
+ * redundant overlapping holes (e.g. courtyard already covers per-pad rects).
  */
 /**
  * Add a CCW (counter-clockwise) rotated rectangle sub-path for even-odd cutout.
@@ -157,16 +161,16 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     const nets = pl.padNets || {};
     const compRot = Number(pl.rot) || 0;
 
-    // Check if this component has ANY non-GND pad
-    const hasNonGnd = fp.pads.some((pad) => {
+    // One merged courtyard hole from **non-GND pads only** (so GND pads stay
+    // reachable by pour). Single rectangle avoids even-odd overlap with duplicate
+    // per-pad holes that caused copper slivers.
+    const nonGndPads = fp.pads.filter((pad) => {
       const net = nets[pad.num] || nets[pad.id];
       return isNonGndNet(net);
     });
-
-    if (hasNonGnd) {
-      // Compute courtyard bounding box in local footprint coordinates
+    if (nonGndPads.length > 0) {
       let minLx = Infinity, minLy = Infinity, maxLx = -Infinity, maxLy = -Infinity;
-      for (const pad of fp.pads) {
+      for (const pad of nonGndPads) {
         const hw = pad.w / 2;
         const hh = pad.h / 2;
         minLx = Math.min(minLx, pad.x - hw);
@@ -174,25 +178,13 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
         maxLx = Math.max(maxLx, pad.x + hw);
         maxLy = Math.max(maxLy, pad.y + hh);
       }
-      // Add clearance + courtyard margin
       const totalClear = clearMm + courtyardExtra;
       const cxL = (minLx + maxLx) / 2;
       const cyL = (minLy + maxLy) / 2;
       const chw = (maxLx - minLx) / 2 + totalClear;
       const chh = (maxLy - minLy) / 2 + totalClear;
-      // Transform center to world coords
       const [wcx, wcy] = padWorld(pl, { x: cxL, y: cyL });
       addCcwRect(ctx, wcx, wcy, chw, chh, compRot);
-    }
-
-    // Individual pad cutouts for non-GND pads (belt and suspenders)
-    for (const pad of fp.pads) {
-      const net = nets[pad.num] || nets[pad.id];
-      if (!isNonGndNet(net)) continue;
-      const [px, py] = padWorld(pl, pad);
-      const hw = pad.w / 2 + clearMm;
-      const hh = pad.h / 2 + clearMm;
-      addCcwRect(ctx, px, py, hw, hh, compRot);
     }
   }
 
@@ -204,7 +196,8 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     ctx.arc(v.x, v.y, ro, 0, Math.PI * 2, true); // CCW
   }
 
-  // Cutout: non-GND tracks — rotated rectangles per segment + round end caps
+  // Cutout: non-GND tracks — one CCW quad per segment (no overlapping end caps;
+  // caps overlapped segment quads / each other and caused even-odd copper islands).
   for (const tr of doc.tracks || []) {
     if (tr.layer !== ly) continue;
     if (!isNonGndNet(tr.net)) continue;
@@ -223,18 +216,13 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
       const nx = -dy / len * halfW;
       const ny = dx / len * halfW;
 
-      // CCW rectangle along the segment
+      // CCW rectangle along the segment (no per-vertex circles: those overlap
+      // adjacent segments and trigger even-odd “islands” at corners).
       ctx.moveTo(x0 + nx, y0 + ny);
       ctx.lineTo(x0 - nx, y0 - ny);
       ctx.lineTo(x1 - nx, y1 - ny);
       ctx.lineTo(x1 + nx, y1 + ny);
       ctx.closePath();
-
-      // Round end caps at each vertex
-      ctx.moveTo(x0 + halfW, y0);
-      ctx.arc(x0, y0, halfW, 0, Math.PI * 2, true);
-      ctx.moveTo(x1 + halfW, y1);
-      ctx.arc(x1, y1, halfW, 0, Math.PI * 2, true);
     }
   }
 
