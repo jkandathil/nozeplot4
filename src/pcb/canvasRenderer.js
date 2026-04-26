@@ -51,6 +51,60 @@ function fpLocalToWorld(pl, lx, ly) {
   return [x + pl.x, y + pl.y];
 }
 
+/** Liang–Barsky: returns [t0,t1] ⊂ [0,1] where segment lies inside axis-aligned rect, or null if disjoint. */
+function clipSegmentToAabbT(x0, y0, x1, y1, xmin, ymin, xmax, ymax) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let t0 = 0;
+  let t1 = 1;
+  const edge = (p, q) => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+  if (!edge(-dx, x0 - xmin)) return null;
+  if (!edge(dx, xmax - x0)) return null;
+  if (!edge(-dy, y0 - ymin)) return null;
+  if (!edge(dy, ymax - y0)) return null;
+  if (t1 < t0) return null;
+  return [t0, t1];
+}
+
+/** Sub-segments of (p0→p1) that lie strictly outside the closed AABB (0–2 pieces). */
+function segmentPiecesOutsideAabb(x0, y0, x1, y1, xmin, ymin, xmax, ymax) {
+  const inside = clipSegmentToAabbT(x0, y0, x1, y1, xmin, ymin, xmax, ymax);
+  if (inside == null) return [[[x0, y0], [x1, y1]]];
+  const [ta, tb] = inside;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const at = (t) => [x0 + t * dx, y0 + t * dy];
+  const out = [];
+  if (ta > 1e-5) out.push([[x0, y0], at(ta)]);
+  if (tb < 1 - 1e-5) out.push([at(tb), [x1, y1]]);
+  return out;
+}
+
+function mergeSegmentPiecesThroughAabbs(p0, p1, aabbs) {
+  let pieces = [[p0, p1]];
+  for (const bb of aabbs) {
+    const next = [];
+    for (const seg of pieces) {
+      const [[x0, y0], [x1, y1]] = seg;
+      next.push(...segmentPiecesOutsideAabb(x0, y0, x1, y1, bb.minX, bb.minY, bb.maxX, bb.maxY));
+    }
+    pieces = next;
+    if (!pieces.length) break;
+  }
+  return pieces;
+}
+
 function hexToRgba(hex, alpha) {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -149,21 +203,16 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
 
-  // Cutout strategy:
-  // 1. For every component that has ANY non-GND pad, cut out the entire
-  //    component courtyard (bounding box around all pads + clearance).
-  //    This prevents copper from flowing between pads of the same part.
-  // 2. Individual pad cutouts provide extra safety for each non-GND pad.
-  // 3. Components where ALL pads are GND keep full copper connection.
+  // Courtyard: one merged axis-aligned (footprint-local) hole per part that has
+  // any non-GND pad — no per-pad holes here (overlapping holes + even-odd = copper
+  // bleeding back). Track clearance quads must not overlap that same hole; we clip
+  // segments to the exterior of each courtyard world AABB before adding track cutouts.
+  const courtyardAABBs = [];
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
-    const compRot = Number(pl.rot) || 0;
 
-    // One merged courtyard hole from **non-GND pads only** (so GND pads stay
-    // reachable by pour). Single rectangle avoids even-odd overlap with duplicate
-    // per-pad holes that caused copper slivers.
     const nonGndPads = fp.pads.filter((pad) => {
       const net = nets[pad.num] || nets[pad.id];
       return isNonGndNet(net);
@@ -184,20 +233,41 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
       const chw = (maxLx - minLx) / 2 + totalClear;
       const chh = (maxLy - minLy) / 2 + totalClear;
       const [wcx, wcy] = padWorld(pl, { x: cxL, y: cyL });
-      addCcwRect(ctx, wcx, wcy, chw, chh, compRot);
+      addCcwRect(ctx, wcx, wcy, chw, chh, Number(pl.rot) || 0);
+
+      const corners = [
+        [cxL - chw, cyL - chh],
+        [cxL + chw, cyL - chh],
+        [cxL + chw, cyL + chh],
+        [cxL - chw, cyL + chh],
+      ];
+      let minWX = Infinity, maxWX = -Infinity, minWY = Infinity, maxWY = -Infinity;
+      for (const [lx, ly] of corners) {
+        const [wx, wy] = fpLocalToWorld(pl, lx, ly);
+        minWX = Math.min(minWX, wx);
+        maxWX = Math.max(maxWX, wx);
+        minWY = Math.min(minWY, wy);
+        maxWY = Math.max(maxWY, wy);
+      }
+      courtyardAABBs.push({ minX: minWX, maxX: maxWX, minY: minWY, maxY: maxWY });
     }
   }
 
-  // Cutout: non-GND vias (circular — correct shape for round vias)
+  // Cutout: non-GND vias (skip if center lies inside a courtyard AABB — avoids
+  // even-odd overlap between via circle and courtyard rect.)
   for (const v of doc.vias || []) {
     if (!isNonGndNet(v.net)) continue;
+    const insideCourtyard = courtyardAABBs.some(
+      (bb) => v.x >= bb.minX && v.x <= bb.maxX && v.y >= bb.minY && v.y <= bb.maxY,
+    );
+    if (insideCourtyard) continue;
     const ro = (Number(v.diamMm) || 0.8) / 2 + clearMm;
     ctx.moveTo(v.x + ro, v.y);
     ctx.arc(v.x, v.y, ro, 0, Math.PI * 2, true); // CCW
   }
 
-  // Cutout: non-GND tracks — one CCW quad per segment (no overlapping end caps;
-  // caps overlapped segment quads / each other and caused even-odd copper islands).
+  // Cutout: non-GND tracks — quads only on portions **outside** courtyard AABBs so
+  // track holes never overlap courtyard holes (even-odd would refill copper there).
   for (const tr of doc.tracks || []) {
     if (tr.layer !== ly) continue;
     if (!isNonGndNet(tr.net)) continue;
@@ -207,22 +277,23 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     const halfW = tw / 2 + clearMm;
 
     for (let i = 0; i < tpts.length - 1; i++) {
-      const [x0, y0] = tpts[i];
-      const [x1, y1] = tpts[i + 1];
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      const len = Math.hypot(dx, dy);
-      if (len < 0.001) continue;
-      const nx = -dy / len * halfW;
-      const ny = dx / len * halfW;
+      const [sx0, sy0] = tpts[i];
+      const [sx1, sy1] = tpts[i + 1];
+      const subsegs = mergeSegmentPiecesThroughAabbs([sx0, sy0], [sx1, sy1], courtyardAABBs);
+      for (const [[x0, y0], [x1, y1]] of subsegs) {
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.001) continue;
+        const nx = -dy / len * halfW;
+        const ny = dx / len * halfW;
 
-      // CCW rectangle along the segment (no per-vertex circles: those overlap
-      // adjacent segments and trigger even-odd “islands” at corners).
-      ctx.moveTo(x0 + nx, y0 + ny);
-      ctx.lineTo(x0 - nx, y0 - ny);
-      ctx.lineTo(x1 - nx, y1 - ny);
-      ctx.lineTo(x1 + nx, y1 + ny);
-      ctx.closePath();
+        ctx.moveTo(x0 + nx, y0 + ny);
+        ctx.lineTo(x0 - nx, y0 - ny);
+        ctx.lineTo(x1 - nx, y1 - ny);
+        ctx.lineTo(x1 + nx, y1 + ny);
+        ctx.closePath();
+      }
     }
   }
 
