@@ -2,6 +2,8 @@
  * Ratsnest (air-wires) between pad islands on the same net, hidden when copper connects them.
  */
 
+import { pointInPolygon } from './pcbEditorUtils.js';
+
 function rotLocal(x, y, deg) {
   const r = ((Number(deg) || 0) * Math.PI) / 180;
   const c = Math.cos(r);
@@ -81,7 +83,8 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
     const nets = pl.padNets || {};
     for (const pad of fp.pads || []) {
       const net = nets[pad.num] || nets[pad.id];
-      if (!net || net === '0') continue;
+      // "0" is the GND net label from the schematic bridge, not unassigned copper.
+      if (net == null || net === '') continue;
       const [x, y] = padWorld(pl, pad);
       const key = String(net);
       if (!padsByNet.has(key)) padsByNet.set(key, []);
@@ -132,6 +135,19 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
       const vnode = `via${v.id}`;
       for (const tr of tracksOnNet) {
         if (trackTouchesPoint(tr.points || [], v.x, v.y, viaSlopMm)) addEdge(`t${tr.id}`, vnode);
+      }
+    }
+
+    // Filled copper polygons (e.g. GND plane): pads whose centers lie inside a same-net zone
+    // are treated as connected through that pour (2D board projection).
+    const zoneNode = `_zone_${net}`;
+    for (const poly of doc.polygons || []) {
+      const pts = poly.points || [];
+      if (pts.length < 3) continue;
+      if (String(poly.net || '') !== String(net)) continue;
+      for (let i = 0; i < n; i++) {
+        const { x, y } = pads[i];
+        if (pointInPolygon(x, y, pts)) addEdge(`p${i}`, zoneNode);
       }
     }
 

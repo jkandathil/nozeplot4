@@ -257,6 +257,8 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
   const {
     gridResolution = 0.25, // mm per grid cell
     maxIterationsPerNet = 80000,
+    /** All nets route on this copper layer unless a path only exists on another layer (fallback). */
+    routeLayer: routeLayerOpt = null,
   } = options;
 
   const boardW = Number(doc.meta?.boardWmm) || 80;
@@ -265,24 +267,30 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
   const trackWidth = doc.meta?.defaultTrackMm || 0.35;
   const stack = activeCopperLayerIds(doc);
 
+  const defaultRouteLayer =
+    routeLayerOpt && stack.includes(String(routeLayerOpt))
+      ? String(routeLayerOpt)
+      : stack.includes('F.Cu')
+        ? 'F.Cu'
+        : stack[0];
+
   const newTracks = [];
   const newVias = [];
 
-  // Sort nets by number of pads (route shorter nets first for better routability)
+  // Sort nets by number of pads (route shorter nets first for better routability).
+  // Ground uses net label "0" (SPICE node 0) — it must be routed like any other net.
   const netEntries = [...padCentersByNet.entries()]
-    .filter(([net, pts]) => pts.length >= 2 && net !== '0')
+    .filter(([net, pts]) => pts.length >= 2 && net != null && String(net) !== '')
     .sort((a, b) => a[1].length - b[1].length);
 
   // Build a mutable copy of the doc that accumulates routed tracks
   let workingDoc = JSON.parse(JSON.stringify(doc));
-  let layerIndex = 0;
 
   for (const [net, pts] of netEntries) {
     if (pts.length < 2) continue;
 
-    // Try each layer, prefer spreading across layers
-    const layer = stack[layerIndex % stack.length];
-    layerIndex++;
+    // One primary layer for all nets so canvas colors match user expectation (hue = layer, not net).
+    const layer = defaultRouteLayer;
 
     // Build obstacle grid (updated with previously routed tracks)
     const { grid, cols, rows } = buildObstacleGrid(
@@ -364,8 +372,8 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
           }
         }
       } else {
-        // Fallback: try a different layer with via insertion
-        const altLayer = stack[(layerIndex + 1) % stack.length];
+        // Fallback: try another copper layer, then via insertion if needed
+        const altLayer = stack.find((ly) => ly !== layer) || layer;
         if (altLayer !== layer && stack.length > 1) {
           const { grid: altGrid, cols: altCols, rows: altRows } = buildObstacleGrid(
             workingDoc, altLayer, gridResolution, clearanceMm, boardW, boardH

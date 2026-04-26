@@ -16,7 +16,7 @@
  */
 
 import React, {
-    useCallback, useEffect, useMemo, useState,
+    useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -149,6 +149,9 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     const [projectManagerOpen, setProjectManagerOpen] = useState(false);
     // File-menu dropdown visibility.
     const [fileMenuOpen, setFileMenuOpen] = useState(false);
+    /** Short-lived message after explicit Save (toolbar / File → Save now). */
+    const [saveFeedback, setSaveFeedback] = useState(null);
+    const saveFeedbackTimerRef = useRef(null);
 
     const [docState, setDocState] = useState(() => {
         const initial = bootProject?.doc || emptyDoc();
@@ -386,6 +389,10 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     // UI tweaks; the next doc edit will flush them into the slot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [doc, projectName, currentProjectId]);
+
+    useEffect(() => () => {
+        if (saveFeedbackTimerRef.current) window.clearTimeout(saveFeedbackTimerRef.current);
+    }, []);
 
     // Emit SPICE netlist from the doc. This is what the solver runs,
     // what "Copy" copies, and what the source drawer shows when closed.
@@ -855,6 +862,51 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
         }
     }, [projectName, doc, analysis, tranOverride, acOverride, sweep, monte, acNoise, goalSeek, traceMath, spiceLibs, selectedSignals]);
 
+    const handleSaveNow = useCallback(() => {
+        if (!doc) return;
+        if ((doc.components?.length || 0) === 0 && !currentProjectId) {
+            setSaveFeedback('Add parts or open a project first');
+            if (saveFeedbackTimerRef.current) window.clearTimeout(saveFeedbackTimerRef.current);
+            saveFeedbackTimerRef.current = window.setTimeout(() => {
+                setSaveFeedback(null);
+                saveFeedbackTimerRef.current = null;
+            }, 2800);
+            return;
+        }
+        try {
+            const saved = saveProject({
+                id: currentProjectId,
+                name: projectName,
+                doc,
+                analysis,
+                tranOverride,
+                acOverride,
+                sweep,
+                monte,
+                acNoise,
+                goalSeek,
+                traceMath,
+                spiceLibs,
+                selectedSignals,
+            });
+            if (!currentProjectId) {
+                setCurrentProjectIdState(saved.id);
+                setCurrentProjectId(saved.id);
+            }
+            setSaveFeedback('Saved to this browser');
+            if (saveFeedbackTimerRef.current) window.clearTimeout(saveFeedbackTimerRef.current);
+            saveFeedbackTimerRef.current = window.setTimeout(() => {
+                setSaveFeedback(null);
+                saveFeedbackTimerRef.current = null;
+            }, 2200);
+        } catch (e) {
+            setRunError(`Save failed: ${e?.message || e}`);
+        }
+    }, [
+        doc, projectName, currentProjectId, analysis, tranOverride, acOverride,
+        sweep, monte, acNoise, goalSeek, traceMath, spiceLibs, selectedSignals,
+    ]);
+
     const handleRename = useCallback(() => {
         const name = window.prompt('Rename project', projectName);
         if (!name) return;
@@ -1316,6 +1368,10 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                                 Rename…
                             </button>
                             <button className="cs-file-menu-item"
+                                onClick={() => { setFileMenuOpen(false); handleSaveNow(); }}>
+                                <Save size={14} /> Save now
+                            </button>
+                            <button className="cs-file-menu-item"
                                 onClick={() => { setFileMenuOpen(false); handleSaveAs(); }}>
                                 <Save size={14} /> Save as copy…
                             </button>
@@ -1390,6 +1446,21 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                         </div>
                     )}
                 </div>
+
+                <div className="cs-save-toolbar-group">
+                    <button
+                        type="button"
+                        className="cs-topbtn"
+                        onClick={handleSaveNow}
+                        title="Save the active project in this browser (local). Edits also autosave."
+                    >
+                        <Save size={14} /> Save
+                    </button>
+                    {saveFeedback ? (
+                        <span className="cs-save-feedback" role="status" aria-live="polite">{saveFeedback}</span>
+                    ) : null}
+                </div>
+                <div className="cs-topbar-sep" />
 
                 {/* Active project name (click to rename) */}
                 <button

@@ -47,6 +47,10 @@ function mapPadIdToFootprintPad(comp, pinId) {
         if (pinId === 'nc1') return '3';
         if (pinId === 'nc2') return '4';
     }
+    if (t === 'SCOPE') {
+        if (pinId === 'tip') return '1';
+        if (pinId === 'tip2') return '2';
+    }
     return pinId;
 }
 
@@ -62,6 +66,8 @@ export function footprintIdForComponent(comp) {
     if (t === 'V' || t === 'I' || t === 'IP') return 'PIN2_HDR';
     if (t === 'O') return 'SOT23_3';
     if (t === 'E' || t === 'G') return 'CHIP_4SQ';
+    /** Dual-channel scope → two THT pads (probe / scope cable landings); single → one test pad. */
+    if (t === 'SCOPE') return comp.scopeChannelMode === 'single' ? 'TP_1mm' : 'HDR_1x2';
     if (pid.startsWith('ulib:')) return 'SOT23_3';
     return 'DIP8';
 }
@@ -76,8 +82,10 @@ export function buildPcbBridgePayload(doc, nets, netlistHint = '') {
     if (!doc?.components || !nets) {
         return { version: 1, meta: { boardWmm: 100, boardHmm: 80 }, placements: [], netlistHint };
     }
+    // GND / rail symbols have no footprint; VP is a single-node probe (skip unless we add a TP later).
+    // SCOPE is included as test-point header(s) so CH1/CH2 nets appear on the PCB for bring-up.
     for (const c of doc.components) {
-        if (['GND', 'VP', 'SCOPE'].includes(c.elementType)) continue;
+        if (['GND', 'VP'].includes(c.elementType)) continue;
         const fp = footprintIdForComponent(c);
         const padNets = {};
         try {

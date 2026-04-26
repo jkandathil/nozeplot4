@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import {
-    Home,
     CircuitBoard,
     MousePointer2,
     MapPin,
@@ -39,6 +38,7 @@ import {
     Redo2,
     List,
     SquareDashed,
+    Save,
 } from 'lucide-react';
 import {
     emptyPcbDoc,
@@ -52,6 +52,12 @@ import {
     PCB_GRID_PRESETS_MM,
     isCopperLayerVisible,
 } from '../pcb/pcbDoc.js';
+import {
+    addOrUpdateGndPlane,
+    removeGndPlane,
+    suggestGndPlaneLayer,
+    NOZE_GND_PLANE_ID,
+} from '../pcb/gndPlane.js';
 import {
     snapBoard,
     snapInteractiveRoutePoint,
@@ -166,7 +172,7 @@ function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12) {
             const hh = pad.h / 2 + padTolMm;
             if (mx >= px - hw && mx <= px + hw && my >= py - hh && my <= py + hh) {
                 const n = nets[pad.num] || nets[pad.id];
-                if (n && String(n) !== '0') return String(n);
+                if (n != null && String(n).trim() !== '') return String(n);
             }
         }
     }
@@ -197,6 +203,11 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [polygonDraft, setPolygonDraft] = useState(null);
     const [drag, setDrag] = useState(null);
     const [exportBusy, setExportBusy] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [pcbSaveFeedback, setPcbSaveFeedback] = useState(null);
+    const pcbSaveFeedbackTimerRef = useRef(null);
+    /** Target layer for the optional full-board GND pour (user can override). */
+    const [gndPlaneLayer, setGndPlaneLayer] = useState(() => suggestGndPlaneLayer(doc));
     const [drcViolations, setDrcViolations] = useState([]);
     const [showOnlineSearch, setShowOnlineSearch] = useState(false);
     const [showFootprintImport, setShowFootprintImport] = useState(false);
@@ -207,6 +218,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         solderMask: true,
         brightInactiveLayers: true,
         boldSilk: true,
+        highlightUnrouted: false,
     });
     const [boardCursorMm, setBoardCursorMm] = useState(null);
     const [showBoardGrid, setShowBoardGrid] = useState(true);
@@ -294,6 +306,19 @@ function PcbStudioPage({ onBackToSchematic }) {
     }, [libVersion, footprintSearchQuery]);
 
     const copperStack = useMemo(() => activeCopperLayerIds(doc), [doc.meta?.copperLayerCount]);
+
+    useEffect(() => {
+        setGndPlaneLayer((prev) => {
+            const stack = activeCopperLayerIds(doc);
+            if (stack.includes(prev)) return prev;
+            return suggestGndPlaneLayer(doc);
+        });
+    }, [doc.meta?.copperLayerCount]);
+
+    const gndPlanePoly = useMemo(
+        () => doc.polygons?.find((p) => p.id === NOZE_GND_PLANE_ID),
+        [doc.polygons],
+    );
     const layerDrawOrder = useMemo(() => [...copperStack].reverse(), [copperStack]);
     const inactiveCopperOpacity = boardPreview.brightInactiveLayers ? 0.9 : 0.4;
     const anyCopperLayerVisible = useMemo(
@@ -354,6 +379,10 @@ function PcbStudioPage({ onBackToSchematic }) {
         };
         window.addEventListener(PCB_BRIDGE_READY_EVENT, onBridgeReady);
         return () => window.removeEventListener(PCB_BRIDGE_READY_EVENT, onBridgeReady);
+    }, []);
+
+    useEffect(() => () => {
+        if (pcbSaveFeedbackTimerRef.current) window.clearTimeout(pcbSaveFeedbackTimerRef.current);
     }, []);
 
     useEffect(() => {
@@ -503,7 +532,8 @@ function PcbStudioPage({ onBackToSchematic }) {
             const nets = pl.padNets || {};
             for (const pad of fp.pads || []) {
                 const net = nets[pad.num] || nets[pad.id];
-                if (!net || net === '0') continue;
+                // Include '0' — that is the schematic GND node id label, not “no net”.
+                if (net == null || net === '') continue;
                 const [x, y] = padWorld(pl, pad);
                 if (!map.has(net)) map.set(net, []);
                 map.get(net).push([x, y]);
@@ -518,13 +548,26 @@ function PcbStudioPage({ onBackToSchematic }) {
         [doc.placements, doc.tracks, doc.vias],
     );
 
+    const hasUnroutedRatsnest = useMemo(() => {
+        for (const pts of ratsnestPadCentersByNet.values()) {
+            if (pts && pts.length >= 2) return true;
+        }
+        return false;
+    }, [ratsnestPadCentersByNet]);
+
+    useEffect(() => {
+        if (!hasUnroutedRatsnest) {
+            setBoardPreview((p) => (p.highlightUnrouted ? { ...p, highlightUnrouted: false } : p));
+        }
+    }, [hasUnroutedRatsnest]);
+
     const handleAutoRoute = useCallback(() => {
         if (padCentersByNet.size === 0) {
             window.alert('No nets to route! Ensure your schematic components are wired together before sending to PCB Studio.');
             return;
         }
         undoMgrRef.current.push(doc);
-        const result = autoRoute(doc, padCentersByNet);
+        const result = autoRoute(doc, padCentersByNet, { routeLayer: activeLayer });
         const newTracks = result.tracks || [];
         const newVias = result.vias || [];
         setDoc((d) => ({
@@ -532,7 +575,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             tracks: [...(d.tracks || []), ...newTracks],
             vias: [...(d.vias || []), ...newVias],
         }));
-    }, [doc, padCentersByNet]);
+    }, [doc, padCentersByNet, activeLayer]);
 
     const handleExportZip = useCallback(async () => {
         if (exportBusy) return;
@@ -587,6 +630,37 @@ function PcbStudioPage({ onBackToSchematic }) {
             window.alert('IPC-D-356 export failed: ' + err.message);
         }
     }, [doc]);
+
+    const handleSavePcbNow = useCallback(() => {
+        try {
+            localStorage.setItem(PCB_STORAGE_KEY, JSON.stringify(doc));
+            setPcbSaveFeedback('Saved');
+            if (pcbSaveFeedbackTimerRef.current) window.clearTimeout(pcbSaveFeedbackTimerRef.current);
+            pcbSaveFeedbackTimerRef.current = window.setTimeout(() => {
+                setPcbSaveFeedback(null);
+                pcbSaveFeedbackTimerRef.current = null;
+            }, 2000);
+        } catch (e) {
+            window.alert('Could not save layout: ' + (e?.message || String(e)));
+        }
+    }, [doc]);
+
+    const handleAddGndPlane = useCallback(() => {
+        undoMgrRef.current.push(doc);
+        setDoc((d) => addOrUpdateGndPlane(d, gndPlaneLayer));
+    }, [doc, gndPlaneLayer]);
+
+    const handleRemoveGndPlane = useCallback(() => {
+        undoMgrRef.current.push(doc);
+        setDoc((d) => removeGndPlane(d));
+    }, [doc]);
+
+    const handleRefreshGndPlaneOutline = useCallback(() => {
+        if (!gndPlanePoly) return;
+        undoMgrRef.current.push(doc);
+        const ly = gndPlanePoly?.layer || gndPlaneLayer;
+        setDoc((d) => addOrUpdateGndPlane(d, ly));
+    }, [doc, gndPlanePoly, gndPlaneLayer]);
 
     const handleCopy = useCallback(() => {
         if (!selected.length) return;
@@ -1294,9 +1368,19 @@ function PcbStudioPage({ onBackToSchematic }) {
     return (
         <div className="pcb-root">
             <div className="pcb-topbar">
-                <button type="button" className="pcb-topbtn" onClick={onBackToSchematic} title="Back to Circuit Studio">
-                    <Home size={14} /> Back
-                </button>
+                <div className="pcb-view-switch" role="group" aria-label="Schematic or board">
+                    <button
+                        type="button"
+                        className="pcb-view-switch-btn"
+                        onClick={onBackToSchematic}
+                        title="Open schematic in Circuit Studio (same session — cross-highlight preserved)"
+                    >
+                        <FileText size={13} /> Schematic
+                    </button>
+                    <span className="pcb-view-switch-btn is-active" aria-current="page">
+                        <CircuitBoard size={13} /> Board
+                    </span>
+                </div>
                 <div className="pcb-sep" />
                 <div className="pcb-tool-group">
                     {toolButtons.map((btn) => {
@@ -1363,34 +1447,88 @@ function PcbStudioPage({ onBackToSchematic }) {
                 >
                     <AlertTriangle size={14} /> DRC
                 </button>
-                <div className="pcb-export-menu">
-                    <button type="button" className="pcb-topbtn" title="Export options">
-                        <Download size={14} /> Export
+                <div className="pcb-sep" />
+                <div className="pcb-save-toolbar-group">
+                    <button
+                        type="button"
+                        className="pcb-topbtn"
+                        onClick={handleSavePcbNow}
+                        title="Save layout in this browser (edits also autosave after a short delay)"
+                    >
+                        <Save size={14} /> Save
                     </button>
-                    <div className="pcb-dropdown">
-                        <button type="button" onClick={handleExportZip} disabled={exportBusy}>
-                            <FileCode2 size={13} /> Gerber ZIP {exportBusy ? '...' : ''}
-                        </button>
-                        <button type="button" onClick={handleExportKicad}>
-                            <FileJson size={13} /> KiCad .kicad_pcb
-                        </button>
-                        <button type="button" onClick={handleExportBom}>
-                            <List size={13} /> BOM (CSV)
-                        </button>
-                        <button type="button" onClick={handleExportPickAndPlace}>
-                            <Package size={13} /> Pick &amp; Place (CSV)
-                        </button>
-                        <button type="button" onClick={handleExportIpcD356}>
-                            <FileText size={13} /> IPC-D-356 Netlist
-                        </button>
-                    </div>
+                    {pcbSaveFeedback ? (
+                        <span className="pcb-save-feedback" role="status" aria-live="polite">{pcbSaveFeedback}</span>
+                    ) : null}
+                </div>
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    onClick={() => void handleExportZip()}
+                    disabled={exportBusy}
+                    title="Download fabrication ZIP: Gerber layers, drill, outline, etc."
+                >
+                    <FileCode2 size={14} /> Gerber ZIP
+                </button>
+                <div className="pcb-export-menu">
+                    <button
+                        type="button"
+                        className={`pcb-topbtn${exportMenuOpen ? ' is-active' : ''}`}
+                        onClick={() => setExportMenuOpen((v) => !v)}
+                        onBlur={() => { setTimeout(() => setExportMenuOpen(false), 120); }}
+                        title="KiCad board file, BOM, assembly CSV, IPC netlist"
+                    >
+                        <Download size={14} /> More exports
+                    </button>
+                    {exportMenuOpen ? (
+                        <div
+                            className="pcb-dropdown-popover"
+                            role="menu"
+                            onMouseDown={(e) => e.preventDefault()}
+                        >
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setExportMenuOpen(false);
+                                    void handleExportZip();
+                                }}
+                                disabled={exportBusy}
+                            >
+                                <FileCode2 size={13} /> Gerber ZIP {exportBusy ? '…' : ''}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setExportMenuOpen(false); handleExportKicad(); }}
+                            >
+                                <FileJson size={13} /> KiCad .kicad_pcb
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setExportMenuOpen(false); handleExportBom(); }}
+                            >
+                                <List size={13} /> BOM (CSV)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setExportMenuOpen(false); handleExportPickAndPlace(); }}
+                            >
+                                <Package size={13} /> Pick &amp; Place (CSV)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setExportMenuOpen(false); handleExportIpcD356(); }}
+                            >
+                                <FileText size={13} /> IPC-D-356 Netlist
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
                 <div className="pcb-sep" />
                 <button
                     type="button"
                     className="pcb-topbtn"
                     onClick={handleAutoRoute}
-                    title="Auto-route unconnected nets"
+                    title="Auto-route nets on the active copper layer (layer chips). Same layer = same trace color; other layers only if a path is not found there."
                 >
                     <Zap size={14} /> Route
                 </button>
@@ -1474,7 +1612,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                             ))}
                         </div>
                         <p className="pcb-layer-legend-note">
-                            Default <strong>4 layers</strong>: Top Cu → GND → VCC → Bottom Cu (file ids F.Cu, In1.Cu, In2.Cu, B.Cu). After <kbd>V</kbd>, the next segment uses the next layer color. Vias show concentric rings (outer = top copper).
+                            <strong>Trace color</strong> is always the <strong>copper layer</strong> (same for every net on that layer — not GND vs signal). Default <strong>4 layers</strong>: Top Cu (red) → GND / In1 (green) → VCC / In2 (blue) → Bottom (magenta). After <kbd>V</kbd>, the next segment uses the next layer’s color. Vias: rings follow the stack order; schematic cross-highlight adds a thin purple dash on top, not a different trace fill.
                         </p>
                     </div>
                     <div className="pcb-layer-visibility" role="group" aria-label="Copper layer visibility">
@@ -1522,6 +1660,53 @@ function PcbStudioPage({ onBackToSchematic }) {
                         </div>
                     </div>
 
+                    <h3 className="pcb-subh">GND plane (pour)</h3>
+                    <p className="pcb-dr-hint pcb-dr-hint--compact">
+                        Adds a filled rectangle on one copper layer, net <strong>0</strong> (schematic GND), inset by
+                        board edge clearance. Ratsnest and DRC treat pads inside that outline as tied to the pour.
+                        On the canvas, non-GND traces, vias, and pads on the <strong>same layer</strong> get isolation slots
+                        (KiCad-style) using <strong>min copper clearance</strong>; GND stays one hue for that layer.
+                        Gerber export is still a solid zone outline (no boolean subtract yet). Prefer an inner GND layer (In1 on 4-layer) or bottom for 2-layer.
+                    </p>
+                    <label className="pcb-field-col">
+                        Pour layer
+                        <select
+                            className="pcb-layer-stack-select"
+                            value={gndPlaneLayer}
+                            disabled={!!gndPlanePoly}
+                            onChange={(e) => setGndPlaneLayer(e.target.value)}
+                            title={gndPlanePoly ? 'Remove the pour to change its layer' : 'Layer that receives the solid GND fill'}
+                        >
+                            {copperStack.map((ly) => (
+                                <option key={ly} value={ly}>
+                                    {getCopperLayerDisplayName(ly, copperStack.length)} ({ly})
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <div className="pcb-gnd-plane-actions">
+                        {!gndPlanePoly ? (
+                            <button type="button" className="pcb-sidebar-action" onClick={handleAddGndPlane}>
+                                Add GND plane
+                            </button>
+                        ) : (
+                            <>
+                                <span className="pcb-gnd-plane-status">
+                                    On{' '}
+                                    <strong>
+                                        {getCopperLayerDisplayName(gndPlanePoly.layer, copperStack.length)}
+                                    </strong>
+                                </span>
+                                <button type="button" className="pcb-sidebar-action" onClick={handleRefreshGndPlaneOutline}>
+                                    Match board outline
+                                </button>
+                                <button type="button" className="pcb-sidebar-action pcb-sidebar-action--danger" onClick={handleRemoveGndPlane}>
+                                    Remove GND plane
+                                </button>
+                            </>
+                        )}
+                    </div>
+
                     <h3 className="pcb-subh">Board appearance</h3>
                     <label className="pcb-field-row">
                         <input
@@ -1546,6 +1731,26 @@ function PcbStudioPage({ onBackToSchematic }) {
                             onChange={(e) => setBoardPreview((p) => ({ ...p, boldSilk: e.target.checked }))}
                         />
                         Emphasize silkscreen
+                    </label>
+                    <label
+                        className={`pcb-field-row pcb-field-row--multiline${
+                            !hasUnroutedRatsnest ? ' pcb-field-row--muted' : ''
+                        }`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={Boolean(boardPreview.highlightUnrouted)}
+                            disabled={!hasUnroutedRatsnest}
+                            onChange={(e) => setBoardPreview((p) => ({ ...p, highlightUnrouted: e.target.checked }))}
+                        />
+                        <span className="pcb-field-row-stack">
+                            <span>Highlight unrouted nets</span>
+                            <span className="pcb-field-hint">
+                                {hasUnroutedRatsnest
+                                    ? 'Brighter ratsnest and pad markers for islands not yet linked by copper.'
+                                    : 'No unrouted air wires — all pad groups are connected on copper.'}
+                            </span>
+                        </span>
                     </label>
 
                     <h3 className="pcb-subh">Design rules</h3>

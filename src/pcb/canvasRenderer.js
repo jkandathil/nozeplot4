@@ -8,6 +8,7 @@
 import { getFootprint } from './footprintLib.js';
 import { activeCopperLayerIds, getCopperLayerDisplayName, isCopperLayerVisible } from './pcbDoc.js';
 import { snapBoard, snapInteractiveRoutePoint } from './pcbEditorUtils.js';
+import { NOZE_GND_PLANE_ID } from './gndPlane.js';
 
 /* ─── Layer colors (zones / polygons / UI chrome) ─── */
 export const PCB_LAYER_COLORS = {
@@ -83,6 +84,123 @@ function footprintBBox(pl) {
     maxY = Math.max(maxY, y + pad.h / 2);
   }
   return { minX, maxX, minY, maxY };
+}
+
+/**
+ * KiCad-style GND pour: filled copper zone on one layer with isolation clearance
+ * cutouts around non-GND copper (tracks / vias / pads).
+ *
+ * Uses even-odd fill rule: outer polygon is clockwise, clearance cutouts are
+ * counter-clockwise circles/rects. This avoids the `destination-out` compositing
+ * bug that destroyed underlying canvas content.
+ */
+function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink) {
+  const pts = poly.points || [];
+  if (pts.length < 3) return;
+  const clearMm = Number(doc.meta?.designRules?.minCopperClearanceMm) > 0
+    ? Number(doc.meta.designRules.minCopperClearanceMm)
+    : 0.2;
+
+  const isNonGndNet = (net) => {
+    const s = net != null ? String(net).trim() : '';
+    return s !== '' && s !== '0';
+  };
+
+  ctx.save();
+
+  // Build a single path: outer polygon (CW) + clearance cutouts (CCW) for even-odd fill
+  ctx.beginPath();
+
+  // Outer polygon — clockwise
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+
+  // Cutout: non-GND pads (counter-clockwise circles for even-odd)
+  for (const pl of doc.placements || []) {
+    const fp = getFootprint(pl.footprintId);
+    if (!fp?.pads?.length) continue;
+    const nets = pl.padNets || {};
+    for (const pad of fp.pads) {
+      const net = nets[pad.num] || nets[pad.id];
+      if (!isNonGndNet(net)) continue;
+      const [px, py] = padWorld(pl, pad);
+      // Rectangular cutout approximated as circle (covers pad diagonal + clearance)
+      const rr = Math.max(0.15, Math.hypot(pad.w, pad.h) / 2 + clearMm);
+      ctx.moveTo(px + rr, py);
+      ctx.arc(px, py, rr, 0, Math.PI * 2, true); // CCW
+    }
+  }
+
+  // Cutout: non-GND vias
+  for (const v of doc.vias || []) {
+    if (!isNonGndNet(v.net)) continue;
+    const ro = (Number(v.diamMm) || 0.8) / 2 + clearMm;
+    ctx.moveTo(v.x + ro, v.y);
+    ctx.arc(v.x, v.y, ro, 0, Math.PI * 2, true); // CCW
+  }
+
+  // Cutout: non-GND tracks (thick rounded-rect slots via stroke-to-path approximation)
+  // For each track segment, punch a clearance rectangle along the segment
+  for (const tr of doc.tracks || []) {
+    if (tr.layer !== ly) continue;
+    if (!isNonGndNet(tr.net)) continue;
+    const tpts = tr.points || [];
+    if (tpts.length < 2) continue;
+    const tw = Number(tr.widthMm) || 0.35;
+    const halfW = tw / 2 + clearMm;
+
+    // For each segment, create a rectangle rotated along the segment + end caps
+    for (let i = 0; i < tpts.length - 1; i++) {
+      const [x0, y0] = tpts[i];
+      const [x1, y1] = tpts[i + 1];
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.001) continue;
+      const nx = -dy / len * halfW; // perpendicular normal
+      const ny = dx / len * halfW;
+
+      // CCW rectangle around the segment
+      ctx.moveTo(x0 + nx, y0 + ny);
+      ctx.lineTo(x0 - nx, y0 - ny);
+      ctx.lineTo(x1 - nx, y1 - ny);
+      ctx.lineTo(x1 + nx, y1 + ny);
+      ctx.closePath();
+
+      // Round end caps at each vertex
+      ctx.moveTo(x0 + halfW, y0);
+      ctx.arc(x0, y0, halfW, 0, Math.PI * 2, true);
+      ctx.moveTo(x1 + halfW, y1);
+      ctx.arc(x1, y1, halfW, 0, Math.PI * 2, true);
+    }
+  }
+
+  // Fill with even-odd: outer polygon fills, cutouts become holes
+  const fillAlpha = isSel ? 0.7 : Math.max(0.45, polyFill * 1.8);
+  ctx.fillStyle = hexToRgba(layerColor, fillAlpha);
+  ctx.fill('evenodd');
+
+  // Outline stroke
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.strokeStyle = isSel ? '#f472b6' : layerColor;
+  ctx.lineWidth = isSel ? 0.14 : 0.08;
+  ctx.setLineDash([]);
+  ctx.stroke();
+
+  // Cross-select highlight
+  if (schLink && !isSel) {
+    ctx.strokeStyle = 'rgba(192,132,252,0.88)';
+    ctx.lineWidth = 0.1;
+    ctx.setLineDash([0.35, 0.22]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.restore();
 }
 
 /* ─── Main render function ─── */
@@ -172,15 +290,28 @@ export function renderPcbCanvas(ctx, params) {
       const schLink = poly.net && schCrossNets.has(String(poly.net).toLowerCase());
       const polyFill = isActive ? 0.34 : boardPreview.brightInactiveLayers ? 0.22 : 0.12;
 
+      if (poly.id === NOZE_GND_PLANE_ID && String(poly.net || '') === '0') {
+        drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink);
+        continue;
+      }
+
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
       ctx.closePath();
       ctx.fillStyle = hexToRgba(layerColor, polyFill);
       ctx.fill();
-      ctx.strokeStyle = isSel ? '#f472b6' : schLink ? '#c084fc' : layerColor;
-      ctx.lineWidth = (isSel ? 0.14 : schLink ? 0.11 : 0.08);
+      // Zone outline: always this layer’s copper hue (not net-based).
+      ctx.strokeStyle = isSel ? '#f472b6' : layerColor;
+      ctx.lineWidth = isSel ? 0.14 : 0.08;
       ctx.stroke();
+      if (schLink && !isSel) {
+        ctx.strokeStyle = 'rgba(192,132,252,0.88)';
+        ctx.lineWidth = 0.1;
+        ctx.setLineDash([0.35, 0.22]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
     ctx.restore();
@@ -196,15 +327,15 @@ export function renderPcbCanvas(ctx, params) {
       const isSel = isSelected('track', tr.id);
       const schLink = tr.net && schCrossNets.has(String(tr.net).toLowerCase());
       const traceCol = PCB_TRACE_LAYER_COLORS[ly] || layerColor;
-      const stroke = isSel ? '#f472b6' : schLink ? '#c084fc' : traceCol;
-      const tw = (tr.widthMm || 0.35) * (schLink && !isSel ? 1.35 : 1);
+      const stroke = isSel ? '#f472b6' : traceCol;
+      const tw = tr.widthMm || 0.35;
 
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (!isSel && !schLink) {
+      if (!isSel) {
         ctx.strokeStyle = shadeHex(traceCol, 0.52);
         ctx.lineWidth = tw + Math.max(0.05, tw * 0.28);
         ctx.stroke();
@@ -212,6 +343,14 @@ export function renderPcbCanvas(ctx, params) {
       ctx.strokeStyle = stroke;
       ctx.lineWidth = tw;
       ctx.stroke();
+      // Schematic cross-highlight: overlay only — hue stays the active copper layer.
+      if (schLink && !isSel) {
+        ctx.strokeStyle = 'rgba(192,132,252,0.92)';
+        ctx.lineWidth = Math.max(0.07, tw * 0.22);
+        ctx.setLineDash([0.45, 0.28]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
     ctx.restore();
@@ -267,8 +406,10 @@ export function renderPcbCanvas(ctx, params) {
   // ─── Board frame + dimensions ───
   drawBoardFrame(ctx, W, H, doc.meta?.name || 'Untitled board', scale);
 
-  // ─── Ratsnest ───
-  drawRatsnest(ctx, padCentersByNet, schCrossNets);
+  // ─── Ratsnest (unrouted pad islands) ───
+  drawRatsnest(ctx, padCentersByNet, schCrossNets, {
+    emphasize: Boolean(boardPreview.highlightUnrouted),
+  });
 
   // ─── Selection overlay ───
   for (const pl of (doc.placements || [])) {
@@ -449,7 +590,7 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   // Barrel fill
   ctx.beginPath();
   ctx.arc(v.x, v.y, barrelR, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(201,162,39,${isSel ? 0.5 : schLink ? 0.42 : 0.38})`;
+  ctx.fillStyle = `rgba(201,162,39,${isSel ? 0.5 : 0.38})`;
   ctx.fill();
   ctx.strokeStyle = '#8b6914';
   ctx.lineWidth = 0.05;
@@ -464,17 +605,26 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
     ctx.arc(v.x, v.y, rr, 0, Math.PI * 2);
     ctx.strokeStyle = PCB_TRACE_LAYER_COLORS[visStack[idx]] || PCB_LAYER_COLORS[visStack[idx]] || '#94a3b8';
     ctx.lineWidth = 0.07;
-    ctx.globalAlpha = isSel ? 0.95 : schLink ? 0.85 : 0.78;
+    ctx.globalAlpha = isSel ? 0.95 : 0.78;
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // Outer ring
+  // Outer ring (neutral barrel edge — not net-colored)
   ctx.beginPath();
   ctx.arc(v.x, v.y, ro, 0, Math.PI * 2);
-  ctx.strokeStyle = isSel ? '#f472b6' : schLink ? '#c084fc' : '#e8c48a';
+  ctx.strokeStyle = isSel ? '#f472b6' : '#e8c48a';
   ctx.lineWidth = 0.09;
   ctx.stroke();
+  if (schLink && !isSel) {
+    ctx.beginPath();
+    ctx.arc(v.x, v.y, ro + 0.05, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(192,132,252,0.9)';
+    ctx.lineWidth = 0.06;
+    ctx.setLineDash([0.22, 0.16]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // Drill hole
   ctx.beginPath();
@@ -486,10 +636,13 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   ctx.stroke();
 }
 
-/* ─── Solder mask (drawn as semi-transparent overlay with holes) ─── */
+/**
+ * Solder mask sits above outer copper: covered traces/pour read as mask green;
+ * only pad and via openings expose copper (typical fab stack).
+ */
 function drawSolderMask(ctx, doc, W, H) {
   const expand = 0.12;
-  const maskColor = 'rgba(13,79,45,0.68)';
+  const maskColor = 'rgba(13,79,45,0.9)';
 
   // Draw mask as a path with cutouts using even-odd fill rule
   ctx.save();
@@ -655,14 +808,21 @@ function drawBoardFrame(ctx, W, H, name, scale) {
 }
 
 /* ─── Ratsnest ─── */
-function drawRatsnest(ctx, padCentersByNet, schCrossNets) {
+function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
+  const emphasize = Boolean(options.emphasize);
   for (const [net, pts] of padCentersByNet) {
     if (pts.length < 2) continue;
     const hub = pts[0];
     const linkNet = schCrossNets.has(String(net).toLowerCase());
-    ctx.strokeStyle = linkNet ? 'rgba(192,132,252,0.55)' : 'rgba(168,85,247,0.22)';
-    ctx.lineWidth = linkNet ? 0.14 : 0.08;
-    ctx.setLineDash([0.4, 0.25]);
+    if (emphasize) {
+      ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
+      ctx.lineWidth = linkNet ? 0.24 : 0.18;
+      ctx.setLineDash([0.45, 0.22]);
+    } else {
+      ctx.strokeStyle = linkNet ? 'rgba(192,132,252,0.55)' : 'rgba(168,85,247,0.22)';
+      ctx.lineWidth = linkNet ? 0.14 : 0.08;
+      ctx.setLineDash([0.4, 0.25]);
+    }
     for (let i = 1; i < pts.length; i++) {
       ctx.beginPath();
       ctx.moveTo(hub[0], hub[1]);
@@ -670,6 +830,21 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets) {
       ctx.stroke();
     }
     ctx.setLineDash([]);
+  }
+  if (emphasize) {
+    const r = 0.28;
+    for (const [, pts] of padCentersByNet) {
+      if (pts.length < 2) continue;
+      for (const [x, y] of pts) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(250,204,21,0.55)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(251,191,36,0.9)';
+        ctx.lineWidth = 0.06;
+        ctx.stroke();
+      }
+    }
   }
 }
 

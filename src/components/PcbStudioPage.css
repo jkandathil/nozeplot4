@@ -222,19 +222,70 @@
     color: #e9d5ff;
 }
 
-/* ── Export dropdown menu ── */
+/* Schematic ↔ board (mirrors Circuit Studio workspace switcher) */
+.pcb-view-switch {
+    display: inline-flex;
+    align-items: stretch;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.75);
+    flex-shrink: 0;
+}
+
+.pcb-view-switch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+}
+
+.pcb-view-switch-btn:hover:not(.is-active) {
+    background: rgba(51, 65, 85, 0.55);
+    color: #e2e8f0;
+}
+
+.pcb-view-switch-btn.is-active {
+    background: rgba(168, 85, 247, 0.2);
+    color: #e9d5ff;
+    cursor: default;
+}
+
+/* ── Save + export (click to open — works on touch; hover-only hid Gerber) ── */
+.pcb-save-toolbar-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.pcb-save-feedback {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #86efac;
+    white-space: nowrap;
+}
+
+/* ── Export flyout (paired with primary Gerber ZIP on the toolbar) ── */
 .pcb-export-menu {
     position: relative;
     display: inline-flex;
 }
 
-.pcb-export-menu .pcb-dropdown {
-    display: none;
+.pcb-dropdown-popover {
     position: absolute;
     top: 100%;
     right: 0;
     z-index: 50;
-    min-width: 200px;
+    min-width: 212px;
     margin-top: 4px;
     padding: 4px 0;
     border-radius: 10px;
@@ -242,15 +293,11 @@
     background: rgba(15, 23, 42, 0.96);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(12px);
-}
-
-.pcb-export-menu:hover .pcb-dropdown,
-.pcb-export-menu:focus-within .pcb-dropdown {
     display: flex;
     flex-direction: column;
 }
 
-.pcb-dropdown button {
+.pcb-dropdown-popover button {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -267,17 +314,17 @@
     transition: background 0.12s ease;
 }
 
-.pcb-dropdown button:hover {
+.pcb-dropdown-popover button:hover {
     background: rgba(168, 85, 247, 0.15);
     color: #e9d5ff;
 }
 
-.pcb-dropdown button:disabled {
+.pcb-dropdown-popover button:disabled {
     opacity: 0.4;
     cursor: not-allowed;
 }
 
-.pcb-dropdown button svg {
+.pcb-dropdown-popover button svg {
     flex-shrink: 0;
     opacity: 0.6;
 }
@@ -328,6 +375,35 @@
     background: rgba(168, 85, 247, 0.18);
     border-color: rgba(168, 85, 247, 0.4);
     color: #e9d5ff;
+}
+
+.pcb-sidebar-action--danger {
+    border-color: rgba(248, 113, 113, 0.35);
+    background: rgba(248, 113, 113, 0.08);
+    color: #fecaca;
+}
+
+.pcb-sidebar-action--danger:hover {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(248, 113, 113, 0.14);
+    color: #fef2f2;
+}
+
+.pcb-dr-hint--compact {
+    margin-bottom: 8px;
+}
+
+.pcb-gnd-plane-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.pcb-gnd-plane-status {
+    font-size: 0.68rem;
+    color: #94a3b8;
+    line-height: 1.35;
 }
 
 .pcb-field {
@@ -786,6 +862,36 @@
     width: 14px;
     height: 14px;
     accent-color: #a855f7;
+}
+
+.pcb-field-row--multiline {
+    align-items: flex-start;
+}
+
+.pcb-field-row--multiline > input {
+    margin-top: 2px;
+}
+
+.pcb-field-row--muted {
+    opacity: 0.75;
+    cursor: default;
+}
+
+.pcb-field-row--muted input {
+    cursor: not-allowed;
+}
+
+.pcb-field-row-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    line-height: 1.35;
+}
+
+.pcb-field-hint {
+    font-size: 0.58rem;
+    font-weight: 500;
+    color: #64748b;
 }
 
 .pcb-edit-row {

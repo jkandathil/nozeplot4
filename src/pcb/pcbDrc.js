@@ -18,6 +18,7 @@
 
 import { createSpatialIndex } from './spatialIndex.js';
 import { activeCopperLayerIds } from './pcbDoc.js';
+import { buildRatsnestHubsByNet } from './pcbRatsnest.js';
 
 /* ─── Geometry helpers ─── */
 function sqr(x) { return x * x; }
@@ -306,35 +307,19 @@ export function runDRC(doc, getFootprint, options = {}) {
     }
   }
 
-  // ═══ 8. Unconnected Nets ═══
+  // ═══ 8. Open nets / disconnected pad islands (same graph as ratsnest) ═══
   if (options.checkUnconnected !== false) {
-    const netPads = new Map();
-    for (const pl of (doc.placements || [])) {
-      const fp = getFootprint(pl.footprintId);
-      if (!fp?.pads) continue;
-      const nets = pl.padNets || {};
-      for (const pad of fp.pads) {
-        const net = nets[pad.num] || nets[pad.id];
-        if (!net || net === '0') continue;
-        if (!netPads.has(net)) netPads.set(net, []);
-        const [px, py] = padWorld(pl, pad);
-        netPads.get(net).push({ x: px, y: py, ref: pl.ref, padNum: pad.num });
-      }
-    }
-
-    // Check that each net's pads are connected by tracks
-    for (const [net, pads] of netPads) {
-      if (pads.length < 2) continue;
-      // Simple check: see if there are any tracks for this net
-      const netTracks = tracks.filter(t => t.net === net);
-      if (netTracks.length === 0) {
-        violations.push({
-          type: 'unconnected_net',
-          severity: 'warning',
-          message: `Net "${net}" has ${pads.length} pads but no routed tracks`,
-          x: pads[0].x, y: pads[0].y,
-        });
-      }
+    const openHubs = buildRatsnestHubsByNet(doc, getFootprint);
+    for (const [net, hubs] of openHubs) {
+      if (!hubs || hubs.length < 2) continue;
+      const label = net === '0' ? 'GND (0)' : String(net);
+      violations.push({
+        type: 'open_net',
+        severity: 'error',
+        message: `Net "${label}" has ${hubs.length} separate copper islands — not all pads are joined by tracks/vias`,
+        x: hubs[0][0],
+        y: hubs[0][1],
+      });
     }
   }
 

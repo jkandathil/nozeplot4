@@ -3027,6 +3027,27 @@ html[data-theme="light"] .cs-file-menu-item:hover:not(:disabled) {
     background: #f1f5f9;
 }
 
+.cs-save-toolbar-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.cs-save-feedback {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: #86efac;
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html[data-theme="light"] .cs-save-feedback {
+    color: #15803d;
+}
+
 /* Editable project name pill in the top bar. */
 .cs-project-name {
     background: transparent;
