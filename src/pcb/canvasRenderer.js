@@ -94,6 +94,30 @@ function footprintBBox(pl) {
  * counter-clockwise circles/rects. This avoids the `destination-out` compositing
  * bug that destroyed underlying canvas content.
  */
+/**
+ * Add a CCW (counter-clockwise) rotated rectangle sub-path for even-odd cutout.
+ * cx,cy = center; hw,hh = half-width/half-height; angleDeg = rotation.
+ */
+function addCcwRect(ctx, cx, cy, hw, hh, angleDeg) {
+  const a = ((angleDeg || 0) * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  // 4 corners of the rectangle, rotated
+  const corners = [
+    [-hw, -hh],
+    [-hw,  hh],
+    [ hw,  hh],
+    [ hw, -hh],
+  ]; // CCW winding order
+  const world = corners.map(([lx, ly]) => [
+    cx + lx * cos - ly * sin,
+    cy + lx * sin + ly * cos,
+  ]);
+  ctx.moveTo(world[0][0], world[0][1]);
+  for (let i = 1; i < 4; i++) ctx.lineTo(world[i][0], world[i][1]);
+  ctx.closePath();
+}
+
 function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink) {
   const pts = poly.points || [];
   if (pts.length < 3) return;
@@ -116,23 +140,24 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
 
-  // Cutout: non-GND pads (counter-clockwise circles for even-odd)
+  // Cutout: non-GND pads — conformal rectangles matching exact pad shape + clearance
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
+    const compRot = Number(pl.rot) || 0;
     for (const pad of fp.pads) {
       const net = nets[pad.num] || nets[pad.id];
       if (!isNonGndNet(net)) continue;
       const [px, py] = padWorld(pl, pad);
-      // Rectangular cutout approximated as circle (covers pad diagonal + clearance)
-      const rr = Math.max(0.15, Math.hypot(pad.w, pad.h) / 2 + clearMm);
-      ctx.moveTo(px + rr, py);
-      ctx.arc(px, py, rr, 0, Math.PI * 2, true); // CCW
+      const hw = pad.w / 2 + clearMm;
+      const hh = pad.h / 2 + clearMm;
+      // Pad inherits component rotation; rectangular cutout matches pad orientation
+      addCcwRect(ctx, px, py, hw, hh, compRot);
     }
   }
 
-  // Cutout: non-GND vias
+  // Cutout: non-GND vias (circular — correct shape for round vias)
   for (const v of doc.vias || []) {
     if (!isNonGndNet(v.net)) continue;
     const ro = (Number(v.diamMm) || 0.8) / 2 + clearMm;
@@ -140,8 +165,7 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     ctx.arc(v.x, v.y, ro, 0, Math.PI * 2, true); // CCW
   }
 
-  // Cutout: non-GND tracks (thick rounded-rect slots via stroke-to-path approximation)
-  // For each track segment, punch a clearance rectangle along the segment
+  // Cutout: non-GND tracks — rotated rectangles per segment + round end caps
   for (const tr of doc.tracks || []) {
     if (tr.layer !== ly) continue;
     if (!isNonGndNet(tr.net)) continue;
@@ -150,7 +174,6 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     const tw = Number(tr.widthMm) || 0.35;
     const halfW = tw / 2 + clearMm;
 
-    // For each segment, create a rectangle rotated along the segment + end caps
     for (let i = 0; i < tpts.length - 1; i++) {
       const [x0, y0] = tpts[i];
       const [x1, y1] = tpts[i + 1];
@@ -158,10 +181,10 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
       const dy = y1 - y0;
       const len = Math.hypot(dx, dy);
       if (len < 0.001) continue;
-      const nx = -dy / len * halfW; // perpendicular normal
+      const nx = -dy / len * halfW;
       const ny = dx / len * halfW;
 
-      // CCW rectangle around the segment
+      // CCW rectangle along the segment
       ctx.moveTo(x0 + nx, y0 + ny);
       ctx.lineTo(x0 - nx, y0 - ny);
       ctx.lineTo(x1 - nx, y1 - ny);
@@ -177,7 +200,7 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   }
 
   // Fill with even-odd: outer polygon fills, cutouts become holes
-  const fillAlpha = isSel ? 0.7 : Math.max(0.45, polyFill * 1.8);
+  const fillAlpha = isSel ? 0.7 : Math.max(0.5, polyFill * 2.0);
   ctx.fillStyle = hexToRgba(layerColor, fillAlpha);
   ctx.fill('evenodd');
 

@@ -19,6 +19,41 @@ import { inferWireNetLabel } from '../../pcb/crossSelectBridge.js';
 
 const EMPTY_CROSS_SET = new Set();
 
+/**
+ * Given a clicked wire, find ALL wire ids on the same electrical net.
+ * Uses resolvedNets.nodeIdAt to look up the net node at each wire vertex,
+ * then collects every wire that touches that same node.
+ */
+function collectNetWireIds(doc, clickedWireId, resolvedNets) {
+    if (!resolvedNets?.nodeIdAt || !doc?.wires?.length) return [clickedWireId];
+
+    // Find the net node(s) the clicked wire belongs to
+    const clickedWire = doc.wires.find((w) => w.id === clickedWireId);
+    if (!clickedWire?.points?.length) return [clickedWireId];
+
+    const targetNodes = new Set();
+    for (const [x, y] of clickedWire.points) {
+        const nid = resolvedNets.nodeIdAt(x, y);
+        if (nid != null) targetNodes.add(nid);
+    }
+    if (targetNodes.size === 0) return [clickedWireId];
+
+    // Collect all wires that touch any of those same net nodes
+    const result = new Set();
+    for (const w of doc.wires) {
+        for (const [x, y] of w.points || []) {
+            const nid = resolvedNets.nodeIdAt(x, y);
+            if (nid != null && targetNodes.has(nid)) {
+                result.add(w.id);
+                break;
+            }
+        }
+    }
+    // Ensure the clicked wire is always included
+    result.add(clickedWireId);
+    return [...result];
+}
+
 /** Axis-aligned rect from two world-space corners (inclusive). */
 function normalizeWorldRect(a, b) {
     return {
@@ -496,7 +531,13 @@ export default function Canvas({
         }
         const wireHit = wireAt(world);
         if (wireHit) {
-            onSelect({ kind: 'wire', id: wireHit.id });
+            // Select the entire net (all wires sharing the same electrical node)
+            const netWireIds = collectNetWireIds(doc, wireHit.id, resolvedNets);
+            if (netWireIds.length > 1) {
+                onSelect({ kind: 'multi', wireIds: netWireIds, componentIds: [], labelIds: [] });
+            } else {
+                onSelect({ kind: 'wire', id: wireHit.id });
+            }
             // Localized wire drag: only this wire translates, and any
             // endpoint that was anchored to a component pin stays
             // locked (we'll insert a bend on commit). Ctrl/Cmd skips
