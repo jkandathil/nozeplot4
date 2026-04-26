@@ -19,6 +19,8 @@ import {
     ZoomIn,
     ZoomOut,
     Maximize2,
+    X,
+    Route,
 } from 'lucide-react';
 import {
     emptyPcbDoc,
@@ -36,7 +38,11 @@ import {
     pickPolygonAt,
     centroidClipboard,
 } from '../pcb/pcbEditorUtils.js';
-import { PCB_BRIDGE_KEY } from '../pcb/schematicBridge.js';
+import {
+    PCB_BRIDGE_KEY,
+    PCB_BRIDGE_READY_EVENT,
+    PCB_WORKFLOW_DEMO_ID,
+} from '../pcb/schematicBridge.js';
 import {
     CROSS_SELECT_EVENT,
     broadcastCrossSelect,
@@ -140,6 +146,8 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [showOnlineSearch, setShowOnlineSearch] = useState(false);
     const [showFootprintImport, setShowFootprintImport] = useState(false);
     const [libVersion, setLibVersion] = useState(0);
+    /** True after opening from the Circuit Studio "schematic → Gerber" tutorial demo. */
+    const [pcbWorkflowDemo, setPcbWorkflowDemo] = useState(false);
     const svgRef = useRef(null);
     const canvasWrapRef = useRef(null);
     const boardSizeRef = useRef({ W: 80, H: 50 });
@@ -206,28 +214,38 @@ function PcbStudioPage({ onBackToSchematic }) {
     }, [doc]);
 
     useEffect(() => {
-        let base = emptyPcbDoc();
-        let hadBridge = false;
-        try {
-            const raw = sessionStorage.getItem(PCB_BRIDGE_KEY);
-            if (raw) {
+        const consumeBridge = () => {
+            try {
+                const raw = sessionStorage.getItem(PCB_BRIDGE_KEY);
+                if (!raw) return false;
                 const bridge = JSON.parse(raw);
-                base = applyBridgePayload(emptyPcbDoc(), bridge);
-                hadBridge = true;
                 sessionStorage.removeItem(PCB_BRIDGE_KEY);
+                setPcbWorkflowDemo(bridge.workflowDemo === PCB_WORKFLOW_DEMO_ID);
+                setDoc(migratePcbDoc(applyBridgePayload(emptyPcbDoc(), bridge)));
+                setDrcViolations([]);
+                setSelected([]);
+                return true;
+            } catch {
+                return false;
             }
-        } catch {
-            /* ignore */
-        }
-        if (!hadBridge) {
+        };
+
+        const boot = () => {
+            if (consumeBridge()) return;
             try {
                 const saved = localStorage.getItem(PCB_STORAGE_KEY);
-                if (saved) base = JSON.parse(saved);
+                if (saved) setDoc(migratePcbDoc(JSON.parse(saved)));
             } catch {
                 /* ignore */
             }
-        }
-        setDoc(migratePcbDoc(base));
+        };
+
+        boot();
+        const onBridgeReady = () => {
+            consumeBridge();
+        };
+        window.addEventListener(PCB_BRIDGE_READY_EVENT, onBridgeReady);
+        return () => window.removeEventListener(PCB_BRIDGE_READY_EVENT, onBridgeReady);
     }, []);
 
     useEffect(() => {
@@ -943,6 +961,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                         if (!window.confirm('Clear saved board and reset?')) return;
                         const fresh = migratePcbDoc(emptyPcbDoc());
                         setDoc(fresh);
+                        setPcbWorkflowDemo(false);
                         try {
                             localStorage.removeItem(PCB_STORAGE_KEY);
                         } catch {
@@ -953,6 +972,39 @@ function PcbStudioPage({ onBackToSchematic }) {
                     <Trash2 size={14} /> New board
                 </button>
             </header>
+
+            {pcbWorkflowDemo ? (
+                <div className="pcb-demo-banner" role="region" aria-label="Gerber walkthrough tips">
+                    <div className="pcb-demo-banner-icon" aria-hidden>
+                        <Route size={18} />
+                    </div>
+                    <div className="pcb-demo-banner-body">
+                        <strong>Gerber walkthrough</strong>
+                        <span className="pcb-demo-banner-lead">
+                            You opened this board from the Circuit Studio tutorial demo. Finish the flow here:
+                        </span>
+                        <ol className="pcb-demo-banner-steps">
+                            <li>
+                                <Zap size={14} aria-hidden /> Click <strong>Auto-route</strong> (lightning) in the left tool rail to add copper between pads on the same net.
+                            </li>
+                            <li>
+                                <Download size={14} aria-hidden /> Click <strong>Gerber ZIP</strong> above — your browser downloads fabrication layers (open in a Gerber viewer or fab upload).
+                            </li>
+                            <li>
+                                Optional: run <strong>DRC</strong> for a quick clearance check (demo router is simple, not production-grade).
+                            </li>
+                        </ol>
+                    </div>
+                    <button
+                        type="button"
+                        className="pcb-demo-banner-dismiss"
+                        onClick={() => setPcbWorkflowDemo(false)}
+                        aria-label="Dismiss walkthrough tips"
+                    >
+                        <X size={16} />
+                    </button>
+                </div>
+            ) : null}
 
             <div className="pcb-workspace">
                 <nav className="pcb-command-rail" aria-label="Tools">
@@ -1134,13 +1186,13 @@ function PcbStudioPage({ onBackToSchematic }) {
                         ))}
                     </ul>
                 </aside>
-                <div className="pcb-canvas-wrap">
+                <div className="pcb-canvas-wrap" ref={canvasWrapRef}>
                     <svg
                         ref={svgRef}
                         className={`pcb-board-svg ${cursorClass}`}
                         width={Math.min(920, Math.max(320, W * 8))}
                         height={Math.min(640, Math.max(240, H * 8))}
-                        viewBox={`0 0 ${W} ${H}`}
+                        viewBox={viewBoxStr}
                         onMouseDown={onSvgDown}
                     >
                         <rect x={0} y={0} width={W} height={H} fill="#1a1520" stroke="#4c1d95" strokeWidth={0.12} />
@@ -1207,7 +1259,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                             const isSel = isItemSelected(selected, 'via', v.id);
                             const schLink = v.net && schCrossNets.has(String(v.net).toLowerCase());
                             return (
-                                <g key={v.id} onMouseDown={(e) => e.stopPropagation()} style={{ cursor: 'pointer' }}>
+                                <g key={v.id} style={{ cursor: 'pointer' }}>
                                     <circle
                                         cx={v.x}
                                         cy={v.y}

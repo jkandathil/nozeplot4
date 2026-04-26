@@ -23,6 +23,84 @@
     background: rgba(15, 23, 42, 0.6);
 }
 
+/* Circuit → PCB tutorial: in-app checklist after Send to PCB */
+.pcb-demo-banner {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 14px;
+    margin: 0;
+    border-bottom: 1px solid rgba(168, 85, 247, 0.35);
+    background: linear-gradient(105deg, rgba(88, 28, 135, 0.35), rgba(15, 23, 42, 0.92));
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.pcb-demo-banner-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #c4b5fd;
+}
+
+.pcb-demo-banner-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.pcb-demo-banner-body strong {
+    display: block;
+    font-size: 0.85rem;
+    color: #ede9fe;
+    margin-bottom: 4px;
+}
+
+.pcb-demo-banner-lead {
+    display: block;
+    color: #94a3b8;
+    margin-bottom: 8px;
+}
+
+.pcb-demo-banner-steps {
+    margin: 0;
+    padding-left: 1.15rem;
+    color: #cbd5e1;
+}
+
+.pcb-demo-banner-steps li {
+    margin-bottom: 6px;
+}
+
+.pcb-demo-banner-steps li:last-child {
+    margin-bottom: 0;
+}
+
+.pcb-demo-banner-steps svg {
+    display: inline-block;
+    vertical-align: -0.2em;
+    margin-right: 4px;
+    color: #a78bfa;
+}
+
+.pcb-demo-banner-dismiss {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+}
+
+.pcb-demo-banner-dismiss:hover {
+    background: rgba(148, 163, 184, 0.12);
+    color: #f1f5f9;
+}
+
 .pcb-topbar h1 {
     margin: 0;
     font-size: 0.95rem;
@@ -376,6 +454,15 @@
 .pcb-fp-list button.is-picked {
     border-color: rgba(168, 85, 247, 0.4);
     background: rgba(168, 85, 247, 0.15);
+}
+
+/* Ratsnest + major grid lines are decorative; ignore hits so empty-board clicks reach the background. */
+.pcb-ratsnest {
+    pointer-events: none;
+}
+
+.pcb-board-svg > line {
+    pointer-events: none;
 }
 
 .pcb-canvas-wrap {

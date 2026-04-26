@@ -629,4 +629,56 @@ C1 vout 0 100n
             },
         ],
     },
+    {
+        id: 'pcb-gerber-walkthrough',
+        title: 'Tutorial: schematic → auto-route → Gerber',
+        tagline: 'Tiny RC + 5 V source. Guided steps through PCB Studio and a zip download.',
+        category: 'Tutorial',
+        netlist: `* PCB / Gerber walkthrough — minimal RC low-pass + 5 V DC source
+* Simulator: run .tran to see the node waveforms.
+* Layout: Circuit Studio → File → Send to PCB Studio, then Auto-route and Gerber ZIP.
+
+V1 vin 0 DC 5
+R1 vin vout 1k
+C1 vout 0 100n
+
+.tran 1u 500u
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(vin)', 'V(vout)'],
+            ac: ['V(vout)'],
+            op: ['V(vin)', 'V(vout)'],
+        },
+        tour: [
+            {
+                title: 'What is on the canvas',
+                body: 'V1 is a 5 V DC source (vin → ground). R1 and C1 form a 1st-order low-pass from vin to vout. Node names match the SPICE labels so nets stay easy to follow.',
+            },
+            {
+                title: 'Run the transient',
+                body: 'Click Run. You should see V(vin) step to 5 V and V(vout) charge toward 5 V with an RC time constant τ ≈ R·C = 100 µs (1 kΩ · 100 nF).',
+            },
+            {
+                title: 'Push the design to PCB Studio',
+                body: 'Open File → Send to PCB Studio… (or use the Schematic / Board switch after sending). The app copies component refs, footprints, and net names into a new board layout session.',
+            },
+            {
+                title: 'In PCB Studio — place review',
+                body: 'Parts appear in a small grid of footprints (source, resistor, capacitor). Nets such as vin, vout, and ground are attached to pads so the router knows what to connect.',
+            },
+            {
+                title: 'Auto-route',
+                body: 'Click the lightning (⚡) tool in the left rail. It adds Manhattan-style copper tracks between pads on the same net (demo router — not DRC-clean production routing).',
+            },
+            {
+                title: 'Gerber ZIP',
+                body: 'Use Gerber ZIP in the top bar. Your browser downloads a zip of copper and outline layers you can open in KiCad GerbView, a web Gerber viewer, or send to a fab for quoting.',
+            },
+            {
+                title: 'Iterate',
+                body: 'Return to Schematic with Home → Circuit Studio, tweak R or C, send to PCB again, and re-route. Use DRC in PCB Studio if you want a quick clearance sanity check.',
+            },
+        ],
+    },
 ];

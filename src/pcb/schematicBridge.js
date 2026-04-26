@@ -107,3 +107,9 @@ export function buildPcbBridgePayload(doc, nets, netlistHint = '') {
 }
 
 export const PCB_BRIDGE_KEY = 'nozePcbBridge:v1';
+
+/** Fired after sessionStorage bridge write so PCB Studio can consume it even if already mounted. */
+export const PCB_BRIDGE_READY_EVENT = 'noze-pcb-bridge-ready';
+
+/** Tag carried in bridge JSON when opened from the Circuit Studio Gerber walkthrough demo. */
+export const PCB_WORKFLOW_DEMO_ID = 'pcb-gerber-walkthrough';

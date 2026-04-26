@@ -105,5 +105,8 @@ export function applyBridgePayload(doc, bridge) {
     }
     if (bridge.meta?.boardWmm) next.meta = { ...next.meta, boardWmm: bridge.meta.boardWmm };
     if (bridge.meta?.boardHmm) next.meta = { ...next.meta, boardHmm: bridge.meta.boardHmm };
+    if (bridge.meta?.name != null && String(bridge.meta.name).trim()) {
+        next.meta = { ...next.meta, name: String(bridge.meta.name).trim() };
+    }
     return next;
 }

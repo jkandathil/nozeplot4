@@ -71,7 +71,12 @@ import {
     exportProjectJson, exportSpiceNetlist, exportResultsCsv,
     exportCanvasSvg, exportCanvasPng,
 } from '../circuit/exporters.js';
-import { buildPcbBridgePayload, PCB_BRIDGE_KEY } from '../pcb/schematicBridge.js';
+import {
+    buildPcbBridgePayload,
+    PCB_BRIDGE_KEY,
+    PCB_BRIDGE_READY_EVENT,
+    PCB_WORKFLOW_DEMO_ID,
+} from '../pcb/schematicBridge.js';
 import {
     CROSS_SELECT_EVENT,
     broadcastCrossSelect,
@@ -1167,12 +1172,21 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
         }
         try {
             const payload = buildPcbBridgePayload(doc, resolvedNets, netlistText);
+            if (loadedDemoId === PCB_WORKFLOW_DEMO_ID) {
+                payload.workflowDemo = PCB_WORKFLOW_DEMO_ID;
+                payload.meta = { ...payload.meta, name: 'RC walkthrough board' };
+            }
             sessionStorage.setItem(PCB_BRIDGE_KEY, JSON.stringify(payload));
+            try {
+                window.dispatchEvent(new Event(PCB_BRIDGE_READY_EVENT));
+            } catch {
+                /* */
+            }
             onOpenPcbLayout();
         } catch (e) {
             setRunError(e?.message || String(e));
         }
-    }, [doc, resolvedNets, netlistText, onOpenPcbLayout]);
+    }, [doc, resolvedNets, netlistText, onOpenPcbLayout, loadedDemoId]);
 
     // Drag-drop import must be declared *before* the home/workspace early
     // return — otherwise React sees fewer hooks on the home branch and
@@ -1410,10 +1424,20 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                     {running ? <><RefreshCw size={14} className="cs-spin" /> Running…</> : <><Play size={14} /> Run</>}
                 </button>
                 <div className="cs-topbar-spacer" />
-                <button className="cs-topbtn" onClick={handleUndo} disabled={docState.past.length === 0} title="Undo (Ctrl+Z)">
+                <button
+                    className="cs-topbtn"
+                    onClick={handleUndo}
+                    disabled={docState.past.length === 0}
+                    title="Undo — Ctrl+Z or ⌘Z (also Ctrl+Alt+Z). Works while focus is on the toolbar or canvas, not inside the netlist text box."
+                >
                     <Undo size={14} />
                 </button>
-                <button className="cs-topbtn" onClick={handleRedo} disabled={docState.future.length === 0} title="Redo (Ctrl+Y)">
+                <button
+                    className="cs-topbtn"
+                    onClick={handleRedo}
+                    disabled={docState.future.length === 0}
+                    title="Redo — Ctrl+Y or ⌘⇧Z or Ctrl+Shift+Z"
+                >
                     <Redo size={14} />
                 </button>
                 <button className="cs-topbtn" onClick={copyNetlist} title="Copy netlist to clipboard">

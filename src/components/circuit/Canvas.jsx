@@ -648,13 +648,20 @@ export default function Canvas({
     /* --------------------- keyboard ---------------------------- */
     useEffect(() => {
         const handler = (ev) => {
-            if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA'
-                || ev.target.isContentEditable)) return;
-            if (!wrapperRef.current || (!wrapperRef.current.contains(document.activeElement)
-                && !wrapperRef.current.matches(':hover'))) return;
+            const tag = ev.target?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ev.target?.isContentEditable) {
+                return;
+            }
             const key = ev.key.toLowerCase();
+            /* Undo/redo: work from anywhere on the page (not only when the canvas is :hover),
+             * so toolbar / inspector focus still receives Ctrl/Cmd+Z. Skip text fields above. */
             if (ev.ctrlKey || ev.metaKey) {
-                if (key === 'z') {
+                if (key === 'z' && ev.altKey) {
+                    ev.preventDefault();
+                    if (onUndo) onUndo();
+                    return;
+                }
+                if (key === 'z' && !ev.altKey) {
                     ev.preventDefault();
                     if (ev.shiftKey) {
                         if (onRedo) onRedo();
@@ -663,11 +670,15 @@ export default function Canvas({
                     }
                     return;
                 }
-                if (key === 'y') {
+                if (key === 'y' && !ev.shiftKey) {
                     ev.preventDefault();
                     if (onRedo) onRedo();
                     return;
                 }
+            }
+            if (!wrapperRef.current || (!wrapperRef.current.contains(document.activeElement)
+                && !wrapperRef.current.matches(':hover'))) return;
+            if (ev.ctrlKey || ev.metaKey) {
                 if (key === 'a' && tool === 'select') {
                     ev.preventDefault();
                     const componentIds = (doc.components || []).map((c) => c.id);
