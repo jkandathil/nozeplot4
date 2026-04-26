@@ -15,12 +15,20 @@
 .pcb-topbar {
     flex-shrink: 0;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 8px 12px;
-    padding: 8px 12px;
+    gap: 4px 6px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.12));
     background: rgba(15, 23, 42, 0.6);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;          /* Firefox */
+    -ms-overflow-style: none;       /* IE/Edge */
+}
+
+.pcb-topbar::-webkit-scrollbar {
+    display: none;                  /* Chrome/Safari */
 }
 
 /* Circuit → PCB tutorial: in-app checklist after Send to PCB */
@@ -146,15 +154,18 @@
 .pcb-topbtn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 8px;
+    gap: 5px;
+    padding: 5px 9px;
+    border-radius: 7px;
     border: 1px solid rgba(148, 163, 184, 0.15);
     background: rgba(30, 41, 59, 0.6);
     color: var(--text-primary, #e2e8f0);
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
     cursor: pointer;
+    font-family: inherit;
     transition: background 0.15s ease, border-color 0.15s ease;
 }
 
@@ -177,8 +188,146 @@
 .pcb-sep {
     width: 1px;
     height: 22px;
+    flex-shrink: 0;
     background: rgba(148, 163, 184, 0.15);
     margin: 0 2px;
+}
+
+/* ── Tool group (inline row of tool buttons) ── */
+.pcb-tool-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.55);
+    padding: 2px;
+}
+
+.pcb-tool-group .pcb-topbtn {
+    border: none;
+    border-radius: 6px;
+    padding: 5px 8px;
+    background: transparent;
+}
+
+.pcb-tool-group .pcb-topbtn:hover:not(.is-active) {
+    background: rgba(51, 65, 85, 0.65);
+}
+
+.pcb-tool-group .pcb-topbtn.is-active {
+    background: rgba(168, 85, 247, 0.25);
+    border: none;
+    color: #e9d5ff;
+}
+
+/* ── Export dropdown menu ── */
+.pcb-export-menu {
+    position: relative;
+    display: inline-flex;
+}
+
+.pcb-export-menu .pcb-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 50;
+    min-width: 200px;
+    margin-top: 4px;
+    padding: 4px 0;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.96);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+}
+
+.pcb-export-menu:hover .pcb-dropdown,
+.pcb-export-menu:focus-within .pcb-dropdown {
+    display: flex;
+    flex-direction: column;
+}
+
+.pcb-dropdown button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 0.76rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: background 0.12s ease;
+}
+
+.pcb-dropdown button:hover {
+    background: rgba(168, 85, 247, 0.15);
+    color: #e9d5ff;
+}
+
+.pcb-dropdown button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.pcb-dropdown button svg {
+    flex-shrink: 0;
+    opacity: 0.6;
+}
+
+/* ── Footprint search input ── */
+.pcb-fp-search {
+    width: 100%;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.8);
+    color: #e2e8f0;
+    font-size: 0.72rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.pcb-fp-search:focus {
+    border-color: rgba(168, 85, 247, 0.45);
+}
+
+.pcb-fp-search::placeholder {
+    color: #475569;
+}
+
+/* ── Sidebar action buttons ── */
+.pcb-sidebar-action {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(168, 85, 247, 0.25);
+    background: rgba(168, 85, 247, 0.08);
+    color: #c4b5fd;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pcb-sidebar-action:hover {
+    background: rgba(168, 85, 247, 0.18);
+    border-color: rgba(168, 85, 247, 0.4);
+    color: #e9d5ff;
 }
 
 .pcb-field {

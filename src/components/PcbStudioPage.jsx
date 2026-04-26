@@ -994,100 +994,100 @@ function PcbStudioPage({ onBackToSchematic }) {
     ];
 
     return (
-        <div className="pcb-studio-page">
-            <nav className="pcb-header">
-                <div className="pcb-header-left">
-                    <button type="button" className="pcb-nav-btn" onClick={onBackToSchematic} title="Back to Circuit Studio">
-                        <Home size={16} /> Back
-                    </button>
-                    <div className="pcb-tool-group">
-                        {toolButtons.map((btn) => {
-                            const Icon = btn.icon;
-                            return (
-                                <button
-                                    key={btn.id}
-                                    type="button"
-                                    className={`pcb-tool-btn${tool === btn.id ? ' is-active' : ''}`}
-                                    onClick={() => setTool(btn.id)}
-                                    title={btn.label}
-                                >
-                                    <Icon size={14} />
-                                </button>
-                            );
-                        })}
-                    </div>
+        <div className="pcb-root">
+            <div className="pcb-topbar">
+                <button type="button" className="pcb-topbtn" onClick={onBackToSchematic} title="Back to Circuit Studio">
+                    <Home size={14} /> Back
+                </button>
+                <div className="pcb-sep" />
+                <div className="pcb-tool-group">
+                    {toolButtons.map((btn) => {
+                        const Icon = btn.icon;
+                        return (
+                            <button
+                                key={btn.id}
+                                type="button"
+                                className={`pcb-topbtn${tool === btn.id ? ' is-active' : ''}`}
+                                onClick={() => setTool(btn.id)}
+                                title={btn.label}
+                            >
+                                <Icon size={14} />
+                            </button>
+                        );
+                    })}
                 </div>
-                <div className="pcb-header-right">
-                    <button
-                        type="button"
-                        className="pcb-nav-btn"
-                        disabled={!undoMgrRef.current.canUndo()}
-                        onClick={handleUndo}
-                        title="Undo (Ctrl+Z)"
-                    >
-                        <RotateCcw size={14} /> Undo
+                <div className="pcb-sep" />
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    disabled={!undoMgrRef.current.canUndo()}
+                    onClick={handleUndo}
+                    title="Undo (Ctrl+Z)"
+                >
+                    <RotateCcw size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    disabled={!undoMgrRef.current.canRedo()}
+                    onClick={handleRedo}
+                    title="Redo (Ctrl+Shift+Z)"
+                >
+                    <RotateCw size={14} />
+                </button>
+                <div className="pcb-sep" />
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    onClick={() => setShowBoardPreview(true)}
+                    title="Preview board appearance"
+                >
+                    <CircuitBoard size={14} /> Preview
+                </button>
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    onClick={handleRunDRC}
+                    title="Run design rule check"
+                >
+                    <AlertTriangle size={14} /> DRC
+                </button>
+                <div className="pcb-export-menu">
+                    <button type="button" className="pcb-topbtn" title="Export options">
+                        <Download size={14} /> Export
                     </button>
-                    <button
-                        type="button"
-                        className="pcb-nav-btn"
-                        disabled={!undoMgrRef.current.canRedo()}
-                        onClick={handleRedo}
-                        title="Redo (Ctrl+Shift+Z)"
-                    >
-                        <RotateCw size={14} /> Redo
-                    </button>
-                    <button
-                        type="button"
-                        className="pcb-nav-btn"
-                        onClick={() => setShowBoardPreview(true)}
-                        title="Preview board appearance"
-                    >
-                        <CircuitBoard size={14} /> Preview
-                    </button>
-                    <button
-                        type="button"
-                        className="pcb-nav-btn"
-                        onClick={handleRunDRC}
-                        title="Run design rule check"
-                    >
-                        <AlertTriangle size={14} /> DRC
-                    </button>
-                    <div className="pcb-export-menu">
-                        <button type="button" className="pcb-nav-btn" title="Export options">
-                            <Download size={14} /> Export
+                    <div className="pcb-dropdown">
+                        <button type="button" onClick={handleExportZip} disabled={exportBusy}>
+                            <FileCode2 size={13} /> Gerber ZIP {exportBusy ? '...' : ''}
                         </button>
-                        <div className="pcb-dropdown">
-                            <button type="button" onClick={handleExportZip} disabled={exportBusy}>
-                                Gerber ZIP {exportBusy ? '...' : ''}
-                            </button>
-                            <button type="button" onClick={handleExportKicad}>
-                                KiCad .kicad_pcb
-                            </button>
-                            <button type="button" onClick={handleExportBom}>
-                                BOM (CSV)
-                            </button>
-                            <button type="button" onClick={handleExportPickAndPlace}>
-                                Pick & Place (CSV)
-                            </button>
-                            <button type="button" onClick={handleExportIpcD356}>
-                                IPC-D-356 Netlist
-                            </button>
-                        </div>
+                        <button type="button" onClick={handleExportKicad}>
+                            <FileJson size={13} /> KiCad .kicad_pcb
+                        </button>
+                        <button type="button" onClick={handleExportBom}>
+                            <List size={13} /> BOM (CSV)
+                        </button>
+                        <button type="button" onClick={handleExportPickAndPlace}>
+                            <Package size={13} /> Pick &amp; Place (CSV)
+                        </button>
+                        <button type="button" onClick={handleExportIpcD356}>
+                            <FileText size={13} /> IPC-D-356 Netlist
+                        </button>
                     </div>
-                    <button
-                        type="button"
-                        className="pcb-nav-btn"
-                        onClick={handleAutoRoute}
-                        title="Auto-route unconnected nets"
-                    >
-                        <Zap size={14} /> Route
-                    </button>
                 </div>
-            </nav>
+                <div className="pcb-sep" />
+                <button
+                    type="button"
+                    className="pcb-topbtn"
+                    onClick={handleAutoRoute}
+                    title="Auto-route unconnected nets"
+                >
+                    <Zap size={14} /> Route
+                </button>
+            </div>
 
             <div className="pcb-workspace">
                 <aside className="pcb-sidebar">
-                    <h2 className="pcb-sidebar-title">Copper Layers</h2>
+                    <h2>Copper Layers</h2>
                     <div className="pcb-layer-chips">
                         {copperStack.map((ly) => (
                             <button
