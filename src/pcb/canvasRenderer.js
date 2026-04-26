@@ -20,7 +20,7 @@ export const PCB_LAYER_COLORS = {
   'B.Cu':   '#a855f7',
 };
 
-/* ─── Helpers ���── */
+/* ─── Helpers ─── */
 function rotLocal(x, y, deg) {
   const r = ((Number(deg) || 0) * Math.PI) / 180;
   const c = Math.cos(r); const s = Math.sin(r);
@@ -89,8 +89,12 @@ export function renderPcbCanvas(ctx, params) {
     dpr = window.devicePixelRatio || 1,
   } = params;
 
-  const W = Number(doc.meta?.boardWmm) || 80;
-  const H = Number(doc.meta?.boardHmm) || 50;
+  if (!doc?.meta || !viewport || !(viewport.zoom > 0) || canvasWidth <= 0 || canvasHeight <= 0) {
+    return;
+  }
+
+  const W = Number(doc.meta.boardWmm) || 80;
+  const H = Number(doc.meta.boardHmm) || 50;
   const copperStack = activeCopperLayerIds(doc);
   const layerDrawOrder = [...copperStack].reverse();
   const inactiveCopperOpacity = boardPreview.brightInactiveLayers ? 0.9 : 0.4;

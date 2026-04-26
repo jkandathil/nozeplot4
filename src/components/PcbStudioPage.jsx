@@ -336,6 +336,8 @@ function PcbStudioPage({ onBackToSchematic }) {
 
     const [pcbViewport, setPcbViewport] = useState({ zoom: 1, panX: 0, panY: 0 });
     const [pcbViewDrag, setPcbViewDrag] = useState(false);
+    const pcbViewportRef = useRef(pcbViewport);
+    pcbViewportRef.current = pcbViewport;
 
     useEffect(() => {
         setPcbViewport((vp) => {
@@ -379,10 +381,11 @@ function PcbStudioPage({ onBackToSchematic }) {
             const canvas = canvasRef.current;
             const rect = canvas.getBoundingClientRect();
             const dpr = window.devicePixelRatio || 1;
+            const vp = pcbViewportRef.current;
             const [cx, cy] = canvasToBoard(
                 e.clientX - rect.left,
                 e.clientY - rect.top,
-                pcbViewport,
+                vp,
                 canvas.width / dpr,
                 canvas.height / dpr,
                 W,
@@ -408,7 +411,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         };
         wrap.addEventListener('wheel', onWheel, { passive: false });
         return () => wrap.removeEventListener('wheel', onWheel);
-    }, [W, H, pcbViewport]);
+    }, [W, H]);
 
     useEffect(() => {
         if (!pcbViewDrag) return;
