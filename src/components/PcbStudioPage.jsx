@@ -140,6 +140,39 @@ function footprintBBox(pl) {
     return { minX, maxX, minY, maxY };
 }
 
+/** Net name from a pad under the pointer (schematic → PCB pad net table). */
+function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12) {
+    for (const pl of doc.placements || []) {
+        const fp = getFootprint(pl.footprintId);
+        if (!fp?.pads) continue;
+        const nets = pl.padNets || {};
+        for (const pad of fp.pads) {
+            const [px, py] = padWorld(pl, pad);
+            const hw = pad.w / 2 + padTolMm;
+            const hh = pad.h / 2 + padTolMm;
+            if (mx >= px - hw && mx <= px + hw && my >= py - hh && my <= py + hh) {
+                const n = nets[pad.num] || nets[pad.id];
+                if (n && String(n) !== '0') return String(n);
+            }
+        }
+    }
+    return '';
+}
+
+/** Continue the same net when starting a new segment on an existing track end. */
+function findTrackEndpointNet(doc, mx, my, tolMm = 0.45) {
+    for (const tr of doc.tracks || []) {
+        const pts = tr.points || [];
+        if (pts.length < 1) continue;
+        const net = tr.net && String(tr.net);
+        if (!net) continue;
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        if (Math.hypot(mx - a[0], my - a[1]) <= tolMm || Math.hypot(mx - b[0], my - b[1]) <= tolMm) return net;
+    }
+    return '';
+}
+
 function PcbStudioPage({ onBackToSchematic }) {
     const [doc, setDoc] = useState(() => emptyPcbDoc());
     const [tool, setTool] = useState('select');
@@ -187,6 +220,8 @@ function PcbStudioPage({ onBackToSchematic }) {
     /** Refs for fast-changing state used in render loop (avoids effect restarts) */
     const boardCursorMmRef = useRef(null);
     const renderDirtyRef = useRef(true);
+    /** Net carried through interactive routing (from pad or track end); cleared on Esc / new route start. */
+    const routeNetRef = useRef('');
 
     const snap = useCallback(
         (v) => snapBoard(v, doc.meta?.gridMm ?? 0.5, doc.meta?.snapToGrid !== false),
@@ -637,7 +672,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             id: newId('tr'),
             layer: activeLayer,
             widthMm: doc.meta?.defaultTrackMm || 0.35,
-            net: '',
+            net: routeNetRef.current || '',
             points: routeDraft,
         };
         setDoc((d) => ({ ...d, tracks: [...(d.tracks || []), newTrack] }));
@@ -672,11 +707,12 @@ function PcbStudioPage({ onBackToSchematic }) {
         // If routing, commit current segment up to the via point, add via, start new draft on other layer
         if (routeDraft && routeDraft.length >= 1) {
             const draftWithVia = [...routeDraft, pt];
+            const net = routeNetRef.current || '';
             const newTrack = {
                 id: newId('tr'),
                 layer: activeLayer,
                 widthMm: doc.meta?.defaultTrackMm || 0.35,
-                net: '',
+                net,
                 points: draftWithVia,
             };
             const newVia = {
@@ -685,7 +721,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                 y: pt[1],
                 drillMm: doc.meta?.defaultViaDrillMm || 0.4,
                 diamMm: doc.meta?.defaultViaDiamMm || 0.8,
-                net: '',
+                net,
             };
             setDoc((d) => ({
                 ...d,
@@ -695,13 +731,14 @@ function PcbStudioPage({ onBackToSchematic }) {
             setRouteDraft([pt]); // start new draft from via point on new layer
         } else {
             // Not routing — just add a standalone via
+            const net = routeNetRef.current || '';
             const newVia = {
                 id: newId('via'),
                 x: pt[0],
                 y: pt[1],
                 drillMm: doc.meta?.defaultViaDrillMm || 0.4,
                 diamMm: doc.meta?.defaultViaDiamMm || 0.8,
-                net: '',
+                net,
             };
             setDoc((d) => ({ ...d, vias: [...(d.vias || []), newVia] }));
         }
@@ -718,7 +755,11 @@ function PcbStudioPage({ onBackToSchematic }) {
         const onKeyDown = (e) => {
             /* ── Escape: cancel draft or clear selection ── */
             if (e.key === 'Escape') {
-                if (routeDraft) { setRouteDraft(null); return; }
+                if (routeDraft) {
+                    routeNetRef.current = '';
+                    setRouteDraft(null);
+                    return;
+                }
                 if (polygonDraft) { setPolygonDraft(null); return; }
                 if (measureStart || measureEnd) { setMeasureStart(null); setMeasureEnd(null); return; }
                 if (selected.length > 0) { setSelected([]); return; }
@@ -861,35 +902,36 @@ function PcbStudioPage({ onBackToSchematic }) {
 
     /* ── Hit testing helper ── */
     const pickAtPoint = useCallback((mx, my) => {
-        if (selectionFilter.placement) {
-            for (const pl of (doc.placements || []).slice().reverse()) {
-                const bb = footprintBBox(pl);
-                if (mx >= bb.minX && mx <= bb.maxX && my >= bb.minY && my <= bb.maxY) {
-                    return { kind: 'placement', id: pl.id };
-                }
+        // Prefer fine geometry (vias, traces) over large footprint boxes so traces under parts are selectable.
+        if (selectionFilter.via) {
+            for (const v of (doc.vias || []).slice().reverse()) {
+                const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
+                if (Math.hypot(mx - v.x, my - v.y) <= diam / 2 + 0.12) return { kind: 'via', id: v.id };
             }
         }
         if (selectionFilter.track) {
             for (const tr of (doc.tracks || []).slice().reverse()) {
                 if (!isCopperLayerVisible(doc, tr.layer)) continue;
-                const w = (tr.widthMm || 0.35) / 2 + 0.1;
+                const halfW = Math.max((tr.widthMm || 0.35) / 2 + 0.12, 0.22);
                 const pts = tr.points || [];
                 for (let i = 0; i < pts.length - 1; i++) {
                     const dist = pointToSegmentDistance([mx, my], pts[i], pts[i + 1]);
-                    if (dist <= w) return { kind: 'track', id: tr.id };
+                    if (dist <= halfW) return { kind: 'track', id: tr.id };
                 }
-            }
-        }
-        if (selectionFilter.via) {
-            for (const v of (doc.vias || []).slice().reverse()) {
-                const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
-                if (Math.hypot(mx - v.x, my - v.y) <= diam / 2 + 0.1) return { kind: 'via', id: v.id };
             }
         }
         if (selectionFilter.polygon) {
             for (const pg of (doc.polygons || []).slice().reverse()) {
                 if (!isCopperLayerVisible(doc, pg.layer)) continue;
                 if (pointInPolygon([mx, my], pg.points || [])) return { kind: 'polygon', id: pg.id };
+            }
+        }
+        if (selectionFilter.placement) {
+            for (const pl of (doc.placements || []).slice().reverse()) {
+                const bb = footprintBBox(pl);
+                if (mx >= bb.minX && mx <= bb.maxX && my >= bb.minY && my <= bb.maxY) {
+                    return { kind: 'placement', id: pl.id };
+                }
             }
         }
         return null;
@@ -954,10 +996,9 @@ function PcbStudioPage({ onBackToSchematic }) {
         if (tool === 'route') {
             const spt = [snap(mx), snap(my)];
             if (!routeDraft) {
-                // Start new route
+                routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackEndpointNet(doc, mx, my) || '';
                 setRouteDraft([spt]);
             } else {
-                // Add point to existing route
                 setRouteDraft([...routeDraft, spt]);
             }
             return;
@@ -1140,9 +1181,23 @@ function PcbStudioPage({ onBackToSchematic }) {
         : tool === 'place' ? 'pcb-cursor-cross'
         : 'pcb-cursor-select';
 
-    const inspectorTarget = selected.length === 1 && selected[0].kind === 'placement'
-        ? { kind: 'placement', p: doc.placements?.find((x) => x.id === selected[0].id) }
-        : null;
+    const inspectorTarget = useMemo(() => {
+        if (selected.length !== 1) return null;
+        const s = selected[0];
+        if (s.kind === 'placement') {
+            const p = doc.placements?.find((x) => x.id === s.id);
+            return p ? { kind: 'placement', p } : null;
+        }
+        if (s.kind === 'track') {
+            const t = doc.tracks?.find((x) => x.id === s.id);
+            return t ? { kind: 'track', t } : null;
+        }
+        if (s.kind === 'via') {
+            const v = doc.vias?.find((x) => x.id === s.id);
+            return v ? { kind: 'via', v } : null;
+        }
+        return null;
+    }, [selected, doc.placements, doc.tracks, doc.vias]);
 
     const toolButtons = [
         { id: 'select', icon: MousePointer2, label: 'Select' },
@@ -1263,22 +1318,33 @@ function PcbStudioPage({ onBackToSchematic }) {
                 <aside className="pcb-sidebar">
                     <h2>Copper Layers</h2>
                     <p className="pcb-dr-hint">
-                        <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points.
+                        <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points. <strong>Nets:</strong> start on a pad (footprint pad nets from the schematic flow) or on an <strong>existing track end</strong> to inherit that net; otherwise the trace has no net until you type one in the sidebar after selecting the track.
                         <strong> Change layer mid-route:</strong> move the cursor to the via location and press <kbd>V</kbd> or top bar <strong>Via layer</strong> — the current polyline is committed to that point, a via is added, the <strong>next</strong> copper layer in the stack is selected (wraps F→…→B), and routing continues from the via.
-                        <strong> Shift+V</strong> selects the <strong>previous</strong> layer instead. Finish with <kbd>Enter</kbd>, double-click, or right-click. Avoid switching layer chips mid-polyline without a via (the whole run uses one layer until you finish or use Via layer).
+                        <strong> Shift+V</strong> selects the <strong>previous</strong> layer instead. Finish with <kbd>Enter</kbd>, double-click, or right-click. Layer chips are disabled while a route is in progress — use <strong>Via layer</strong> only.
                     </p>
                     <div className="pcb-layer-chips">
-                        {copperStack.map((ly) => (
-                            <button
-                                key={ly}
-                                type="button"
-                                className={`pcb-layer-chip${activeLayer === ly ? ' is-active' : ''}`}
-                                onClick={() => setActiveLayer(ly)}
-                                title="Active layer for new tracks (use Via layer / V mid-route to hop layers with a via)"
-                            >
-                                {ly.replace('.Cu', '')}
-                            </button>
-                        ))}
+                        {copperStack.map((ly) => {
+                            const routing = !!(routeDraft && routeDraft.length);
+                            return (
+                                <button
+                                    key={ly}
+                                    type="button"
+                                    className={`pcb-layer-chip${activeLayer === ly ? ' is-active' : ''}`}
+                                    disabled={routing}
+                                    onClick={() => {
+                                        if (routing) return;
+                                        setActiveLayer(ly);
+                                    }}
+                                    title={
+                                        routing
+                                            ? 'While routing, use Via layer (V) to change copper — places a via and switches layer'
+                                            : 'Active layer for new tracks (use Via layer / V mid-route to hop layers with a via)'
+                                    }
+                                >
+                                    {ly.replace('.Cu', '')}
+                                </button>
+                            );
+                        })}
                     </div>
                     <div className="pcb-layer-visibility" role="group" aria-label="Copper layer visibility">
                         <span className="pcb-layer-visibility-label">Show on canvas</span>
@@ -1567,6 +1633,109 @@ function PcbStudioPage({ onBackToSchematic }) {
                                         setDoc((d) => ({
                                             ...d,
                                             placements: d.placements?.map((p) => (p.id === id ? { ...p, rot } : p)),
+                                        }));
+                                    }}
+                                />
+                            </label>
+                        </div>
+                    ) : null}
+                    {inspectorTarget?.kind === 'track' ? (
+                        <div className="pcb-sidebar-props">
+                            <h3 className="pcb-subh">Track</h3>
+                            <p className="pcb-sel-meta">
+                                <span className="pcb-sel-fp">{inspectorTarget.t.layer}</span>
+                            </p>
+                            <label className="pcb-field-col">
+                                Width (mm)
+                                <input
+                                    type="number"
+                                    min={0.08}
+                                    max={3}
+                                    step={0.05}
+                                    value={inspectorTarget.t.widthMm ?? doc.meta?.defaultTrackMm ?? 0.35}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.t.id;
+                                        const w = Math.min(3, Math.max(0.08, v));
+                                        setDoc((d) => ({
+                                            ...d,
+                                            tracks: d.tracks?.map((tr) => (tr.id === id ? { ...tr, widthMm: w } : tr)) || [],
+                                        }));
+                                    }}
+                                />
+                            </label>
+                            <label className="pcb-field-col">
+                                Net (from schematic pads / continued from track ends)
+                                <input
+                                    type="text"
+                                    value={inspectorTarget.t.net ?? ''}
+                                    onChange={(e) => {
+                                        const id = inspectorTarget.t.id;
+                                        const net = e.target.value;
+                                        setDoc((d) => ({
+                                            ...d,
+                                            tracks: d.tracks?.map((tr) => (tr.id === id ? { ...tr, net } : tr)) || [],
+                                        }));
+                                    }}
+                                />
+                            </label>
+                        </div>
+                    ) : null}
+                    {inspectorTarget?.kind === 'via' ? (
+                        <div className="pcb-sidebar-props">
+                            <h3 className="pcb-subh">Via</h3>
+                            <label className="pcb-field-col">
+                                Outer diameter (mm)
+                                <input
+                                    type="number"
+                                    min={0.2}
+                                    max={4}
+                                    step={0.05}
+                                    value={Number(inspectorTarget.v.diamMm) || doc.meta?.defaultViaDiamMm || 0.8}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.v.id;
+                                        const diamMm = Math.min(4, Math.max(0.2, v));
+                                        setDoc((d) => ({
+                                            ...d,
+                                            vias: d.vias?.map((vi) => (vi.id === id ? { ...vi, diamMm } : vi)) || [],
+                                        }));
+                                    }}
+                                />
+                            </label>
+                            <label className="pcb-field-col">
+                                Drill (mm)
+                                <input
+                                    type="number"
+                                    min={0.1}
+                                    max={3}
+                                    step={0.05}
+                                    value={Number(inspectorTarget.v.drillMm) || doc.meta?.defaultViaDrillMm || 0.4}
+                                    onChange={(e) => {
+                                        const v = Number(e.target.value);
+                                        if (!Number.isFinite(v)) return;
+                                        const id = inspectorTarget.v.id;
+                                        const drillMm = Math.min(3, Math.max(0.1, v));
+                                        setDoc((d) => ({
+                                            ...d,
+                                            vias: d.vias?.map((vi) => (vi.id === id ? { ...vi, drillMm } : vi)) || [],
+                                        }));
+                                    }}
+                                />
+                            </label>
+                            <label className="pcb-field-col">
+                                Net
+                                <input
+                                    type="text"
+                                    value={inspectorTarget.v.net ?? ''}
+                                    onChange={(e) => {
+                                        const id = inspectorTarget.v.id;
+                                        const net = e.target.value;
+                                        setDoc((d) => ({
+                                            ...d,
+                                            vias: d.vias?.map((vi) => (vi.id === id ? { ...vi, net } : vi)) || [],
                                         }));
                                     }}
                                 />

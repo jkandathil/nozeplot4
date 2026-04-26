@@ -581,6 +581,12 @@
     color: #f5e9ff;
 }
 
+.pcb-layer-chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .pcb-layer-visibility {
     margin: 0 0 12px;
     padding-bottom: 10px;

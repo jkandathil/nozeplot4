@@ -137,7 +137,7 @@ export function renderPcbCanvas(ctx, params) {
     ctx.save();
     ctx.globalAlpha = opacity;
 
-    // Polygons / zones
+    // Polygons / zones (stay dimmer on inactive layers)
     for (const poly of (doc.polygons || [])) {
       if (poly.layer !== ly) continue;
       const pts = poly.points || [];
@@ -157,7 +157,12 @@ export function renderPcbCanvas(ctx, params) {
       ctx.stroke();
     }
 
-    // Tracks
+    ctx.restore();
+
+    // Tracks: keep layer hue readable even when layer is not active (F.Cu vs B.Cu etc.)
+    const trackAlpha = isActive ? 1 : Math.min(1, inactiveCopperOpacity + 0.42);
+    ctx.save();
+    ctx.globalAlpha = trackAlpha;
     for (const tr of (doc.tracks || [])) {
       if (tr.layer !== ly) continue;
       const pts = tr.points || [];
