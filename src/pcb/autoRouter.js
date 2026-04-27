@@ -29,7 +29,7 @@ function padWorld(pl, pad) {
  * Build a 2D obstacle grid for a given copper layer.
  * Each cell is true (blocked) or false (free).
  */
-function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, trackHalfWidth = 0) {
+function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, trackHalfWidth = 0, skipNet = null) {
   const cols = Math.ceil(boardW / gridRes);
   const rows = Math.ceil(boardH / gridRes);
   const grid = new Uint8Array(cols * rows); // 0=free, 1=blocked
@@ -89,10 +89,14 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, tra
   // Block pads on this layer.
   // The blocked radius must include the track half-width so the A* center line
   // stays far enough that the trace EDGE still respects clearance from the pad.
+  // Pads belonging to `skipNet` are left FREE so A* can reach them as endpoints.
   for (const pl of (doc.placements || [])) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads) continue;
+    const plNets = pl.padNets || {};
     for (const pad of fp.pads) {
+      const padNet = plNets[pad.num] || plNets[pad.id];
+      if (skipNet != null && padNet === skipNet) continue; // same-net pad — leave free
       const [px, py] = padWorld(pl, pad);
       const r = Math.max(pad.w, pad.h) / 2 + clearanceMm + trackHalfWidth;
       blockRadius(px, py, r);
@@ -232,9 +236,11 @@ function aStarPath(obstacleGrid, cols, rows, gridRes, startMm, endMm, maxIterati
       const ny = cur.y + dy;
       if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
 
-      // Allow destination cell even if blocked (it's a pad)
+      // Blocked cell — skip. Same-net pads are already excluded from the
+      // obstacle grid via skipNet, so we don't need a destination exception
+      // (which previously allowed paths to illegally enter blocked zones).
       const ci = cellKey(nx, ny);
-      if (obstacleGrid[ci] && !(nx === ex && ny === ey)) continue;
+      if (obstacleGrid[ci]) continue;
 
       // Cost: 1 per step + turn penalty if direction changed
       let moveCost = 1;
@@ -340,34 +346,12 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
 
     // Build obstacle grid (updated with previously routed tracks).
     // Pass trackHalfWidth so pad blocking accounts for trace width.
+    // Pass `net` as skipNet so same-net pads are never blocked — A* can freely
+    // navigate to them without any unblock/reblock overlap issues.
     const trackHalfW = trackWidth / 2;
     const { grid, cols, rows } = buildObstacleGrid(
-      workingDoc, layer, gridResolution, clearanceMm, boardW, boardH, trackHalfW
+      workingDoc, layer, gridResolution, clearanceMm, boardW, boardH, trackHalfW, net
     );
-
-    // Unblock the full pad area for pads on this net so A* can reach them.
-    // Use the SAME radius as blocking (pad + clearance + trackHalfW) to fully
-    // clear the zone, letting the path approach and land on the pad center.
-    for (const pl of workingDoc.placements || []) {
-      const fp = getFootprint(pl.footprintId);
-      if (!fp?.pads) continue;
-      const nets = pl.padNets || {};
-      for (const pad of fp.pads) {
-        const padNet = nets[pad.num] || nets[pad.id];
-        if (padNet !== net) continue;
-        const [px, py] = padWorld(pl, pad);
-        const r = Math.max(pad.w, pad.h) / 2 + clearanceMm + trackHalfW;
-        const gx0 = Math.max(0, Math.floor((px - r) / gridResolution));
-        const gy0 = Math.max(0, Math.floor((py - r) / gridResolution));
-        const gx1 = Math.min(cols - 1, Math.ceil((px + r) / gridResolution));
-        const gy1 = Math.min(rows - 1, Math.ceil((py + r) / gridResolution));
-        for (let gy = gy0; gy <= gy1; gy++) {
-          for (let gx = gx0; gx <= gx1; gx++) {
-            grid[gy * cols + gx] = 0;
-          }
-        }
-      }
-    }
 
     // Minimum spanning tree ordering (Prim's algorithm for optimal connection order)
     const connected = [0];
@@ -435,11 +419,12 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
           }
         }
       } else {
-        // Fallback: try another copper layer, then via insertion if needed
+        // Fallback: try another copper layer with via insertion.
+        // NEVER use blind L-shaped routing — it ignores obstacles and causes shorts.
         const altLayer = stack.find((ly) => ly !== layer) || layer;
         if (altLayer !== layer && stack.length > 1) {
           const { grid: altGrid, cols: altCols, rows: altRows } = buildObstacleGrid(
-            workingDoc, altLayer, gridResolution, clearanceMm, boardW, boardH, trackHalfW
+            workingDoc, altLayer, gridResolution, clearanceMm, boardW, boardH, trackHalfW, net
           );
           const altPath = aStarPath(altGrid, altCols, altRows, gridResolution, start, end, maxIterationsPerNet);
           if (altPath && altPath.length >= 2) {
@@ -462,28 +447,11 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
             newTracks.push(track);
             workingDoc.tracks.push(track);
             workingDoc.vias.push(...newVias.slice(-2));
-          } else {
-            // Last resort: simple Manhattan fallback
-            const corner = [end[0], start[1]];
-            newTracks.push({
-              id: newId('tr'),
-              layer,
-              widthMm: trackWidth,
-              net,
-              points: [[start[0], start[1]], corner, [end[0], end[1]]],
-            });
           }
-        } else {
-          // Single layer fallback
-          const corner = [end[0], start[1]];
-          newTracks.push({
-            id: newId('tr'),
-            layer,
-            widthMm: trackWidth,
-            net,
-            points: [[start[0], start[1]], corner, [end[0], end[1]]],
-          });
+          // If alt-layer A* also fails, skip this connection (unroutable with current placement).
+          // Do NOT create blind L-shaped paths — they ignore obstacles and cause shorts.
         }
+        // Single-layer board or alt-layer also failed: skip (unroutable).
       }
     }
   }
