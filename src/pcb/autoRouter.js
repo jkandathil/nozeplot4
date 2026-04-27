@@ -153,10 +153,16 @@ class MinHeap {
 }
 
 /**
- * A* pathfinding on the obstacle grid.
- * Returns array of [boardX, boardY] waypoints, or null if no path found.
+ * A* pathfinding — Manhattan-only (4-directional) with turn penalty.
+ * Produces clean orthogonal traces like KiCad/Eagle auto-routers.
+ *
+ * State key encodes (x, y, arrivalDir) so the turn penalty is properly
+ * tracked per arrival direction — arriving at the same cell from a different
+ * direction has a separate gScore.
+ *
+ * @returns {number[][] | null} Array of [boardX, boardY] waypoints, or null.
  */
-function aStarPath(obstacleGrid, cols, rows, gridRes, startMm, endMm, maxIterations = 50000) {
+function aStarPath(obstacleGrid, cols, rows, gridRes, startMm, endMm, maxIterations = 80000) {
   const sx = Math.round(startMm[0] / gridRes);
   const sy = Math.round(startMm[1] / gridRes);
   const ex = Math.round(endMm[0] / gridRes);
@@ -165,58 +171,83 @@ function aStarPath(obstacleGrid, cols, rows, gridRes, startMm, endMm, maxIterati
   if (sx < 0 || sx >= cols || sy < 0 || sy >= rows) return null;
   if (ex < 0 || ex >= cols || ey < 0 || ey >= rows) return null;
 
-  // Allow start/end cells even if they're "blocked" (they're pad locations)
-  const key = (x, y) => y * cols + x;
+  // 4-directional: right, left, down, up (Manhattan only — no diagonals)
+  const dirs = [
+    [1, 0],   // 0 = right
+    [-1, 0],  // 1 = left
+    [0, 1],   // 2 = down
+    [0, -1],  // 3 = up
+  ];
+
+  // Turn penalty: heavily discourages unnecessary bends so traces stay straight
+  const TURN_PENALTY = 3.0;
+
+  const heuristic = (x, y) => Math.abs(x - ex) + Math.abs(y - ey);
+
+  // State key: (x, y, dir) — dir ∈ {0,1,2,3,4}; 4 = start (no arrival direction)
+  const stateKey = (x, y, dir) => (y * cols + x) * 5 + dir;
+  const cellKey = (x, y) => y * cols + x;
+
   const gScore = new Map();
-  const cameFrom = new Map();
+  const cameFrom = new Map(); // stateKey → parent stateKey
   const open = new MinHeap();
 
-  const heuristic = (x, y) => Math.abs(x - ex) + Math.abs(y - ey); // Manhattan
-  const startKey = key(sx, sy);
-  gScore.set(startKey, 0);
-  open.push({ x: sx, y: sy, f: heuristic(sx, sy), g: 0 });
-
-  // 8-directional movement (orthogonal + diagonal)
-  const dirs = [
-    [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
-    [1, 1, 1.414], [-1, 1, 1.414], [1, -1, 1.414], [-1, -1, 1.414],
-  ];
+  // Push start state with all 4 possible "arrival" directions (no penalty for first move)
+  const startDir = 4; // sentinel: "no direction yet"
+  const sk = stateKey(sx, sy, startDir);
+  gScore.set(sk, 0);
+  open.push({ x: sx, y: sy, dir: startDir, f: heuristic(sx, sy), g: 0 });
 
   let iterations = 0;
   while (open.size > 0 && iterations < maxIterations) {
     iterations++;
     const cur = open.pop();
-    const ck = key(cur.x, cur.y);
+    const ck = stateKey(cur.x, cur.y, cur.dir);
+
+    // Check if stale (gScore was updated after this entry was pushed)
+    const bestG = gScore.get(ck);
+    if (bestG !== undefined && cur.g > bestG) continue;
 
     if (cur.x === ex && cur.y === ey) {
-      // Reconstruct path
-      const path = [];
+      // Reconstruct path from state keys
+      const rawPath = [];
       let k = ck;
       while (k !== undefined) {
-        const x = k % cols;
-        const y = Math.floor(k / cols);
-        path.push([(x + 0.5) * gridRes, (y + 0.5) * gridRes]);
+        const dir = k % 5;
+        const cellIdx = (k - dir) / 5;
+        const x = cellIdx % cols;
+        const y = Math.floor(cellIdx / cols);
+        rawPath.push([x * gridRes, y * gridRes]);
         k = cameFrom.get(k);
       }
-      path.reverse();
-      return simplifyPath(path);
+      rawPath.reverse();
+      return simplifyManhattanPath(rawPath);
     }
 
-    for (const [dx, dy, cost] of dirs) {
+    for (let d = 0; d < 4; d++) {
+      const [dx, dy] = dirs[d];
       const nx = cur.x + dx;
       const ny = cur.y + dy;
       if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
-      const nk = key(nx, ny);
-      // Allow destination cell even if blocked
-      if (obstacleGrid[nk] && !(nx === ex && ny === ey)) continue;
 
-      const tentG = cur.g + cost;
+      // Allow destination cell even if blocked (it's a pad)
+      const ci = cellKey(nx, ny);
+      if (obstacleGrid[ci] && !(nx === ex && ny === ey)) continue;
+
+      // Cost: 1 per step + turn penalty if direction changed
+      let moveCost = 1;
+      if (cur.dir !== 4 && cur.dir !== d) {
+        moveCost += TURN_PENALTY;
+      }
+      const tentG = cur.g + moveCost;
+
+      const nk = stateKey(nx, ny, d);
       const prevG = gScore.get(nk);
       if (prevG !== undefined && tentG >= prevG) continue;
 
       gScore.set(nk, tentG);
       cameFrom.set(nk, ck);
-      open.push({ x: nx, y: ny, f: tentG + heuristic(nx, ny), g: tentG });
+      open.push({ x: nx, y: ny, dir: d, f: tentG + heuristic(nx, ny), g: tentG });
     }
   }
 
@@ -224,16 +255,17 @@ function aStarPath(obstacleGrid, cols, rows, gridRes, startMm, endMm, maxIterati
 }
 
 /**
- * Simplify path by removing collinear points (Douglas-Peucker lite).
+ * Simplify a Manhattan path: remove collinear interior points so only
+ * start, corners, and end remain. Then snap to grid-aligned coordinates.
  */
-function simplifyPath(path) {
+function simplifyManhattanPath(path) {
   if (path.length <= 2) return path;
   const result = [path[0]];
   for (let i = 1; i < path.length - 1; i++) {
     const [px, py] = path[i - 1];
     const [cx, cy] = path[i];
     const [nx, ny] = path[i + 1];
-    // Check if direction changes
+    // Keep point only if direction changes (it's a corner)
     const dx1 = Math.sign(cx - px);
     const dy1 = Math.sign(cy - py);
     const dx2 = Math.sign(nx - cx);
