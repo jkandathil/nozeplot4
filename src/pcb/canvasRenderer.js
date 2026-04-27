@@ -97,6 +97,12 @@ function footprintBBox(pl) {
  * Important: with `evenodd`, overlapping cutouts **cancel** where they cross —
  * that looks like tiny copper slivers near pads/traces (not grid-related). Avoid
  * redundant overlapping holes (e.g. courtyard already covers per-pad rects).
+ *
+ * The pour is rasterized offscreen then scaled to mm space: target ~2× screen px/mm
+ * (capped by board size / ~12M pixel budget / 8192 edge). Manhattan carve uses
+ * inflated axis-aligned rects; drawImage is bilinear so NN stair-steps do not read
+ * as hairline copper. Tracks are drawn as one continuous stroke path (not per-segment
+ * rects) so copper reads as a single polyline.
  */
 /** CCW rounded rect in **world mm** (even-odd hole). `rad` capped by half-sides. */
 function addCcwRoundRectAabbHole(ctx, minX, minY, maxX, maxY, rad) {
@@ -123,6 +129,81 @@ function addCcwRoundRectAabbHole(ctx, minX, minY, maxX, maxY, rad) {
   ctx.closePath();
 }
 
+const _MANHATTAN_EPS = 1e-3;
+
+function trackPolylineIsManhattan(tpts) {
+  if (!tpts || tpts.length < 2) return false;
+  for (let i = 1; i < tpts.length; i++) {
+    const ax = tpts[i - 1][0];
+    const ay = tpts[i - 1][1];
+    const bx = tpts[i][0];
+    const by = tpts[i][1];
+    const horiz = Math.abs(by - ay) < _MANHATTAN_EPS;
+    const vert = Math.abs(bx - ax) < _MANHATTAN_EPS;
+    if (!horiz && !vert) return false;
+  }
+  return true;
+}
+
+/** Axis-aligned bounds for one Manhattan segment expanded by `halfW` perpendicular to the segment. */
+function manhattanSegmentBounds(ax, ay, bx, by, halfW) {
+  if (Math.hypot(bx - ax, by - ay) < _MANHATTAN_EPS) return null;
+  if (Math.abs(by - ay) < _MANHATTAN_EPS) {
+    return {
+      minX: Math.min(ax, bx) - halfW,
+      maxX: Math.max(ax, bx) + halfW,
+      minY: ay - halfW,
+      maxY: ay + halfW,
+    };
+  }
+  return {
+    minX: ax - halfW,
+    maxX: ax + halfW,
+    minY: Math.min(ay, by) - halfW,
+    maxY: Math.max(ay, by) + halfW,
+  };
+}
+
+function inflateBounds(b, pad) {
+  return {
+    minX: b.minX - pad,
+    maxX: b.maxX + pad,
+    minY: b.minY - pad,
+    maxY: b.maxY + pad,
+  };
+}
+
+/** Drop consecutive duplicate vertices (prevents zero-length “spur” segments in stroke paths). */
+function dedupeConsecutiveTrackPoints(pts, eps = 1e-3) {
+  if (!pts?.length) return [];
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    const q = out[out.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= eps) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Erase pour under trace+clearance using only axis-aligned rects (no stroke joins).
+ * `overlapMm` closes sub-pixel gaps vs the bitmap grid and vertex seams.
+ */
+function carveManhattanTrackClearanceRects(ox, tpts, halfW, overlapMm) {
+  const pad = Math.max(0, overlapMm);
+  for (let i = 1; i < tpts.length; i++) {
+    const ax = tpts[i - 1][0];
+    const ay = tpts[i - 1][1];
+    const bx = tpts[i][0];
+    const by = tpts[i][1];
+    const raw = manhattanSegmentBounds(ax, ay, bx, by, halfW);
+    if (!raw) continue;
+    const b = pad > 0 ? inflateBounds(raw, pad) : raw;
+    if (b.maxX <= b.minX || b.maxY <= b.minY) continue;
+    ox.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+  }
+}
+
 function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink) {
   const pts = poly.points || [];
   if (pts.length < 3) return;
@@ -146,9 +227,24 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   const boardH = Number(doc.meta?.boardHmm) || 50;
   const trf = ctx.getTransform();
   const pxPerMm = Math.hypot(trf.a, trf.c) || 1;
-  const density = Math.min(10, Math.max(3, pxPerMm));
-  const pw = Math.min(4096, Math.ceil(boardW * density));
-  const ph = Math.min(4096, Math.ceil(boardH * density));
+  // Raster pour at ~2× on-screen px/mm (min 8) so clearance cutouts stay smooth; cap
+  // each axis to MAX_OSC_DIM so huge boards still fit GPU canvas limits.
+  const MAX_OSC_DIM = 8192;
+  /** ~48 MiB RGBA budget so typical boards can use high px/mm without OOM on large panels */
+  const MAX_OSC_PIXELS = 12 * 1024 * 1024;
+  let density = Math.min(
+    96,
+    MAX_OSC_DIM / Math.max(1e-6, boardW),
+    MAX_OSC_DIM / Math.max(1e-6, boardH),
+    Math.max(8, pxPerMm * 2),
+  );
+  let pw = Math.max(1, Math.ceil(boardW * density));
+  let ph = Math.max(1, Math.ceil(boardH * density));
+  if (pw * ph > MAX_OSC_PIXELS) {
+    density *= Math.sqrt(MAX_OSC_PIXELS / (pw * ph));
+    pw = Math.max(1, Math.ceil(boardW * density));
+    ph = Math.max(1, Math.ceil(boardH * density));
+  }
 
   let osc;
   try {
@@ -160,93 +256,123 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   }
   const ox = osc.getContext('2d', { alpha: true });
   ox.setTransform(density, 0, 0, density, 0, 0);
+  // Crisp geometry on the pour bitmap (carve is AA-free); upscale uses bilinear on main ctx.
+  ox.imageSmoothingEnabled = false;
   ox.clearRect(0, 0, boardW, boardH);
 
-  // ── Offscreen: outer (CW) + courtyard (rounded world AABB) + vias (CCW), even-odd
+  // ── Step 1: fill the outer polygon with the layer color (source-over) ──
   ox.beginPath();
   ox.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) ox.lineTo(pts[i][0], pts[i][1]);
   ox.closePath();
+  ox.fillStyle = layerColor.startsWith('#') && layerColor.length >= 7 ? layerColor : '#ef4444';
+  ox.fill();
 
-  const courtyardAABBs = [];
+  // ── Step 2: carve ALL clearances with destination-out (overlap-safe) ──
+  // Using destination-out for everything: overlapping shapes just keep removing
+  // pixels — no even-odd “re-fill” artifacts.
+  ox.globalCompositeOperation = 'destination-out';
+  ox.fillStyle = '#000';
+  ox.strokeStyle = '#000';
+
+  // 2a. Component courtyard cutouts — bounding box around ALL pads + clearance
+  //     for any component that has at least one non-GND pad.
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
 
-    const nonGndPads = fp.pads.filter((pad) => {
+    // Check if component has any non-GND pad
+    const hasNonGnd = fp.pads.some((pad) => {
       const net = nets[pad.num] || nets[pad.id];
       return isNonGndNet(net);
     });
-    if (nonGndPads.length > 0) {
-      let minLx = Infinity, minLy = Infinity, maxLx = -Infinity, maxLy = -Infinity;
-      for (const pad of nonGndPads) {
-        const hw = pad.w / 2;
-        const hh = pad.h / 2;
-        minLx = Math.min(minLx, pad.x - hw);
-        minLy = Math.min(minLy, pad.y - hh);
-        maxLx = Math.max(maxLx, pad.x + hw);
-        maxLy = Math.max(maxLy, pad.y + hh);
-      }
-      const totalClear = clearMm + courtyardExtra;
-      const cxL = (minLx + maxLx) / 2;
-      const cyL = (minLy + maxLy) / 2;
-      const chw = (maxLx - minLx) / 2 + totalClear;
-      const chh = (maxLy - minLy) / 2 + totalClear;
+    if (!hasNonGnd) continue;
 
-      const corners = [
-        [cxL - chw, cyL - chh],
-        [cxL + chw, cyL - chh],
-        [cxL + chw, cyL + chh],
-        [cxL - chw, cyL + chh],
-      ];
-      let minWX = Infinity, maxWX = -Infinity, minWY = Infinity, maxWY = -Infinity;
-      for (const [lx, ly] of corners) {
-        const [wx, wy] = fpLocalToWorld(pl, lx, ly);
-        minWX = Math.min(minWX, wx);
-        maxWX = Math.max(maxWX, wx);
-        minWY = Math.min(minWY, wy);
-        maxWY = Math.max(maxWY, wy);
-      }
-      courtyardAABBs.push({ minX: minWX, maxX: maxWX, minY: minWY, maxY: maxWY });
-      const span = Math.min(maxWX - minWX, maxWY - minWY);
-      const cornerRad = Math.min(0.55, Math.max(0.12, 0.22 * span));
-      addCcwRoundRectAabbHole(ox, minWX, minWY, maxWX, maxWY, cornerRad);
+    // Compute courtyard AABB from ALL pads (not just non-GND) to prevent
+    // copper flowing between any pads of the same component
+    let minLx = Infinity, minLy = Infinity, maxLx = -Infinity, maxLy = -Infinity;
+    for (const pad of fp.pads) {
+      const hw = pad.w / 2;
+      const hh = pad.h / 2;
+      minLx = Math.min(minLx, pad.x - hw);
+      minLy = Math.min(minLy, pad.y - hh);
+      maxLx = Math.max(maxLx, pad.x + hw);
+      maxLy = Math.max(maxLy, pad.y + hh);
+    }
+    const totalClear = clearMm + courtyardExtra;
+
+    // Transform local courtyard corners to world, then take world AABB
+    const corners = [
+      [minLx - totalClear, minLy - totalClear],
+      [maxLx + totalClear, minLy - totalClear],
+      [maxLx + totalClear, maxLy + totalClear],
+      [minLx - totalClear, maxLy + totalClear],
+    ];
+    let minWX = Infinity, maxWX = -Infinity, minWY = Infinity, maxWY = -Infinity;
+    for (const [lx, ly2] of corners) {
+      const [wx, wy] = fpLocalToWorld(pl, lx, ly2);
+      minWX = Math.min(minWX, wx);
+      maxWX = Math.max(maxWX, wx);
+      minWY = Math.min(minWY, wy);
+      maxWY = Math.max(maxWY, wy);
+    }
+    ox.fillRect(minWX, minWY, maxWX - minWX, maxWY - minWY);
+  }
+
+  // 2b. Individual non-GND pad cutouts (handles pads outside any component courtyard,
+  //     e.g. test points, and provides conformal clearance for rotated pads)
+  for (const pl of doc.placements || []) {
+    const fp = getFootprint(pl.footprintId);
+    if (!fp?.pads?.length) continue;
+    const nets = pl.padNets || {};
+    const compRot = Number(pl.rot) || 0;
+    for (const pad of fp.pads) {
+      const net = nets[pad.num] || nets[pad.id];
+      if (!isNonGndNet(net)) continue;
+      const [px, py] = padWorld(pl, pad);
+      const hw = pad.w / 2 + clearMm;
+      const hh = pad.h / 2 + clearMm;
+      // For rotated components, draw a rotated rectangle
+      ox.save();
+      ox.translate(px, py);
+      if (compRot) ox.rotate(compRot * Math.PI / 180);
+      ox.fillRect(-hw, -hh, hw * 2, hh * 2);
+      ox.restore();
     }
   }
 
+  // 2c. Non-GND vias (circular clearance)
   for (const v of doc.vias || []) {
     if (!isNonGndNet(v.net)) continue;
-    const insideCourtyard = courtyardAABBs.some(
-      (bb) => v.x >= bb.minX && v.x <= bb.maxX && v.y >= bb.minY && v.y <= bb.maxY,
-    );
-    if (insideCourtyard) continue;
     const ro = (Number(v.diamMm) || 0.8) / 2 + clearMm;
-    ox.moveTo(v.x + ro, v.y);
-    ox.arc(v.x, v.y, ro, 0, Math.PI * 2, true);
+    ox.beginPath();
+    ox.arc(v.x, v.y, ro, 0, Math.PI * 2);
+    ox.fill();
   }
 
-  ox.fillStyle = layerColor.startsWith('#') && layerColor.length >= 7 ? layerColor : '#ef4444';
-  ox.fill('evenodd');
-
-  // Carve signal tracks with round joins (fixes outer-corner clearance vs even-odd quads)
-  ox.globalCompositeOperation = 'destination-out';
-  ox.lineCap = 'round';
-  ox.lineJoin = 'round';
-  ox.strokeStyle = '#000';
+  // 2d. Non-GND tracks — Manhattan: axis-aligned rects; diagonal: thick stroke
   for (const tr of doc.tracks || []) {
     if (tr.layer !== ly) continue;
     if (!isNonGndNet(tr.net)) continue;
-    const tpts = tr.points || [];
+    const tpts = dedupeConsecutiveTrackPoints(tr.points || []);
     if (tpts.length < 2) continue;
     const tw = Number(tr.widthMm) || 0.35;
     const halfW = tw / 2 + clearMm;
-    ox.lineWidth = 2 * halfW;
-    ox.beginPath();
-    ox.moveTo(tpts[0][0], tpts[0][1]);
-    for (let i = 1; i < tpts.length; i++) ox.lineTo(tpts[i][0], tpts[i][1]);
-    ox.stroke();
+    const carveOverlap = Math.max(0.002, 1 / density);
+    if (trackPolylineIsManhattan(tpts)) {
+      carveManhattanTrackClearanceRects(ox, tpts, halfW, carveOverlap);
+    } else {
+      ox.lineCap = 'round';
+      ox.lineJoin = 'round';
+      ox.lineWidth = 2 * halfW;
+      ox.beginPath();
+      ox.moveTo(tpts[0][0], tpts[0][1]);
+      for (let i = 1; i < tpts.length; i++) ox.lineTo(tpts[i][0], tpts[i][1]);
+      ox.stroke();
+    }
   }
+
   ox.globalCompositeOperation = 'source-over';
 
   const fillAlpha = isSel ? 0.7 : Math.max(0.5, polyFill * 2.0);
@@ -257,10 +383,14 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   ctx.closePath();
   ctx.clip();
   const prevSmooth = ctx.imageSmoothingEnabled;
-  ctx.imageSmoothingEnabled = false;
+  const prevQuality = ctx.imageSmoothingQuality;
+  // Bilinear: Manhattan carve is all orthogonal — avoids stair-step “hairlines” vs NN upscale.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.globalAlpha = fillAlpha;
   ctx.drawImage(osc, 0, 0, pw, ph, 0, 0, boardW, boardH);
   ctx.imageSmoothingEnabled = prevSmooth;
+  ctx.imageSmoothingQuality = prevQuality;
   ctx.globalAlpha = 1;
   ctx.restore();
 
@@ -405,7 +535,7 @@ export function renderPcbCanvas(ctx, params) {
     ctx.globalAlpha = trackAlpha;
     for (const tr of (doc.tracks || [])) {
       if (tr.layer !== ly) continue;
-      const pts = tr.points || [];
+      const pts = dedupeConsecutiveTrackPoints(tr.points || []);
       if (pts.length < 2) continue;
       const isSel = isSelected('track', tr.id);
       const schLink = tr.net && schCrossNets.has(String(tr.net).toLowerCase());
@@ -418,14 +548,24 @@ export function renderPcbCanvas(ctx, params) {
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (!isSel) {
+
+      if (isSel) {
+        // Selected: bright glow halo + highlighted trace
+        ctx.strokeStyle = 'rgba(244,114,182,0.35)';
+        ctx.lineWidth = tw + Math.max(0.4, tw * 1.2);
+        ctx.stroke();
+        ctx.strokeStyle = '#f472b6';
+        ctx.lineWidth = tw + 0.08;
+        ctx.stroke();
+      } else {
+        // Normal: dark border + layer-colored trace
         ctx.strokeStyle = shadeHex(traceCol, 0.52);
         ctx.lineWidth = tw + Math.max(0.05, tw * 0.28);
         ctx.stroke();
+        ctx.strokeStyle = traceCol;
+        ctx.lineWidth = tw;
+        ctx.stroke();
       }
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = tw;
-      ctx.stroke();
       // Schematic cross-highlight: overlay only — hue stays the active copper layer.
       if (schLink && !isSel) {
         ctx.strokeStyle = 'rgba(192,132,252,0.92)';
@@ -636,8 +776,9 @@ export function renderPcbCanvas(ctx, params) {
 
 /* ─── Grid drawing ─── */
 function drawGrid(ctx, W, H, gridMm, zoom, scale) {
-  // Adaptive grid: skip lines that would be too dense
-  const minPixelSpacing = 8; // min pixels between grid lines
+  // Adaptive grid: coarsen with step *= 5 until each line is ≥ minPixelSpacing apart on screen.
+  // 0.5px ≈ 10× finer than the old 5px floor so zoomed layouts show much denser guides.
+  const minPixelSpacing = 0.5;
   let step = gridMm;
   while (step * scale < minPixelSpacing) step *= 5;
 

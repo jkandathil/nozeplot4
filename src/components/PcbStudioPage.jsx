@@ -1217,7 +1217,26 @@ function PcbStudioPage({ onBackToSchematic }) {
                 if (pickResult) setSelected((prev) => toggleSelectionItem(prev, pickResult));
             } else {
                 if (pickResult) {
-                    setSelected([pickResult]);
+                    // Net-wide highlight: when clicking a track or via, also select
+                    // all other tracks/vias on the same net for visual net tracing.
+                    if (pickResult.kind === 'track') {
+                        const clickedTr = doc.tracks?.find((t) => t.id === pickResult.id);
+                        const net = clickedTr?.net;
+                        if (net && net !== '') {
+                            const netItems = [];
+                            for (const tr of doc.tracks || []) {
+                                if (tr.net === net) netItems.push({ kind: 'track', id: tr.id });
+                            }
+                            for (const v of doc.vias || []) {
+                                if (v.net === net) netItems.push({ kind: 'via', id: v.id });
+                            }
+                            setSelected(netItems.length > 0 ? netItems : [pickResult]);
+                        } else {
+                            setSelected([pickResult]);
+                        }
+                    } else {
+                        setSelected([pickResult]);
+                    }
                     // Begin drag-to-move for placements
                     if (pickResult.kind === 'placement') {
                         const pl = doc.placements?.find((p) => p.id === pickResult.id);

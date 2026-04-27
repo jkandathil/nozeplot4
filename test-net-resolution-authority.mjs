@@ -12,6 +12,7 @@ import {
     componentPins,
 } from './src/circuit/schematicDoc.js';
 import { importNetlistToDoc } from './src/circuit/importNetlist.js';
+import { buildPcbBridgePayload } from './src/pcb/schematicBridge.js';
 
 {
     const d = emptyDoc();
@@ -39,6 +40,29 @@ R1 1 0 1k
     assert.equal(doc.meta.labelNetAuthority, true);
     const nets = resolveNets(doc);
     assert.ok(nets.pinNode(doc.components.find((c) => c.ref === 'V1'), 'n1') != null);
+}
+
+// PCB bridge: missing pinNode must not be coerced to GND net '0' (regression).
+{
+    const d = emptyDoc();
+    addComponent(d, 'R', 10, 10, 0);
+    const nets = {
+        pinNode: (_c, pinId) => (pinId === 'n1' ? undefined : 5),
+        nodeLabels: new Map([[5, 'sig']]),
+    };
+    const bp = buildPcbBridgePayload(d, nets);
+    const rPl = bp.placements.find((p) => p.ref === 'R1');
+    assert.ok(rPl);
+    assert.equal(rPl.padNets['1'], undefined);
+    assert.equal(rPl.padNets['2'], 'sig');
+    const netsGnd = {
+        pinNode: () => 0,
+        nodeLabels: new Map([[0, 'gnd']]),
+    };
+    const bp2 = buildPcbBridgePayload(d, netsGnd);
+    const r2 = bp2.placements.find((p) => p.ref === 'R1');
+    assert.equal(r2.padNets['1'], '0');
+    assert.equal(r2.padNets['2'], '0');
 }
 
 console.log('✓ net-resolution authority (hand-built vs import) OK');

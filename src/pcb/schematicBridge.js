@@ -4,8 +4,15 @@
 
 import { componentPins } from '../circuit/schematicDoc.js';
 
+/**
+ * PCB net string for a resolved schematic node id.
+ * Only integer **0** is GND (`'0'`). `null` / `undefined` means no node (e.g. floating
+ * pin in label-authoritative mode) — must **not** be coerced to GND or pads short
+ * to the pour / GND in PCB Studio.
+ */
 function netLabelFromNodeId(nets, nodeId) {
-    if (nodeId == null || nodeId === 0) return '0';
+    if (nodeId === 0) return '0';
+    if (nodeId == null) return null;
     const lab = nets.nodeLabels?.get(nodeId);
     if (lab && !/^n\d+$/i.test(lab) && lab !== 'gnd') return String(lab);
     return `n${nodeId}`;
@@ -92,6 +99,7 @@ export function buildPcbBridgePayload(doc, nets, netlistHint = '') {
             for (const pin of componentPins(c) || []) {
                 const nid = nets.pinNode(c, pin.id);
                 const lbl = netLabelFromNodeId(nets, nid);
+                if (lbl == null || lbl === '') continue;
                 const key = mapPadIdToFootprintPad(c, pin.id);
                 padNets[key] = lbl;
             }

@@ -55,7 +55,8 @@ export function readCrossSelectFromPcbStorage() {
 }
 
 function netLabelFromNodeId(nets, nodeId) {
-    if (nodeId == null || nodeId === 0) return 'gnd';
+    if (nodeId === 0) return 'gnd';
+    if (nodeId == null) return null;
     const lab = nets.nodeLabels?.get(nodeId);
     if (lab && !/^n\d+$/i.test(String(lab)) && String(lab).toLowerCase() !== 'gnd') return String(lab);
     return `n${nodeId}`;
@@ -74,7 +75,10 @@ export function inferWireNetLabel(doc, nets, wireId) {
     if (!w?.points?.length) return null;
     for (const [x, y] of w.points) {
         const nid = nets.nodeIdAt(x, y);
-        if (nid != null) return netLabelFromNodeId(nets, nid);
+        if (nid != null) {
+            const lab = netLabelFromNodeId(nets, nid);
+            return lab ?? null;
+        }
     }
     return null;
 }
@@ -108,7 +112,10 @@ export function collectSchematicCrossPayload(doc, nets, selection) {
         if (c && nets?.pinNode) {
             for (const pin of componentPins(c) || []) {
                 const nid = nets.pinNode(c, pin.id);
-                if (nid != null) netsOut.add(netLabelFromNodeId(nets, nid));
+                if (nid != null) {
+                    const lab = netLabelFromNodeId(nets, nid);
+                    if (lab != null) netsOut.add(lab);
+                }
             }
         }
         return { refs: [...refs], nets: [...netsOut] };
@@ -127,7 +134,10 @@ export function collectSchematicCrossPayload(doc, nets, selection) {
             if (c && nets?.pinNode) {
                 for (const pin of componentPins(c) || []) {
                     const nid = nets.pinNode(c, pin.id);
-                    if (nid != null) netsOut.add(netLabelFromNodeId(nets, nid));
+                    if (nid != null) {
+                        const lab = netLabelFromNodeId(nets, nid);
+                        if (lab != null) netsOut.add(lab);
+                    }
                 }
             }
         }
