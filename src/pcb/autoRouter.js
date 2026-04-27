@@ -10,6 +10,7 @@
 
 import { newId, activeCopperLayerIds } from './pcbDoc.js';
 import { getFootprint } from './footprintLib.js';
+import { NOZE_GND_PLANE_ID } from './gndPlane.js';
 
 /* ─── Obstacle grid construction ─── */
 
@@ -96,9 +97,10 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH) {
     }
   }
 
-  // Block polygons on this layer
+  // Block polygons on this layer (skip GND plane — it's a copper pour, not an obstacle)
   for (const poly of (doc.polygons || [])) {
     if (poly.layer !== layer) continue;
+    if (poly.id === NOZE_GND_PLANE_ID) continue;
     const pts = poly.points || [];
     for (let i = 0; i < pts.length; i++) {
       const j = (i + 1) % pts.length;
@@ -277,10 +279,20 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
   const newTracks = [];
   const newVias = [];
 
+  // Check if a GND plane exists on the routing layer — if so, GND net ('0')
+  // is connected by the copper pour and does NOT need routed traces.
+  const gndPlaneOnRouteLayer = (doc.polygons || []).some(
+    (p) => p.id === NOZE_GND_PLANE_ID && String(p.net || '') === '0' && p.layer === defaultRouteLayer,
+  );
+
   // Sort nets by number of pads (route shorter nets first for better routability).
-  // Ground uses net label "0" (SPICE node 0) — it must be routed like any other net.
   const netEntries = [...padCentersByNet.entries()]
-    .filter(([net, pts]) => pts.length >= 2 && net != null && String(net) !== '')
+    .filter(([net, pts]) => {
+      if (pts.length < 2 || net == null || String(net) === '') return false;
+      // Skip GND net when a GND copper pour handles the connectivity
+      if (gndPlaneOnRouteLayer && (String(net).trim() === '0' || String(net).trim().toLowerCase() === 'gnd')) return false;
+      return true;
+    })
     .sort((a, b) => a[1].length - b[1].length);
 
   // Build a mutable copy of the doc that accumulates routed tracks
@@ -297,7 +309,32 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
       workingDoc, layer, gridResolution, clearanceMm, boardW, boardH
     );
 
-    // Unblock pad cells for this net
+    // Unblock the full pad area (not just center cell!) for pads on this net.
+    // The obstacle grid blocked every pad with radius = max(w,h)/2 + clearance,
+    // so we must clear the same area for pads belonging to the net being routed,
+    // otherwise A* cannot approach the destination through blocked pad cells.
+    for (const pl of workingDoc.placements || []) {
+      const fp = getFootprint(pl.footprintId);
+      if (!fp?.pads) continue;
+      const nets = pl.padNets || {};
+      for (const pad of fp.pads) {
+        const padNet = nets[pad.num] || nets[pad.id];
+        if (padNet !== net) continue;
+        const [px, py] = padWorld(pl, pad);
+        const r = Math.max(pad.w, pad.h) / 2 + clearanceMm;
+        // Clear same radius that was blocked
+        const gx0 = Math.max(0, Math.floor((px - r) / gridResolution));
+        const gy0 = Math.max(0, Math.floor((py - r) / gridResolution));
+        const gx1 = Math.min(cols - 1, Math.ceil((px + r) / gridResolution));
+        const gy1 = Math.min(rows - 1, Math.ceil((py + r) / gridResolution));
+        for (let gy = gy0; gy <= gy1; gy++) {
+          for (let gx = gx0; gx <= gx1; gx++) {
+            grid[gy * cols + gx] = 0;
+          }
+        }
+      }
+    }
+    // Also ensure the raw pad center points are unblocked
     for (const [px, py] of pts) {
       const gx = Math.round(px / gridResolution);
       const gy = Math.round(py / gridResolution);
