@@ -625,7 +625,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         if (exportBusy) return;
         setExportBusy(true);
         try {
-            const fab = buildPcbFabricationZip(doc);
+            const fab = await buildPcbFabricationZip(doc);
             triggerBlobDownload(fab, 'pcb-fab.zip');
         } catch (err) {
             console.error('Export failed:', err);
