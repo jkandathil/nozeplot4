@@ -29,7 +29,7 @@ function padWorld(pl, pad) {
  * Build a 2D obstacle grid for a given copper layer.
  * Each cell is true (blocked) or false (free).
  */
-function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH) {
+function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, trackHalfWidth = 0) {
   const cols = Math.ceil(boardW / gridRes);
   const rows = Math.ceil(boardH / gridRes);
   const grid = new Uint8Array(cols * rows); // 0=free, 1=blocked
@@ -86,13 +86,15 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH) {
     blockRadius(v.x, v.y, r);
   }
 
-  // Block pads on this layer
+  // Block pads on this layer.
+  // The blocked radius must include the track half-width so the A* center line
+  // stays far enough that the trace EDGE still respects clearance from the pad.
   for (const pl of (doc.placements || [])) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads) continue;
     for (const pad of fp.pads) {
       const [px, py] = padWorld(pl, pad);
-      const r = Math.max(pad.w, pad.h) / 2 + clearanceMm;
+      const r = Math.max(pad.w, pad.h) / 2 + clearanceMm + trackHalfWidth;
       blockRadius(px, py, r);
     }
   }
@@ -336,15 +338,16 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
     // One primary layer for all nets so canvas colors match user expectation (hue = layer, not net).
     const layer = defaultRouteLayer;
 
-    // Build obstacle grid (updated with previously routed tracks)
+    // Build obstacle grid (updated with previously routed tracks).
+    // Pass trackHalfWidth so pad blocking accounts for trace width.
+    const trackHalfW = trackWidth / 2;
     const { grid, cols, rows } = buildObstacleGrid(
-      workingDoc, layer, gridResolution, clearanceMm, boardW, boardH
+      workingDoc, layer, gridResolution, clearanceMm, boardW, boardH, trackHalfW
     );
 
-    // Unblock the full pad area (not just center cell!) for pads on this net.
-    // The obstacle grid blocked every pad with radius = max(w,h)/2 + clearance,
-    // so we must clear the same area for pads belonging to the net being routed,
-    // otherwise A* cannot approach the destination through blocked pad cells.
+    // Unblock the full pad area for pads on this net so A* can reach them.
+    // Use the SAME radius as blocking (pad + clearance + trackHalfW) to fully
+    // clear the zone, letting the path approach and land on the pad center.
     for (const pl of workingDoc.placements || []) {
       const fp = getFootprint(pl.footprintId);
       if (!fp?.pads) continue;
@@ -353,8 +356,7 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
         const padNet = nets[pad.num] || nets[pad.id];
         if (padNet !== net) continue;
         const [px, py] = padWorld(pl, pad);
-        const r = Math.max(pad.w, pad.h) / 2 + clearanceMm;
-        // Clear same radius that was blocked
+        const r = Math.max(pad.w, pad.h) / 2 + clearanceMm + trackHalfW;
         const gx0 = Math.max(0, Math.floor((px - r) / gridResolution));
         const gy0 = Math.max(0, Math.floor((py - r) / gridResolution));
         const gx1 = Math.min(cols - 1, Math.ceil((px + r) / gridResolution));
@@ -364,14 +366,6 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
             grid[gy * cols + gx] = 0;
           }
         }
-      }
-    }
-    // Also ensure the raw pad center points are unblocked
-    for (const [px, py] of pts) {
-      const gx = Math.round(px / gridResolution);
-      const gy = Math.round(py / gridResolution);
-      if (gx >= 0 && gx < cols && gy >= 0 && gy < rows) {
-        grid[gy * cols + gx] = 0;
       }
     }
 
@@ -445,7 +439,7 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
         const altLayer = stack.find((ly) => ly !== layer) || layer;
         if (altLayer !== layer && stack.length > 1) {
           const { grid: altGrid, cols: altCols, rows: altRows } = buildObstacleGrid(
-            workingDoc, altLayer, gridResolution, clearanceMm, boardW, boardH
+            workingDoc, altLayer, gridResolution, clearanceMm, boardW, boardH, trackHalfW
           );
           const altPath = aStarPath(altGrid, altCols, altRows, gridResolution, start, end, maxIterationsPerNet);
           if (altPath && altPath.length >= 2) {
