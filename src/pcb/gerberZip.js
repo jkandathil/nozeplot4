@@ -359,15 +359,15 @@ function buildEdgeCutsGerber(doc) {
     lines.push('%MOMM*%\n');
     lines.push('%LPD*%\n');
     lines.push('G01*\n');
+    // Stroke the outline only (no G36/G37). Filled edge polygons render as a solid slab in Gerbv
+    // and other viewers — KiCad-style Edge.Cuts is normally a thin closed path.
     lines.push('%ADD10C,0.100*%\n');
     lines.push('D10*\n');
-    lines.push('G36*\n');
     lines.push(xyLine(0, 0, 'D02'));
     lines.push(xyLine(W, 0, 'D01'));
     lines.push(xyLine(W, H, 'D01'));
     lines.push(xyLine(0, H, 'D01'));
     lines.push(xyLine(0, 0, 'D01'));
-    lines.push('G37*\n');
     lines.push('M02*\n');
     return lines.join('');
 }
@@ -463,7 +463,7 @@ function buildFabReadme(safe, stack) {
         '  F_SilkS — top silk from library; B_SilkS empty (top-only footprints here)',
         '  F_Mask — openings for all pads + vias; B_Mask — vias + THT only',
         '  F_Paste — top SMD stencil; B_Paste empty until bottom-side parts exist',
-        '  Edge_Cuts — board outline (rectangle from Board outline mm)',
+        '  Edge_Cuts — board outline as a stroked rectangle (not filled — matches Gerbv / fab expectation)',
         '  PTH.drl — Excellon plated holes (vias + THT pad drills)',
         '',
         'Review: ring sizes, paste reduction, and inner-layer pad annuli with your fab.',
