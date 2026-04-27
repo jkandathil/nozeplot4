@@ -1529,7 +1529,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                     className="pcb-topbtn"
                     onClick={() => void handleExportZip()}
                     disabled={exportBusy}
-                    title="Download fabrication ZIP: Gerber layers, drill, outline, etc."
+                    title="Fabrication ZIP: all copper layers, Edge_Cuts, F/B mask & paste, silk, PTH drill, README"
                 >
                     <FileCode2 size={14} /> Gerber ZIP
                 </button>

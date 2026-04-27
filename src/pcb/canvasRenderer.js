@@ -627,7 +627,7 @@ export function renderPcbCanvas(ctx, params) {
   drawSilkscreen(ctx, doc, boardPreview);
 
   // ─── Board frame + dimensions ───
-  drawBoardFrame(ctx, W, H, doc.meta?.name || 'Untitled board', scale);
+  drawBoardFrame(ctx, W, H);
 
   // ─── Ratsnest (unrouted pad islands) ───
   drawRatsnest(ctx, padCentersByNet, schCrossNets, {
@@ -945,8 +945,8 @@ function drawSilkscreen(ctx, doc, boardPreview) {
   }
 }
 
-/* ─── Board frame + title block ─── */
-function drawBoardFrame(ctx, W, H, name, scale) {
+/* ─── Board outline (Edge.Cuts preview) — no schematic-style title block ─── */
+function drawBoardFrame(ctx, W, H) {
   // Edge.Cuts outline
   ctx.strokeStyle = '#fde047';
   ctx.lineWidth = 0.32;
@@ -982,53 +982,6 @@ function drawBoardFrame(ctx, W, H, name, scale) {
   ctx.moveTo(0, -0.35); ctx.lineTo(0, 1.15);
   ctx.stroke();
   ctx.globalAlpha = 1;
-
-  // Dimension labels
-  const fmt = n => (Math.round(n * 100) / 100).toFixed(2);
-  if (scale > 3) {
-    // Width dimension
-    ctx.fillStyle = '#fef9c3';
-    ctx.font = `bold 2.15px ui-monospace, monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText(`${fmt(W)} mm`, W / 2, H - 0.28);
-
-    // Height dimension (rotated)
-    ctx.save();
-    ctx.translate(W - 0.88 - 0.55, H / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillText(`${fmt(H)} mm`, 0, 0);
-    ctx.restore();
-  }
-
-  // Title block
-  if (scale > 2) {
-    const tbW = 21.5, tbH = 13;
-    const tbX = Math.max(0, W - 22);
-    const tbY = Math.max(0, H - 13.5);
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = 'rgba(15,23,42,0.72)';
-    ctx.strokeStyle = 'rgba(148,163,184,0.4)';
-    ctx.lineWidth = 0.1;
-    roundRect(ctx, tbX, tbY, tbW, tbH, 0.35);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = 'bold 1.25px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText((name || 'Board').slice(0, 22), tbX + 1.1, tbY + 2.35);
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '0.95px ui-monospace, monospace';
-    ctx.fillText('Sheet 1 / 1', tbX + 1.1, tbY + 4.35);
-
-    ctx.fillStyle = '#64748b';
-    ctx.font = '0.82px ui-monospace, monospace';
-    ctx.fillText(`${fmt(W)}×${fmt(H)} mm`, tbX + 1.1, tbY + 6.15);
-    ctx.globalAlpha = 1;
-  }
 }
 
 /* ─── Ratsnest ─── */
@@ -1122,21 +1075,6 @@ function drawMeasureTool(ctx, start, end, cursor, scale) {
     ctx.lineWidth = 0.05;
     ctx.stroke();
   }
-}
-
-/* ─── Rounded rect helper ─── */
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
 }
 
 /* ─── Hit testing for canvas (replaces SVG DOM events) ─── */
