@@ -116,6 +116,10 @@ export function migratePcbDoc(doc) {
     if (next.meta.layerVisibility == null || typeof next.meta.layerVisibility !== 'object') {
         next.meta.layerVisibility = {};
     }
+    const bw = Number(next.meta.boardWmm);
+    const bh = Number(next.meta.boardHmm);
+    next.meta.boardWmm = Number.isFinite(bw) ? Math.min(2000, Math.max(5, bw)) : 80;
+    next.meta.boardHmm = Number.isFinite(bh) ? Math.min(2000, Math.max(5, bh)) : 50;
     const stack = activeCopperLayerIds(next);
     if (stack.length && stack.every((ly) => !isCopperLayerVisible(next, ly))) {
         next.meta.layerVisibility = {};
@@ -320,10 +324,8 @@ export function syncBridgePayload(doc, bridge) {
         return tr;
     });
 
-    // Phase 5: Update meta if provided
+    // Phase 5: Update meta from bridge (board size is PCB-only — do not overwrite on sync).
     let nextMeta = { ...doc.meta };
-    if (bridge.meta?.boardWmm) nextMeta.boardWmm = bridge.meta.boardWmm;
-    if (bridge.meta?.boardHmm) nextMeta.boardHmm = bridge.meta.boardHmm;
     if (bridge.meta?.name != null && String(bridge.meta.name).trim()) {
         nextMeta.name = String(bridge.meta.name).trim();
     }

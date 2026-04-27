@@ -1890,6 +1890,43 @@ function PcbStudioPage({ onBackToSchematic }) {
                     </div>
 
                     <h3 className="pcb-subh">Board & grid</h3>
+                    <div className="pcb-board-size-row" role="group" aria-label="Board outline size in millimeters">
+                        <label className="pcb-field-col">
+                            Width (mm)
+                            <input
+                                type="number"
+                                min={5}
+                                max={2000}
+                                step={0.5}
+                                value={Number(doc.meta?.boardWmm) || 80}
+                                onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (!Number.isFinite(v)) return;
+                                    const w = Math.min(2000, Math.max(5, v));
+                                    setDoc((d) => ({ ...d, meta: { ...d.meta, boardWmm: w } }));
+                                }}
+                            />
+                        </label>
+                        <label className="pcb-field-col">
+                            Height (mm)
+                            <input
+                                type="number"
+                                min={5}
+                                max={2000}
+                                step={0.5}
+                                value={Number(doc.meta?.boardHmm) || 50}
+                                onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (!Number.isFinite(v)) return;
+                                    const h = Math.min(2000, Math.max(5, v));
+                                    setDoc((d) => ({ ...d, meta: { ...d.meta, boardHmm: h } }));
+                                }}
+                            />
+                        </label>
+                    </div>
+                    <span className="pcb-field-hint pcb-field-hint--block">
+                        Board outline for the canvas, Gerber / KiCad export, and edge clearance in DRC.
+                    </span>
                     <label className="pcb-field-col">
                         Snap grid (mm)
                         <select

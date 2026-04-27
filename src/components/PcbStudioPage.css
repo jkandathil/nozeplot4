@@ -839,6 +839,21 @@
     font-size: 0.72rem;
 }
 
+.pcb-board-size-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.pcb-board-size-row .pcb-field-col {
+    margin-bottom: 0;
+}
+
+.pcb-field-hint--block {
+    margin-bottom: 10px;
+}
+
 .pcb-field-hint {
     display: block;
     margin-top: 2px;
