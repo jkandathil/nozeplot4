@@ -549,6 +549,26 @@
     background: rgba(15, 23, 42, 0.4);
 }
 
+/* Board size at top of sidebar — was easy to miss under long Copper Layers copy */
+.pcb-board-outline-section {
+    margin: 0 0 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.pcb-subh--sidebar-top {
+    margin-top: 0;
+    color: #94a3b8;
+}
+
+.pcb-board-outline-hint {
+    margin: 6px 0 0;
+    font-size: 0.58rem;
+    line-height: 1.35;
+    font-weight: 500;
+    color: #64748b;
+}
+
 .pcb-sidebar-head {
     display: flex;
     align-items: center;
@@ -848,10 +868,6 @@
 
 .pcb-board-size-row .pcb-field-col {
     margin-bottom: 0;
-}
-
-.pcb-field-hint--block {
-    margin-bottom: 10px;
 }
 
 .pcb-field-hint {
