@@ -37,25 +37,33 @@ function minDistPointToPolyline(px, py, pts) {
   return d;
 }
 
+/**
+ * Do two tracks connect? Checks if any ENDPOINT of track A lies within `eps`
+ * of any SEGMENT of track B, and vice versa. This detects T-junctions where
+ * one track's endpoint lands mid-segment on another track.
+ */
 function trackEndpointsTouch(ptsA, ptsB, eps) {
   if (!ptsA?.length || !ptsB?.length) return false;
   const endsA = [ptsA[0], ptsA[ptsA.length - 1]];
   const endsB = [ptsB[0], ptsB[ptsB.length - 1]];
+  // Check A's endpoints against B's full polyline (segment-level)
   for (const a of endsA) {
-    for (const b of endsB) {
-      if (Math.hypot(a[0] - b[0], a[1] - b[1]) <= eps) return true;
-    }
+    if (minDistPointToPolyline(a[0], a[1], ptsB) <= eps) return true;
+  }
+  // Check B's endpoints against A's full polyline
+  for (const b of endsB) {
+    if (minDistPointToPolyline(b[0], b[1], ptsA) <= eps) return true;
   }
   return false;
 }
 
+/**
+ * Does a point (e.g. via center) lie within `eps` of any segment on the track?
+ * (Not just endpoints — handles T-junctions and mid-segment landings.)
+ */
 function trackTouchesPoint(pts, x, y, eps) {
   if (!pts?.length) return false;
-  const ends = [pts[0], pts[pts.length - 1]];
-  for (const e of ends) {
-    if (Math.hypot(e[0] - x, e[1] - y) <= eps) return true;
-  }
-  return false;
+  return minDistPointToPolyline(x, y, pts) <= eps;
 }
 
 function padTouchesTrack(px, py, track, padSlopMm) {

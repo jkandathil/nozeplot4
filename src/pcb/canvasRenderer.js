@@ -373,6 +373,32 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
     }
   }
 
+  // 2e. Thermal relief for GND pads — four diagonal carve wedges around each
+  //     GND pad so the pour connects via narrow spokes, not a solid flood.
+  //     This is the standard Eagle/KiCad thermal relief pattern.
+  const thermalGap = clearMm * 0.6;    // gap width between spokes
+  const thermalOuter = clearMm * 1.2;  // outer carve radius beyond pad
+  for (const pl of doc.placements || []) {
+    const fp = getFootprint(pl.footprintId);
+    if (!fp?.pads?.length) continue;
+    const nets = pl.padNets || {};
+    for (const pad of fp.pads) {
+      const net = nets[pad.num] || nets[pad.id];
+      // Only draw thermal relief for GND pads (net '0')
+      if (isNonGndNet(net)) continue;
+      if (net == null || net === '') continue; // skip unassigned
+      const [px, py] = padWorld(pl, pad);
+      const pr = Math.max(pad.w, pad.h) / 2;
+      const outerR = pr + thermalOuter;
+      const gapHalf = thermalGap / 2;
+      // Carve four wedge strips (vertical + horizontal gaps between spokes)
+      // Vertical gap (top-bottom)
+      ox.fillRect(px - gapHalf, py - outerR, gapHalf * 2, outerR * 2);
+      // Horizontal gap (left-right)
+      ox.fillRect(px - outerR, py - gapHalf, outerR * 2, gapHalf * 2);
+    }
+  }
+
   ox.globalCompositeOperation = 'source-over';
 
   const fillAlpha = isSel ? 0.7 : Math.max(0.5, polyFill * 2.0);

@@ -316,12 +316,33 @@ export function syncBridgePayload(doc, bridge) {
         }
     }
 
-    // Phase 4: Fix or prune tracks with stale net labels
+    // Phase 4: Fix track/via net labels, then prune stale ones.
+    // 4a: Rename nets that changed (e.g. schematic rewiring moved a pin to a different node)
     let nextTracks = (doc.tracks || []).map((tr) => {
         if (tr.net && netRenames.has(tr.net)) {
             return { ...tr, net: netRenames.get(tr.net) };
         }
         return tr;
+    });
+    let nextVias = (doc.vias || []).map((v) => {
+        if (v.net && netRenames.has(v.net)) {
+            return { ...v, net: netRenames.get(v.net) };
+        }
+        return v;
+    });
+
+    // 4b: Prune tracks and vias whose net no longer exists in ANY pad
+    // (e.g. a component was removed from the schematic). Keep GND ('0')
+    // tracks because GND plane connectivity doesn't need a padNet entry.
+    nextTracks = nextTracks.filter((tr) => {
+        if (!tr.net || tr.net === '') return true; // keep unassigned
+        if (tr.net === '0') return true; // GND is always valid
+        return validNets.has(tr.net);
+    });
+    nextVias = nextVias.filter((v) => {
+        if (!v.net || v.net === '') return true;
+        if (v.net === '0') return true;
+        return validNets.has(v.net);
     });
 
     // Phase 5: Update meta from bridge (board size is PCB-only — do not overwrite on sync).
@@ -335,6 +356,7 @@ export function syncBridgePayload(doc, bridge) {
         meta: nextMeta,
         placements: nextPlacements,
         tracks: nextTracks,
+        vias: nextVias,
     };
 }
 

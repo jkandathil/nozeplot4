@@ -181,18 +181,61 @@ function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12) {
     return '';
 }
 
-/** Continue the same net when starting a new segment on an existing track end. */
-function findTrackEndpointNet(doc, mx, my, tolMm = 0.45) {
+/**
+ * Find the net at any point along any track (not just endpoints).
+ * Returns the net label if the click is within tolerance of any track segment.
+ * This lets users start or continue routing from any point on an existing trace.
+ */
+function findTrackNetAtPoint(doc, mx, my, tolMm = 0.45) {
     for (const tr of doc.tracks || []) {
         const pts = tr.points || [];
-        if (pts.length < 1) continue;
+        if (pts.length < 2) continue;
         const net = tr.net && String(tr.net);
         if (!net) continue;
-        const a = pts[0];
-        const b = pts[pts.length - 1];
-        if (Math.hypot(mx - a[0], my - a[1]) <= tolMm || Math.hypot(mx - b[0], my - b[1]) <= tolMm) return net;
+        const hw = (Number(tr.widthMm) || 0.35) / 2;
+        const maxDist = hw + tolMm;
+        for (let i = 0; i < pts.length - 1; i++) {
+            const d = distToSegment2D([mx, my], pts[i], pts[i + 1]);
+            if (d <= maxDist) return net;
+        }
     }
     return '';
+}
+
+/** Point-to-segment distance (2D). */
+function distToSegment2D(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2));
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/** Snap a point to the nearest position on the closest same-net track segment.
+ *  Returns { x, y, net } or null if nothing nearby. */
+function snapToSameNetTrack(doc, mx, my, currentNet, tolMm = 0.6) {
+    if (!currentNet) return null;
+    let best = null;
+    let bestDist = tolMm;
+    for (const tr of doc.tracks || []) {
+        if (String(tr.net || '') !== currentNet) continue;
+        const pts = tr.points || [];
+        const hw = (Number(tr.widthMm) || 0.35) / 2;
+        for (let i = 0; i < pts.length - 1; i++) {
+            const a = pts[i], b = pts[i + 1];
+            const dx = b[0] - a[0], dy = b[1] - a[1];
+            const len2 = dx * dx + dy * dy;
+            let t = 0;
+            if (len2 > 0) t = Math.max(0, Math.min(1, ((mx - a[0]) * dx + (my - a[1]) * dy) / len2));
+            const cx = a[0] + t * dx, cy = a[1] + t * dy;
+            const d = Math.hypot(mx - cx, my - cy);
+            if (d < bestDist) {
+                bestDist = d;
+                best = { x: cx, y: cy, net: currentNet };
+            }
+        }
+    }
+    return best;
 }
 
 function PcbStudioPage({ onBackToSchematic }) {
@@ -1181,16 +1224,37 @@ function PcbStudioPage({ onBackToSchematic }) {
             }
             const spt = [snap(ax), snap(ay)];
             if (!routeDraft) {
-                routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackEndpointNet(doc, mx, my) || '';
+                // Starting a new route — pick up net from pad or ANY point on a trace
+                routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackNetAtPoint(doc, mx, my) || '';
                 setRouteDraft([spt]);
             } else {
                 const last = routeDraft[routeDraft.length - 1];
+                const curNet = routeNetRef.current || '';
+
+                // Check if clicking on a same-net pad → snap to pad and auto-commit
+                const padNet = findPadNetAtBoard(doc, ax, ay, 0.5);
+                const landOnSameNetPad = padNet && padNet === curNet;
+
+                // Check if clicking on a same-net trace → snap to nearest trace point and auto-commit
+                const trSnap = !landOnSameNetPad ? snapToSameNetTrack(doc, ax, ay, curNet, 0.6) : null;
+
+                // Determine final endpoint
+                let finalPt = spt;
+                let autoCommit = false;
+
+                if (landOnSameNetPad) {
+                    autoCommit = true; // auto-commit on same-net pad
+                } else if (trSnap) {
+                    finalPt = [snap(trSnap.x), snap(trSnap.y)];
+                    autoCommit = true; // auto-commit on same-net trace (T-junction)
+                }
+
                 const segTrack = {
                     id: '__draft_seg__',
                     layer: activeLayer,
                     widthMm: doc.meta?.defaultTrackMm || 0.35,
-                    net: routeNetRef.current || '',
-                    points: [last, spt],
+                    net: curNet,
+                    points: [last, finalPt],
                 };
                 const segBad = getCopperViolationsForProposedTrack(doc, getFootprint, segTrack);
                 if (segBad.length) {
@@ -1198,7 +1262,32 @@ function PcbStudioPage({ onBackToSchematic }) {
                     window.alert(`${segBad[0].message}${extra}`);
                     return;
                 }
-                setRouteDraft([...routeDraft, spt]);
+
+                if (autoCommit) {
+                    // Landing on same-net copper: add final point and commit immediately
+                    const commitDraft = [...routeDraft, finalPt];
+                    if (commitDraft.length >= 2) {
+                        const newTrack = {
+                            id: newId('tr'),
+                            layer: activeLayer,
+                            widthMm: doc.meta?.defaultTrackMm || 0.35,
+                            net: curNet,
+                            points: commitDraft,
+                        };
+                        const bad = getCopperViolationsForProposedTrack(doc, getFootprint, newTrack);
+                        if (bad.length) {
+                            const extra = bad.length > 1 ? ` (+${bad.length - 1} more)` : '';
+                            window.alert(`${bad[0].message}${extra}`);
+                            return;
+                        }
+                        undoMgrRef.current.push(doc);
+                        setDoc((d) => ({ ...d, tracks: [...(d.tracks || []), newTrack] }));
+                        setRouteDraft(null);
+                        routeNetRef.current = '';
+                    }
+                } else {
+                    setRouteDraft([...routeDraft, finalPt]);
+                }
             }
             return;
         }
