@@ -24,6 +24,11 @@ import { buildRatsnestHubsByNet } from './pcbRatsnest.js';
 function sqr(x) { return x * x; }
 function dist2(v, w) { return sqr(v[0] - w[0]) + sqr(v[1] - w[1]); }
 
+/** True when copper items share the same net label (including both unset `''`). */
+function sameCopperNet(a, b) {
+  return String(a ?? '').trim() === String(b ?? '').trim();
+}
+
 function distToSegment(p, v, w) {
   const l2 = dist2(v, w);
   if (l2 === 0) return Math.sqrt(dist2(p, v));
@@ -32,7 +37,44 @@ function distToSegment(p, v, w) {
   return Math.sqrt(dist2(p, [v[0] + t * (w[0] - v[0]), v[1] + t * (w[1] - v[1])]));
 }
 
+/** Signed 2×2 orientation; ~0 if collinear (mm space). */
+function orient2d(a, b, c) {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+function pointOnClosedSegment(lo, mid, hi, eps) {
+  return (
+    mid[0] + eps >= Math.min(lo[0], hi[0]) &&
+    mid[0] - eps <= Math.max(lo[0], hi[0]) &&
+    mid[1] + eps >= Math.min(lo[1], hi[1]) &&
+    mid[1] - eps <= Math.max(lo[1], hi[1])
+  );
+}
+
+/**
+ * Closed segments ab and cd touch or cross (including collinear overlap).
+ * Needed for DRC: the old helper only used endpoint↔segment mins, so an X crossing
+ * in both interiors returned a false positive distance and missed shorts.
+ */
+function segmentsIntersectClosed(a, b, c, d) {
+  const EPS = 1e-9;
+  const o1 = orient2d(a, b, c);
+  const o2 = orient2d(a, b, d);
+  const o3 = orient2d(c, d, a);
+  const o4 = orient2d(c, d, b);
+
+  if (Math.abs(o1) < EPS && pointOnClosedSegment(a, c, b, EPS)) return true;
+  if (Math.abs(o2) < EPS && pointOnClosedSegment(a, d, b, EPS)) return true;
+  if (Math.abs(o3) < EPS && pointOnClosedSegment(c, a, d, EPS)) return true;
+  if (Math.abs(o4) < EPS && pointOnClosedSegment(c, b, d, EPS)) return true;
+
+  return (o1 > EPS && o2 < -EPS || o1 < -EPS && o2 > EPS) &&
+    (o3 > EPS && o4 < -EPS || o3 < -EPS && o4 > EPS);
+}
+
+/** Minimum distance between closed segments (mm); 0 if they intersect or overlap. */
 function segmentsDistance(p1, p2, p3, p4) {
+  if (segmentsIntersectClosed(p1, p2, p3, p4)) return 0;
   return Math.min(
     distToSegment(p1, p3, p4),
     distToSegment(p2, p3, p4),
@@ -50,6 +92,75 @@ function rotLocal(x, y, deg) {
 function padWorld(pl, pad) {
   const [lx, ly] = rotLocal(pad.x, pad.y, pl.rot || 0);
   return [lx + pl.x, ly + pl.y];
+}
+
+/**
+ * Track vertex lies on a same-net via (within annulus tolerance) — valid layer change point.
+ */
+function pointTouchesSameNetVia(doc, x, y, net, tolMm) {
+  const n = String(net || '').trim();
+  if (!n) return false;
+  for (const v of doc.vias || []) {
+    if (String(v.net || '') !== n) continue;
+    const r = (Number(v.diamMm) || 0.8) / 2 + tolMm;
+    if (Math.hypot(x - v.x, y - v.y) <= r) return true;
+  }
+  return false;
+}
+
+/**
+ * Endpoints of a track that sit inside an SMD pad on another copper layer (same net) are illegal:
+ * copper on B.Cu cannot "connect" to an F.Cu-only pad without a via at that site.
+ * Through-hole pads are ignored (they connect on all layers).
+ */
+function wrongLayerPadEndpointViolations(doc, getFootprint, track) {
+  const violations = [];
+  if (!track?.layer || !track.points || track.points.length < 2) return violations;
+  const net = String(track.net || '').trim();
+  if (!net) return violations;
+
+  const pts = track.points;
+  const trackLayer = track.layer;
+  const tw = (Number(track.widthMm) || 0.35) / 2;
+  const padTol = 0.35 + tw;
+  const viaTol = 0.12;
+
+  const ends = [pts[0]];
+  const last = pts[pts.length - 1];
+  if (dist2(pts[0], last) > 1e-8) ends.push(last);
+
+  for (const [ex, ey] of ends) {
+    if (pointTouchesSameNetVia(doc, ex, ey, net, viaTol)) continue;
+
+    for (const pl of doc.placements || []) {
+      const fp = getFootprint(pl.footprintId);
+      if (!fp?.pads) continue;
+      const plLayer = pl.layer || 'F.Cu';
+      const nets = pl.padNets || {};
+      for (const pad of fp.pads) {
+        const isTH = pad.type === 'th' || pad.drill;
+        if (isTH) continue;
+        if (plLayer === trackLayer) continue;
+        const pn = nets[pad.num] || nets[pad.id];
+        if (pn == null || String(pn).trim() === '') continue;
+        if (String(pn) !== net) continue;
+        const [px, py] = padWorld(pl, pad);
+        const hw = pad.w / 2 + padTol;
+        const hh = pad.h / 2 + padTol;
+        if (ex >= px - hw && ex <= px + hw && ey >= py - hh && ey <= py + hh) {
+          violations.push({
+            type: 'wrong_layer_pad',
+            severity: 'error',
+            message: `Track on ${trackLayer} meets SMD pad ${pl.ref}:${pad.num} on ${plLayer} without a via. Add a via at the pad and finish on the component copper layer.`,
+            x: ex,
+            y: ey,
+          });
+          break;
+        }
+      }
+    }
+  }
+  return violations;
 }
 
 /* ─── Spatial index builder for DRC ─── */
@@ -141,7 +252,7 @@ export function runDRC(doc, getFootprint, options = {}) {
         if (item.kind !== 'track_seg') continue;
         if (item.trackId === t1.id) continue; // same track
         if (item.layer !== t1.layer) continue; // different layer
-        if (item.net && t1.net && item.net === t1.net) continue; // same net
+        if (sameCopperNet(item.net, t1.net)) continue; // same net
 
         const dist = segmentsDistance(seg1[0], seg1[1], item.seg[0], item.seg[1]);
         const requiredClearance = hw1 + item.hw + minClearance;
@@ -178,7 +289,7 @@ export function runDRC(doc, getFootprint, options = {}) {
 
       for (const item of spatialIdx.query(minX, minY, maxX, maxY)) {
         if (item.kind !== 'pad') continue;
-        if (item.net && tr.net && item.net === tr.net) continue; // same net
+        if (sameCopperNet(item.net, tr.net)) continue; // same net
         // Skip pads on different layers (SMD only blocks its own layer; TH blocks all)
         if (!item.throughHole && item.layer !== tr.layer) continue;
 
@@ -202,6 +313,11 @@ export function runDRC(doc, getFootprint, options = {}) {
     }
   }
 
+  // ═══ 2b. Track endpoints on wrong-side SMD pads (same net, different layer) ═══
+  for (const tr of tracks) {
+    violations.push(...wrongLayerPadEndpointViolations(doc, getFootprint, tr));
+  }
+
   // ═══ 3. Via-to-Track Clearance ═══
   for (const v of (doc.vias || [])) {
     const vr = (Number(v.diamMm) || 0.8) / 2;
@@ -209,7 +325,7 @@ export function runDRC(doc, getFootprint, options = {}) {
                                       v.x + vr + minClearance + 2, v.y + vr + minClearance + 2);
     for (const item of nearby) {
       if (item.kind === 'track_seg') {
-        if (item.net && v.net && item.net === v.net) continue;
+        if (sameCopperNet(item.net, v.net)) continue;
         const dist = distToSegment([v.x, v.y], item.seg[0], item.seg[1]);
         const requiredClearance = vr + item.hw + minClearance;
         if (dist < requiredClearance) {
@@ -357,7 +473,7 @@ export function getCopperViolationsForProposedTrack(doc, getFootprint, track) {
     for (const item of nearby) {
       if (item.kind !== 'track_seg') continue;
       if (item.layer !== t1.layer) continue;
-      if (item.net && t1.net && item.net === t1.net) continue;
+      if (sameCopperNet(item.net, t1.net)) continue;
 
       const dist = segmentsDistance(seg1[0], seg1[1], item.seg[0], item.seg[1]);
       const requiredClearance = hw1 + item.hw + minClearance;
@@ -389,7 +505,7 @@ export function getCopperViolationsForProposedTrack(doc, getFootprint, track) {
 
     for (const item of spatialIdx.query(minX, minY, maxX, maxY)) {
       if (item.kind !== 'pad') continue;
-      if (item.net && t1.net && item.net === t1.net) continue;
+      if (sameCopperNet(item.net, t1.net)) continue;
       // Skip pads on different layers (SMD only blocks its own layer; TH blocks all)
       if (!item.throughHole && item.layer !== t1.layer) continue;
 
@@ -410,6 +526,8 @@ export function getCopperViolationsForProposedTrack(doc, getFootprint, track) {
     }
   }
 
+  violations.push(...wrongLayerPadEndpointViolations(doc, getFootprint, t1));
+
   return deduplicateViolations(violations);
 }
 
@@ -429,7 +547,7 @@ export function getCopperViolationsForProposedVia(doc, getFootprint, via) {
     v.x + vr + minClearance + 2, v.y + vr + minClearance + 2);
   for (const item of nearby) {
     if (item.kind === 'track_seg') {
-      if (item.net && v.net && item.net === v.net) continue;
+      if (sameCopperNet(item.net, v.net)) continue;
       const dist = distToSegment([v.x, v.y], item.seg[0], item.seg[1]);
       const requiredClearance = vr + item.hw + minClearance;
       if (dist < requiredClearance) {

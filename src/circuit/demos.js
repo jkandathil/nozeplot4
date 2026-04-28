@@ -14,6 +14,7 @@
  */
 
 import { addComponent, componentPins } from './schematicDoc.js';
+import { applyLowPowerThreeStageTutorialLayout } from './tutorialLayouts.js';
 
 export const DEMOS = [
     {
@@ -416,6 +417,96 @@ V1   vin 0 AC 1m SIN(0 5m 1k)
             {
                 title: 'Experiment',
                 body: 'Try shorting the emitter capacitor (set Ce to 10µ → 10f): mid-band gain collapses to the resistor-ratio value −Rc/Re ≈ −3.3 because full emitter degeneration is restored. This is the classic gain vs. linearity trade-off.',
+            },
+        ],
+    },
+    {
+        id: 'low-power-3stage-amp',
+        title: 'Low power 3-stage transistor amplifier (tutorial)',
+        tagline: 'Three 2N2222-class NPNs: AC-coupled stages, B–C bias resistors, decoupled 9 V supply, 64 Ω load.',
+        category: 'Tutorial',
+        netlist: `* Low power 3-stage transistor amplifier — Circuit Studio tutorial
+* Topology (discrete “pocket” audio pre+driver):
+*   Stage 1 (Q1): Cin 0.01µF, R2 560k B–C feedback bias, R1 5.6k to decoupled rail.
+*   Stage 2 (Q2): C2 22µF couple, R3 270k B–C, R4 3.3k collector load to V+.
+*   Stage 3 (Q3): C3 22µF couple, R5 15k B–C, 64 Ω from V+ to collector (speaker model).
+*   Rb 2.2k + C4 100µF decouple the bias node; C5 220µF bulk on supply.
+* Emitters reference ground (no emitter resistors — textbook values; real builds often add 10–100 Ω for stability).
+
+Vcc vcc 0 9
+Vin nin 0 AC 1m SIN(0 12m 1k)
+
+Rb  vcc nbias 2.2k
+C4  nbias 0 100u
+C5  vcc 0 220u
+
+* --- Stage 1 ---
+C1  nin nb1 0.01u
+R2  nc1 nb1 560k
+R1  nc1 nbias 5.6k
+Q1  nc1 nb1 0 QN
+C2  nc1 nb2 22u
+
+* --- Stage 2 ---
+R3  nc2 nb2 270k
+R4  vcc nc2 3.3k
+Q2  nc2 nb2 0 QN
+C3  nc2 nb3 22u
+
+* --- Stage 3 ---
+R5  nc3 nb3 15k
+RL  vcc nc3 64
+Q3  nc3 nb3 0 QN
+
+.model QN NPN(Is=1e-15 Bf=200 Vaf=100 Cje=12p Cjc=8p)
+
+.op
+.ac dec 30 1 5meg
+.tran 5u 5m
+.end`,
+        defaultAnalysis: 'tran',
+        signals: {
+            tran: ['V(nin)', 'V(nc1)', 'V(nc2)', 'V(nc3)'],
+            ac: ['V(nc3)', 'V(nin)'],
+            op: ['V(nb1)', 'V(nc1)', 'V(nb2)', 'V(nc2)', 'V(nb3)', 'V(nc3)', 'V(nbias)'],
+        },
+        postImport: (doc) => applyLowPowerThreeStageTutorialLayout(doc),
+        tour: [
+            {
+                title: 'What this schematic is',
+                body: 'Three common-emitter stages with AC coupling (C1–C3) between them so each transistor can sit at its own DC bias. Resistors R2, R3, and R5 run from collector to base of the same device — a classic high-value feedback pair that sets a stable operating point without a zener reference.',
+            },
+            {
+                title: 'Power supply & decoupling',
+                body: 'Vcc is 9 V. Rb (2.2 kΩ) feeds the decoupled node nbias; C4 (100 µF) to ground holds that node quiet at AC so stage 1 does not talk back up the rail. C5 (220 µF) is bulk storage from Vcc to ground — always place a big cap near the active devices in a real layout.',
+            },
+            {
+                title: 'Stage 1 — Q1',
+                body: 'The input arrives through C1 (0.01 µF). R2 (560 kΩ) from collector to base sets the first bias loop together with R1 (5.6 kΩ) to nbias. C2 passes AC from Q1 collector into stage 2.',
+            },
+            {
+                title: 'Stage 2 — Q2',
+                body: 'R3 (270 kΩ) provides collector–base feedback for Q2; R4 (3.3 kΩ) is the collector load to Vcc. C3 couples the amplified voltage into the output transistor base.',
+            },
+            {
+                title: 'Stage 3 — Q3 & 64 Ω load',
+                body: 'R5 (15 kΩ) biases Q3 the same way. RL (64 Ω) models an 8 Ω speaker reflected through a small output transformer, or a headphone element — here it is simplified as a single resistor from Vcc to the collector so you can read drive current in the transient.',
+            },
+            {
+                title: 'Run DC op-point',
+                body: 'Pick DC op-point and Run. Check V(nb1…3) and V(nc1…3) — collectors should sit somewhere in the middle of the swing range (not slammed to rail or cutoff). V(nbias) reflects the drop through Rb from Vcc.',
+            },
+            {
+                title: 'Run transient',
+                body: 'Default Transient shows the 1 kHz sine propagating and growing stage-by-stage. Compare V(nin) with V(nc3) — overall voltage gain is large, so if you see clipping, reduce Vin amplitude in the netlist or add emitter degeneration in a follow-on exercise.',
+            },
+            {
+                title: 'Run AC sweep',
+                body: 'AC shows bandwidth and how each coupling capacitor contributes a low-frequency zero. High-frequency roll-off comes from the simplified Cje/Cjc device capacitances in the .model line.',
+            },
+            {
+                title: 'Try your own edits',
+                body: 'Duplicate the project (Save As), then change C2/C3 (coupling) or R4 (second-stage load) and re-Run — watch how bandwidth and clipping trade off. When you are happy, use File → Send to PCB Studio to try a board layout on a copy.',
             },
         ],
     },

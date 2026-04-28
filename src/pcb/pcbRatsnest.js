@@ -69,10 +69,50 @@ function trackTouchesPoint(pts, x, y, eps) {
   return minDistPointToPolyline(x, y, pts) <= eps;
 }
 
-function padTouchesTrack(px, py, track, padSlopMm) {
+/** Pad center → track polyline clearance; pad extends `padR` mm from center (approx). */
+function padTouchesTrackPadRec(padRec, track, padSlopMm) {
   const hw = (Number(track.widthMm) || 0.35) / 2;
-  const tol = hw + padSlopMm;
-  return minDistPointToPolyline(px, py, track.points || []) <= tol;
+  const padR = Number(padRec.padR) > 0 ? padRec.padR : 0.35;
+  const tol = padR + hw + padSlopMm;
+  return minDistPointToPolyline(padRec.x, padRec.y, track.points || []) <= tol;
+}
+
+function trackTouchesPadsOnList(tr, pads, padSlopMm) {
+  for (const p of pads) {
+    if (!p.throughHole && (tr.layer || 'F.Cu') !== p.layer) continue;
+    if (padTouchesTrackPadRec(p, tr, padSlopMm)) return true;
+  }
+  return false;
+}
+
+/**
+ * Track belongs in this net's connectivity graph if:
+ *   - `track.net` matches the ratsnest net (trimmed), or
+ *   - copper geometrically meets a pad on this net (handles empty / mismatched track.net vs schematic).
+ */
+function trackContributesToNet(tr, net, pads, padSlopMm) {
+  if (!tr) return false;
+  const tNet = String(tr.net ?? '').trim();
+  const n = String(net ?? '').trim();
+  if (tNet === n) return true;
+  return trackTouchesPadsOnList(tr, pads, padSlopMm);
+}
+
+function viaTouchesPadsOnList(v, pads, viaSlopMm) {
+  const vr = (Number(v.diamMm) || 0.8) / 2;
+  for (const p of pads) {
+    const padR = Number(p.padR) > 0 ? p.padR : 0.35;
+    if (Math.hypot(p.x - v.x, p.y - v.y) <= vr + viaSlopMm + padR * 0.85) return true;
+  }
+  return false;
+}
+
+function viaContributesToNet(v, net, pads, viaSlopMm) {
+  if (!v) return false;
+  const vNet = String(v.net ?? '').trim();
+  const n = String(net ?? '').trim();
+  if (vNet === n) return true;
+  return viaTouchesPadsOnList(v, pads, viaSlopMm);
 }
 
 /**
@@ -82,11 +122,11 @@ function padTouchesTrack(px, py, track, padSlopMm) {
  */
 export function buildRatsnestHubsByNet(doc, getFootprint) {
   const map = new Map();
-  const padSlopMm = 0.48;
-  const endpointEpsMm = 0.42;
-  const viaSlopMm = 0.55;
+  const padSlopMm = 0.72;
+  const endpointEpsMm = 0.55;
+  const viaSlopMm = 0.62;
 
-  /** @type {Map<string, { x: number, y: number, layer: string }[]>} */
+  /** @type {Map<string, { x: number, y: number, layer: string, throughHole: boolean, padR: number }[]>} */
   const padsByNet = new Map();
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
@@ -94,22 +134,22 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
     const nets = pl.padNets || {};
     const plLayer = pl.layer || 'F.Cu';
     for (const pad of fp.pads || []) {
-      const net = nets[pad.num] || nets[pad.id];
-      if (net == null || net === '') continue;
+      const rawNet = nets[pad.num] ?? nets[pad.id];
+      const net = rawNet == null ? '' : String(rawNet).trim();
+      if (net === '') continue;
       const [x, y] = padWorld(pl, pad);
-      const key = String(net);
-      if (!padsByNet.has(key)) padsByNet.set(key, []);
-      // Store pad layer for layer-aware connectivity
+      if (!padsByNet.has(net)) padsByNet.set(net, []);
       const isTH = pad.type === 'th' || pad.drill;
-      padsByNet.get(key).push({ x, y, layer: plLayer, throughHole: isTH });
+      const padR = 0.5 * Math.hypot(Number(pad.w) || 0.4, Number(pad.h) || 0.4);
+      padsByNet.get(net).push({ x, y, layer: plLayer, throughHole: isTH, padR });
     }
   }
 
   for (const [net, pads] of padsByNet) {
     if (pads.length < 2) continue;
 
-    const tracksOnNet = (doc.tracks || []).filter((t) => t && String(t.net || '') === net);
-    const viasOnNet = (doc.vias || []).filter((v) => v && String(v.net || '') === net);
+    const tracksOnNet = (doc.tracks || []).filter((t) => trackContributesToNet(t, net, pads, padSlopMm));
+    const viasOnNet = (doc.vias || []).filter((v) => viaContributesToNet(v, net, pads, viaSlopMm));
 
     const n = pads.length;
     const adj = new Map();
@@ -128,13 +168,14 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
         if (!tr.id) continue;
         // Layer check: SMD pad only connects to tracks on its own layer
         if (!throughHole && (tr.layer || 'F.Cu') !== padLayer) continue;
-        if (!padTouchesTrack(x, y, tr, padSlopMm)) continue;
+        if (!padTouchesTrackPadRec(pads[i], tr, padSlopMm)) continue;
         addEdge(pi, `t${tr.id}`);
       }
       // Pad ↔ Via: always (vias span all layers)
       for (const v of viasOnNet) {
-        const vr = (Number(v.diamMm) || 0.8) / 2 + 0.18;
-        if (Math.hypot(x - v.x, y - v.y) <= vr + viaSlopMm) addEdge(pi, `via${v.id}`);
+        const vr = (Number(v.diamMm) || 0.8) / 2;
+        const pr = pads[i].padR || 0.35;
+        if (Math.hypot(x - v.x, y - v.y) <= vr + viaSlopMm + pr * 0.85) addEdge(pi, `via${v.id}`);
       }
     }
 
@@ -165,7 +206,7 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
     for (const poly of doc.polygons || []) {
       const pts = poly.points || [];
       if (pts.length < 3) continue;
-      if (String(poly.net || '') !== String(net)) continue;
+      if (String(poly.net ?? '').trim() !== String(net).trim()) continue;
       const polyLayer = poly.layer || 'F.Cu';
       const zoneNode = `_zone_${net}_${polyLayer}`;
       if (!zoneNodes.has(polyLayer)) zoneNodes.set(polyLayer, zoneNode);

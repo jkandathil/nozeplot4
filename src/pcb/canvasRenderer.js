@@ -3,6 +3,10 @@
  * Replaces SVG rendering with high-performance hardware-accelerated Canvas 2D.
  * Handles: grid, layers, tracks, vias, pads, polygons, silkscreen, board frame,
  * selection highlights, DRC markers, ratsnest (unconnected pad islands), measure tool, and draft previews.
+ *
+ * Stroke policy: geometry is in board mm and scales with zoom. **UI strokes** (grid, frame,
+ * selection, silk, ratsnest, etc.) use `lineWidthScreenPx(px, scale)` so line thickness stays
+ * ~constant in device pixels. **Copper** (trace half-width, pad fill, via barrel) stays in mm.
  */
 
 import { getFootprint } from './footprintLib.js';
@@ -68,6 +72,44 @@ function shadeHex(hex, tDark) {
   const gg = Math.round(g * f);
   const bb = Math.round(b * f);
   return `rgb(${rr},${gg},${bb})`;
+}
+
+/**
+ * Line width in board user space (mm) so stroke is ~`screenPx` device pixels.
+ * `scale` = canvas pixels per board mm (from viewport transform).
+ */
+function lineWidthScreenPx(screenPx, scale) {
+  const s = Math.max(1e-9, scale);
+  return Math.max(0.35 / s, screenPx / s);
+}
+
+/** Dash/gap lengths in user space (mm) for ~`patternPx` pixel rhythm on screen. */
+function dashScreenPx(patternPx, scale) {
+  const s = Math.max(1e-9, scale);
+  return patternPx.map((p) => Math.max(0.2 / s, p / s));
+}
+
+/** ~`minDevPx` screen pixels (alias for grid / hairlines). */
+function hairlineMm(scale, minDevPx = 0.9) {
+  return lineWidthScreenPx(minDevPx, scale);
+}
+
+/**
+ * CAD workbench look (default on). Set `boardPreview.cadWorkbench` false for the softer legacy chrome.
+ */
+function paletteForBoardPreview(boardPreview = {}) {
+  const cad = boardPreview.cadWorkbench !== false;
+  return {
+    cad,
+    voidFill: cad ? '#070a0f' : '#06090e',
+    gridMinSpacing: cad ? 5 : 4,
+    selStroke: cad ? '#38bdf8' : '#f472b6',
+    selGlow: cad ? 'rgba(56, 189, 248, 0.4)' : 'rgba(244,114,182,0.42)',
+    selTrack: cad ? '#22d3ee' : '#f472b6',
+    schRef: '#a855f7',
+    boxSelect: cad ? 'rgba(56, 189, 248, 0.75)' : 'rgba(96,165,250,0.7)',
+    boxFill: cad ? 'rgba(56, 189, 248, 0.1)' : 'rgba(96,165,250,0.12)',
+  };
 }
 
 function footprintBBox(pl) {
@@ -306,11 +348,11 @@ function drawTrackGroupCopperFill(ctx, mergedItems, fillStyle, halfW) {
   }
 }
 
-function drawTrackGroupSchDashOverlay(ctx, mergedItems, tw) {
+function drawTrackGroupSchDashOverlay(ctx, mergedItems, scale) {
   ctx.save();
   ctx.strokeStyle = 'rgba(192,132,252,0.92)';
-  ctx.lineWidth = Math.max(0.07, tw * 0.22);
-  ctx.setLineDash([0.45, 0.28]);
+  ctx.lineWidth = lineWidthScreenPx(1.45, scale);
+  ctx.setLineDash(dashScreenPx([5.5, 3.2], scale));
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (const { pts } of mergedItems) {
@@ -344,7 +386,7 @@ function carveManhattanTrackClearanceRects(ox, tpts, halfW, overlapMm) {
   }
 }
 
-function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink) {
+function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink, selStroke = '#f472b6', scale) {
   const pts = poly.points || [];
   if (pts.length < 3) return;
 
@@ -572,16 +614,16 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   ctx.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
-  ctx.strokeStyle = isSel ? '#f472b6' : layerColor;
-  ctx.lineWidth = isSel ? 0.14 : 0.08;
+  ctx.strokeStyle = isSel ? selStroke : layerColor;
+  ctx.lineWidth = isSel ? lineWidthScreenPx(2, scale) : lineWidthScreenPx(1.25, scale);
   ctx.setLineDash([]);
   ctx.stroke();
 
   // Cross-select highlight
   if (schLink && !isSel) {
     ctx.strokeStyle = 'rgba(192,132,252,0.88)';
-    ctx.lineWidth = 0.1;
-    ctx.setLineDash([0.35, 0.22]);
+    ctx.lineWidth = lineWidthScreenPx(1.35, scale);
+    ctx.setLineDash(dashScreenPx([5.5, 3.5], scale));
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -630,15 +672,19 @@ export function renderPcbCanvas(ctx, params) {
   const copperStack = activeCopperLayerIds(doc);
   const layerDrawOrder = [...copperStack].reverse();
   const inactiveCopperOpacity = boardPreview.brightInactiveLayers ? 0.9 : 0.4;
+  const ui = paletteForBoardPreview(boardPreview);
 
   // Selection helpers
   const selSet = new Set(selected.map(s => `${s.kind}:${s.id}`));
   const isSelected = (kind, id) => selSet.has(`${kind}:${id}`);
 
-  // Clear canvas
+  // Viewport background (fills letterbox outside board — avoids muddy transparent edges)
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvasWidth * dpr, canvasHeight * dpr);
+  const bufW = canvasWidth * dpr;
+  const bufH = canvasHeight * dpr;
+  ctx.fillStyle = ui.voidFill;
+  ctx.fillRect(0, 0, bufW, bufH);
   ctx.restore();
 
   // Set up viewport transform: board mm → canvas pixels
@@ -647,17 +693,33 @@ export function renderPcbCanvas(ctx, params) {
   const scaleY = (canvasHeight * dpr) / (H / viewport.zoom);
   const scale = Math.min(scaleX, scaleY);
   ctx.setTransform(scale, 0, 0, scale, -viewport.panX * scale, -viewport.panY * scale);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
 
-  // ─── Board background ───
-  ctx.fillStyle = '#0b1a12';
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(15,41,25,0.55)';
-  ctx.fillRect(0, 0, W, H);
-
-  // ─── Grid ───
-  if (showBoardGrid) {
-    drawGrid(ctx, W, H, doc.meta?.gridMm || 0.5, viewport.zoom, scale);
+  // ─── Board background (working copper area) ───
+  if (ui.cad) {
+    // Smooth diagonal only — avoid partial fillRects (they caused hard horizontal bands at ~42% H).
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, '#181c26');
+    g.addColorStop(1, '#11141c');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.045)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = '#071210';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(12, 38, 24, 0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+    ctx.fillRect(0, 0, W, H);
   }
+
+  // ─── Grid + datum axes (CAD) ───
+  if (showBoardGrid) {
+    drawGrid(ctx, W, H, doc.meta?.gridMm || 0.5, viewport.zoom, scale, ui);
+  }
+  drawCadDatumDecoration(ctx, W, H, scale, ui);
 
   // ─── Copper layers (bottom to top) ───
   for (const ly of layerDrawOrder) {
@@ -679,7 +741,7 @@ export function renderPcbCanvas(ctx, params) {
       const polyFill = isActive ? 0.34 : boardPreview.brightInactiveLayers ? 0.22 : 0.12;
 
       if (poly.id === NOZE_GND_PLANE_ID && String(poly.net || '') === '0') {
-        drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink);
+        drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc, isSel, schLink, ui.selStroke, scale);
         continue;
       }
 
@@ -690,13 +752,13 @@ export function renderPcbCanvas(ctx, params) {
       ctx.fillStyle = hexToRgba(layerColor, polyFill);
       ctx.fill();
       // Zone outline: always this layer’s copper hue (not net-based).
-      ctx.strokeStyle = isSel ? '#f472b6' : layerColor;
-      ctx.lineWidth = isSel ? 0.14 : 0.08;
+      ctx.strokeStyle = isSel ? ui.selStroke : layerColor;
+      ctx.lineWidth = isSel ? lineWidthScreenPx(2, scale) : lineWidthScreenPx(1.25, scale);
       ctx.stroke();
       if (schLink && !isSel) {
         ctx.strokeStyle = 'rgba(192,132,252,0.88)';
-        ctx.lineWidth = 0.1;
-        ctx.setLineDash([0.35, 0.22]);
+        ctx.lineWidth = lineWidthScreenPx(1.35, scale);
+        ctx.setLineDash(dashScreenPx([5.5, 3.5], scale));
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -730,13 +792,13 @@ export function renderPcbCanvas(ctx, params) {
       const halfW = tw / 2;
 
       if (isSel) {
-        drawTrackGroupCopperFill(ctx, mergedItems, 'rgba(244,114,182,0.42)', halfW + Math.max(0.2, tw * 0.55));
-        drawTrackGroupCopperFill(ctx, mergedItems, '#f472b6', halfW + 0.04);
+        drawTrackGroupCopperFill(ctx, mergedItems, ui.selGlow, halfW + Math.max(0.2, tw * 0.55));
+        drawTrackGroupCopperFill(ctx, mergedItems, ui.selTrack, halfW + 0.04);
       } else {
         drawTrackGroupCopperFill(ctx, mergedItems, traceCol, halfW);
       }
       if (schLink && !isSel) {
-        drawTrackGroupSchDashOverlay(ctx, mergedItems, tw);
+        drawTrackGroupSchDashOverlay(ctx, mergedItems, scale);
       }
     }
 
@@ -748,7 +810,7 @@ export function renderPcbCanvas(ctx, params) {
   if (anyCopperVisible) {
     for (const v of (doc.vias || [])) {
       drawVia(ctx, v, doc, copperStack, isSelected('via', v.id),
-        v.net && schCrossNets.has(String(v.net).toLowerCase()));
+        v.net && schCrossNets.has(String(v.net).toLowerCase()), ui.selStroke, scale);
     }
   }
 
@@ -777,7 +839,7 @@ export function renderPcbCanvas(ctx, params) {
         ctx.fillStyle = padFill;
         ctx.fillRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
         ctx.strokeStyle = padStroke;
-        ctx.lineWidth = 0.05;
+        ctx.lineWidth = hairlineMm(scale, 0.85);
         ctx.strokeRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
         if (pad.num && scale > 15) {
           ctx.fillStyle = '#fff';
@@ -798,15 +860,16 @@ export function renderPcbCanvas(ctx, params) {
   }
 
   // ─── Silkscreen ───
-  drawSilkscreen(ctx, doc, boardPreview);
+  drawSilkscreen(ctx, doc, boardPreview, scale, viewport);
 
   // ─── Board frame + dimensions ───
-  drawBoardFrame(ctx, W, H);
+  drawBoardFrame(ctx, W, H, scale, ui);
 
   // ─── Ratsnest (unrouted pad islands) ───
   drawRatsnest(ctx, padCentersByNet, schCrossNets, {
     emphasize: Boolean(boardPreview.highlightUnrouted),
     selectedNets: selectedRatsnestNets,
+    scale,
   });
 
   // ─── Selection overlay ───
@@ -816,9 +879,9 @@ export function renderPcbCanvas(ctx, params) {
     if (!isSel && !schRef) continue;
     const b = footprintBBox(pl);
     const pad = isSel ? 0.3 : 0.35;
-    ctx.strokeStyle = isSel ? '#f472b6' : '#a855f7';
-    ctx.lineWidth = isSel ? 0.1 : 0.12;
-    ctx.setLineDash([0.2, 0.15]);
+    ctx.strokeStyle = isSel ? ui.selStroke : ui.schRef;
+    ctx.lineWidth = isSel ? lineWidthScreenPx(1.5, scale) : lineWidthScreenPx(1.75, scale);
+    ctx.setLineDash(dashScreenPx([5, 3.5], scale));
     ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + 2 * pad, b.maxY - b.minY + 2 * pad);
     ctx.setLineDash([]);
   }
@@ -829,11 +892,11 @@ export function renderPcbCanvas(ctx, params) {
     const by = Math.min(boxSelectRect.y1, boxSelectRect.y2);
     const bw = Math.abs(boxSelectRect.x2 - boxSelectRect.x1);
     const bh = Math.abs(boxSelectRect.y2 - boxSelectRect.y1);
-    ctx.fillStyle = 'rgba(96,165,250,0.12)';
+    ctx.fillStyle = ui.boxFill;
     ctx.fillRect(bx, by, bw, bh);
-    ctx.strokeStyle = 'rgba(96,165,250,0.7)';
-    ctx.lineWidth = 0.12;
-    ctx.setLineDash([0.3, 0.2]);
+    ctx.strokeStyle = ui.boxSelect;
+    ctx.lineWidth = lineWidthScreenPx(1.65, scale);
+    ctx.setLineDash(dashScreenPx([6, 4], scale));
     ctx.strokeRect(bx, by, bw, bh);
     ctx.setLineDash([]);
   }
@@ -859,7 +922,11 @@ export function renderPcbCanvas(ctx, params) {
     if (boardCursorMm) {
       const last = routeDraft[routeDraft.length - 1];
       const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
-      let [ex, ey] = snapInteractiveRoutePoint(prev, last, boardCursorMm[0], boardCursorMm[1]);
+      let [ex, ey] = snapInteractiveRoutePoint(prev, last, boardCursorMm[0], boardCursorMm[1], {
+        gridMm: doc.meta?.gridMm ?? 0.5,
+        snapToGrid: doc.meta?.snapToGrid !== false,
+        routeFreeAngle: doc.meta?.routeFreeAngle === true,
+      });
       const g = Number(doc.meta?.gridMm) > 0 ? Number(doc.meta.gridMm) : 0.5;
       const sn = doc.meta?.snapToGrid !== false;
       ex = snapBoard(ex, g, sn);
@@ -870,7 +937,7 @@ export function renderPcbCanvas(ctx, params) {
       ctx.strokeStyle = hexToRgba(draftColor, 0.6);
       ctx.lineWidth = trackW;
       ctx.lineCap = 'round';
-      ctx.setLineDash([0.3, 0.2]);
+      ctx.setLineDash(dashScreenPx([5, 3.5], scale));
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -884,8 +951,8 @@ export function renderPcbCanvas(ctx, params) {
     // Rubber-band to cursor
     if (boardCursorMm) ctx.lineTo(boardCursorMm[0], boardCursorMm[1]);
     ctx.strokeStyle = '#34d399';
-    ctx.lineWidth = 0.15;
-    ctx.setLineDash([0.25, 0.2]);
+    ctx.lineWidth = lineWidthScreenPx(2, scale);
+    ctx.setLineDash(dashScreenPx([5, 3.5], scale));
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke();
@@ -896,8 +963,8 @@ export function renderPcbCanvas(ctx, params) {
       ctx.moveTo(boardCursorMm[0], boardCursorMm[1]);
       ctx.lineTo(polygonDraft[0][0], polygonDraft[0][1]);
       ctx.strokeStyle = 'rgba(52,211,153,0.3)';
-      ctx.lineWidth = 0.1;
-      ctx.setLineDash([0.15, 0.15]);
+      ctx.lineWidth = lineWidthScreenPx(1.35, scale);
+      ctx.setLineDash(dashScreenPx([4, 3], scale));
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -908,8 +975,8 @@ export function renderPcbCanvas(ctx, params) {
     ctx.beginPath();
     ctx.arc(v.x, v.y, 1.5, 0, Math.PI * 2);
     ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 0.3;
-    ctx.setLineDash([0.5, 0.5]);
+    ctx.lineWidth = lineWidthScreenPx(3, scale);
+    ctx.setLineDash(dashScreenPx([6, 5], scale));
     ctx.stroke();
     ctx.setLineDash([]);
     if (scale > 5) {
@@ -925,50 +992,93 @@ export function renderPcbCanvas(ctx, params) {
 
   // ─── Crosshair cursor ───
   if (boardCursorMm) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 0.06;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(226,232,240,0.22)';
+    ctx.lineWidth = hairlineMm(scale, 0.65);
+    ctx.setLineDash(dashScreenPx([6, 5], scale));
+    ctx.lineCap = 'butt';
     ctx.beginPath();
     ctx.moveTo(boardCursorMm[0], 0);
     ctx.lineTo(boardCursorMm[0], H);
     ctx.moveTo(0, boardCursorMm[1]);
     ctx.lineTo(W, boardCursorMm[1]);
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
   ctx.restore();
 }
 
 /* ─── Grid drawing ─── */
-function drawGrid(ctx, W, H, gridMm, zoom, scale) {
-  // Adaptive grid: coarsen with step *= 5 until each line is ≥ minPixelSpacing apart on screen.
-  // 0.5px ≈ 10× finer than the old 5px floor so zoomed layouts show much denser guides.
-  const minPixelSpacing = 0.5;
+function drawGrid(ctx, W, H, gridMm, zoom, scale, ui) {
+  const minPixelSpacing = ui.gridMinSpacing;
   let step = gridMm;
   while (step * scale < minPixelSpacing) step *= 5;
 
+  const minorW = hairlineMm(scale, ui.cad ? 0.68 : 0.72);
+  const majorW = hairlineMm(scale, ui.cad ? 1.22 : 1.15);
+  const superW = hairlineMm(scale, ui.cad ? 1.45 : 1.15);
+
+  const minorCol = ui.cad ? 'rgba(255,255,255,0.045)' : 'rgba(148,163,184,0.1)';
+  const majorCol = ui.cad ? 'rgba(226,232,240,0.12)' : 'rgba(203,213,225,0.22)';
+  const superCol = ui.cad ? 'rgba(248, 250, 252, 0.2)' : majorCol;
+
+  ctx.save();
+  ctx.lineCap = 'square';
+  ctx.lineJoin = 'miter';
+
   const majorEvery = 5;
+  const superEvery = 10;
+
   let ix = 0;
   for (let gx = 0; gx <= W + 1e-9; gx += step, ix++) {
+    const sup = ui.cad && ix > 0 && ix % superEvery === 0;
+    const major = ix % majorEvery === 0;
     ctx.beginPath();
     ctx.moveTo(gx, 0);
     ctx.lineTo(gx, H);
-    ctx.strokeStyle = ix % majorEvery === 0 ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.06)';
-    ctx.lineWidth = 0.05;
+    ctx.strokeStyle = sup ? superCol : (major ? majorCol : minorCol);
+    ctx.lineWidth = sup ? superW : (major ? majorW : minorW);
     ctx.stroke();
   }
   let iy = 0;
   for (let gy = 0; gy <= H + 1e-9; gy += step, iy++) {
+    const sup = ui.cad && iy > 0 && iy % superEvery === 0;
+    const major = iy % majorEvery === 0;
     ctx.beginPath();
     ctx.moveTo(0, gy);
     ctx.lineTo(W, gy);
-    ctx.strokeStyle = iy % majorEvery === 0 ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.06)';
-    ctx.lineWidth = 0.05;
+    ctx.strokeStyle = sup ? superCol : (major ? majorCol : minorCol);
+    ctx.lineWidth = sup ? superW : (major ? majorW : minorW);
     ctx.stroke();
   }
+  ctx.restore();
+}
+
+/** Datum axes along bottom-left (0,0) — full board extents, CAD-style. */
+function drawCadDatumDecoration(ctx, W, H, scale, ui) {
+  if (!ui.cad) return;
+  const w = hairlineMm(scale, 0.52);
+  ctx.save();
+  ctx.lineCap = 'square';
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.16)';
+  ctx.lineWidth = w;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(W, 0);
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, H);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(251, 191, 36, 0.82)';
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(0.2, 1.35 / scale), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 /* ─── Via drawing ─── */
-function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
+function drawVia(ctx, v, doc, copperStack, isSel, schLink, selStroke = '#f472b6', scale = 12) {
   const diam = Number(v.diamMm) || Number(doc.meta?.defaultViaDiamMm) || 0.8;
   const drill = Number(v.drillMm) || Number(doc.meta?.defaultViaDrillMm) || 0.4;
   const ro = diam / 2;
@@ -981,7 +1091,7 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   ctx.fillStyle = `rgba(201,162,39,${isSel ? 0.5 : 0.38})`;
   ctx.fill();
   ctx.strokeStyle = '#8b6914';
-  ctx.lineWidth = 0.05;
+  ctx.lineWidth = hairlineMm(scale, 0.5);
   ctx.stroke();
 
   // Layer rings: stack is top → bottom (F.Cu … B.Cu); draw outer ring = top copper color
@@ -992,7 +1102,7 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
     ctx.beginPath();
     ctx.arc(v.x, v.y, rr, 0, Math.PI * 2);
     ctx.strokeStyle = PCB_TRACE_LAYER_COLORS[visStack[idx]] || PCB_LAYER_COLORS[visStack[idx]] || '#94a3b8';
-    ctx.lineWidth = 0.07;
+    ctx.lineWidth = lineWidthScreenPx(1.15, scale);
     ctx.globalAlpha = isSel ? 0.95 : 0.78;
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -1001,15 +1111,15 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   // Outer ring (neutral barrel edge — not net-colored)
   ctx.beginPath();
   ctx.arc(v.x, v.y, ro, 0, Math.PI * 2);
-  ctx.strokeStyle = isSel ? '#f472b6' : '#e8c48a';
-  ctx.lineWidth = 0.09;
+  ctx.strokeStyle = isSel ? selStroke : '#e8c48a';
+  ctx.lineWidth = lineWidthScreenPx(1.5, scale);
   ctx.stroke();
   if (schLink && !isSel) {
     ctx.beginPath();
     ctx.arc(v.x, v.y, ro + 0.05, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(192,132,252,0.9)';
-    ctx.lineWidth = 0.06;
-    ctx.setLineDash([0.22, 0.16]);
+    ctx.lineWidth = lineWidthScreenPx(1.05, scale);
+    ctx.setLineDash(dashScreenPx([4, 3], scale));
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -1020,7 +1130,7 @@ function drawVia(ctx, v, doc, copperStack, isSel, schLink) {
   ctx.fillStyle = '#050806';
   ctx.fill();
   ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 0.03;
+  ctx.lineWidth = hairlineMm(scale, 0.55);
   ctx.stroke();
 }
 
@@ -1075,9 +1185,23 @@ function drawSolderMask(ctx, doc, W, H) {
 }
 
 /* ─── Silkscreen ─── */
-function drawSilkscreen(ctx, doc, boardPreview) {
-  const silkW = boardPreview.boldSilk ? 0.11 : 0.075;
-  const silkCol = boardPreview.boldSilk ? '#f8fafc' : '#cbd5e1';
+function drawSilkscreen(ctx, doc, boardPreview, scale, viewport = {}) {
+  const cad = boardPreview.cadWorkbench !== false;
+  const silkW = lineWidthScreenPx(
+    boardPreview.boldSilk ? (cad ? 1.25 : 1.35) : (cad ? 1.0 : 1.05),
+    scale,
+  );
+  const silkCol = boardPreview.boldSilk
+    ? (cad ? '#f1f5f9' : '#f8fafc')
+    : (cad ? '#d8dee9' : '#cbd5e1');
+
+  const panX = Number(viewport.panX) || 0;
+  const panY = Number(viewport.panY) || 0;
+  /**
+   * Refdes: scale ~with board (mm → px via `scale`) but clamp so it stays readable zoomed in
+   * and does not dominate the view zoomed out.
+   */
+  const refMm = boardPreview.boldSilk ? 0.62 : 0.58;
 
   for (const pl of (doc.placements || [])) {
     const fp = getFootprint(pl.footprintId);
@@ -1098,39 +1222,56 @@ function drawSilkscreen(ctx, doc, boardPreview) {
       }
       ctx.globalAlpha = 1;
     }
-    // Reference designator text
+    // Reference designator: draw in device space so zoom does not inflate glyphs
     const isBot = (pl.layer || 'F.Cu') === 'B.Cu';
     const refCol = isBot ? '#d8b4fe' : (boardPreview.boldSilk ? '#ffffff' : '#e2e8f0');
-    const refSize = boardPreview.boldSilk ? 1 : 0.9;
+    const bx = pl.x;
+    const by = pl.y - 2;
+    const sx = (bx - panX) * scale;
+    const sy = (by - panY) * scale;
+    const label = (pl.ref || '') + (isBot ? ' [B]' : '');
+    let refFontPx = Math.round(refMm * scale);
+    refFontPx = Math.max(10, Math.min(18, refFontPx));
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = refCol;
-    ctx.font = `${boardPreview.boldSilk ? 'bold' : 'normal'} ${refSize}px system-ui, sans-serif`;
+    ctx.font = `${boardPreview.boldSilk ? 'bold ' : ''}${refFontPx}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
-    ctx.fillText((pl.ref || '') + (isBot ? ' [B]' : ''), pl.x, pl.y - 2);
+    ctx.fillText(label, sx, sy);
+    ctx.restore();
   }
 }
 
 /* ─── Board outline (Edge.Cuts preview) — no schematic-style title block ─── */
-function drawBoardFrame(ctx, W, H) {
+function drawBoardFrame(ctx, W, H, scale, ui) {
+  const edgeW = lineWidthScreenPx(ui.cad ? 2.5 : 2.2, scale);
+  const innerW = lineWidthScreenPx(1.5, scale);
+  const tickW = lineWidthScreenPx(1.75, scale);
+  const originW = lineWidthScreenPx(1.45, scale);
+
+  ctx.save();
+  ctx.lineCap = 'square';
+  ctx.lineJoin = 'miter';
+
   // Edge.Cuts outline
-  ctx.strokeStyle = '#fde047';
-  ctx.lineWidth = 0.32;
+  ctx.strokeStyle = ui.cad ? '#e8d35c' : '#facc15';
+  ctx.lineWidth = edgeW;
   ctx.strokeRect(0, 0, W, H);
 
-  // Inner dashed outline
-  ctx.strokeStyle = '#b45309';
-  ctx.lineWidth = 0.1;
-  ctx.setLineDash([0.35, 0.25]);
-  ctx.globalAlpha = 0.85;
+  // Inner dashed outline (keep-out / fab)
+  ctx.strokeStyle = ui.cad ? 'rgba(245, 158, 11, 0.55)' : 'rgba(217, 119, 6, 0.92)';
+  ctx.lineWidth = innerW;
+  ctx.setLineDash(dashScreenPx([9, 5.5], scale));
+  ctx.globalAlpha = ui.cad ? 0.72 : 0.88;
   ctx.strokeRect(0.22, 0.22, W - 0.44, H - 0.44);
   ctx.setLineDash([]);
   ctx.globalAlpha = 1;
 
   // Corner ticks
   const tick = 1.1;
-  ctx.strokeStyle = '#fde047';
-  ctx.lineWidth = 0.14;
-  ctx.lineCap = 'square';
+  ctx.strokeStyle = ui.cad ? '#fef3c7' : '#fde68a';
+  ctx.lineWidth = tickW;
   ctx.beginPath();
   ctx.moveTo(0, tick); ctx.lineTo(0, 0); ctx.lineTo(tick, 0);
   ctx.moveTo(W - tick, 0); ctx.lineTo(W, 0); ctx.lineTo(W, tick);
@@ -1138,40 +1279,48 @@ function drawBoardFrame(ctx, W, H) {
   ctx.moveTo(tick, H); ctx.lineTo(0, H); ctx.lineTo(0, H - tick);
   ctx.stroke();
 
-  // Origin crosshair
-  ctx.strokeStyle = '#22d3ee';
-  ctx.lineWidth = 0.1;
-  ctx.globalAlpha = 0.9;
-  ctx.beginPath();
-  ctx.moveTo(-0.35, 0); ctx.lineTo(1.15, 0);
-  ctx.moveTo(0, -0.35); ctx.lineTo(0, 1.15);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+  // Micro origin crosshair (legacy); CAD mode uses drawCadDatumDecoration instead
+  if (!ui.cad) {
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.85)';
+    ctx.lineWidth = originW;
+    ctx.globalAlpha = 0.92;
+    ctx.beginPath();
+    ctx.moveTo(-0.35, 0); ctx.lineTo(1.15, 0);
+    ctx.moveTo(0, -0.35); ctx.lineTo(0, 1.15);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
 }
 
-/* ─── Ratsnest ─── */
+/* ─── Ratsnest (airwires): neon green idle; yellow when selected or “highlight unrouted”. ─── */
 function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
   const emphasize = Boolean(options.emphasize);
   const selectedNets = options.selectedNets || new Set();
+  const scale = Number(options.scale) > 0 ? options.scale : 8;
+  const glowBlur = 14 / Math.max(1e-9, scale);
   for (const [net, pts] of padCentersByNet) {
     if (pts.length < 2) continue;
     const hub = pts[0];
     const linkNet = schCrossNets.has(String(net).toLowerCase());
     const isSel = selectedNets.has(String(net));
     if (isSel) {
-      // Selected airwire: same dash rhythm as idle, slightly wider + brighter (no solid “halo” line)
-      ctx.strokeStyle = linkNet ? 'rgba(237, 222, 255, 0.98)' : 'rgba(214, 178, 255, 0.95)';
-      ctx.lineWidth = linkNet ? 0.14 : 0.1;
-      ctx.setLineDash([0.4, 0.25]);
+      ctx.strokeStyle = linkNet ? 'rgba(255, 255, 80, 0.98)' : 'rgba(255, 255, 0, 0.96)';
+      ctx.lineWidth = linkNet ? lineWidthScreenPx(2.35, scale) : lineWidthScreenPx(1.95, scale);
+      ctx.setLineDash(dashScreenPx([5.5, 3], scale));
     } else if (emphasize) {
-      ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
-      ctx.lineWidth = linkNet ? 0.24 : 0.18;
-      ctx.setLineDash([0.45, 0.22]);
+      ctx.strokeStyle = linkNet ? 'rgba(255, 255, 100, 0.97)' : 'rgba(255, 255, 0, 0.94)';
+      ctx.lineWidth = linkNet ? lineWidthScreenPx(3.1, scale) : lineWidthScreenPx(2.55, scale);
+      ctx.setLineDash(dashScreenPx([6, 3], scale));
     } else {
-      ctx.strokeStyle = linkNet ? 'rgba(192,132,252,0.55)' : 'rgba(168,85,247,0.22)';
-      ctx.lineWidth = linkNet ? 0.14 : 0.08;
-      ctx.setLineDash([0.4, 0.25]);
+      ctx.strokeStyle = linkNet ? 'rgba(57, 255, 20, 0.92)' : 'rgba(0, 255, 170, 0.88)';
+      ctx.lineWidth = linkNet ? lineWidthScreenPx(2.1, scale) : lineWidthScreenPx(1.65, scale);
+      ctx.setLineDash(dashScreenPx([5.5, 2.8], scale));
     }
+    const hotGlow = isSel || emphasize;
+    ctx.shadowBlur = hotGlow ? glowBlur * 1.15 : glowBlur;
+    ctx.shadowColor = hotGlow ? 'rgba(255, 255, 0, 0.75)' : 'rgba(0, 255, 140, 0.65)';
     for (let i = 1; i < pts.length; i++) {
       ctx.beginPath();
       ctx.moveTo(hub[0], hub[1]);
@@ -1179,22 +1328,27 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
       ctx.stroke();
     }
     ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
   }
-  // Yellow pad dots help “unrouted” mode, but clash with a selected airwire (reads as a thick yellow trace).
   if (emphasize && selectedNets.size === 0) {
-    const r = 0.22;
+    const r = 0.28;
+    ctx.shadowBlur = glowBlur * 1.1;
+    ctx.shadowColor = 'rgba(255, 255, 0, 0.7)';
     for (const [, pts] of padCentersByNet) {
       if (pts.length < 2) continue;
       for (const [x, y] of pts) {
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(250, 204, 21, 0.4)';
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.62)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)';
-        ctx.lineWidth = 0.05;
+        ctx.strokeStyle = 'rgba(255, 255, 120, 0.95)';
+        ctx.lineWidth = lineWidthScreenPx(1.2, scale);
         ctx.stroke();
       }
     }
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
   }
 }
 
@@ -1205,7 +1359,7 @@ function drawMeasureTool(ctx, start, end, cursor, scale) {
     ctx.moveTo(start[0], start[1]);
     ctx.lineTo(end[0], end[1]);
     ctx.strokeStyle = '#fbbf24';
-    ctx.lineWidth = 0.12;
+    ctx.lineWidth = lineWidthScreenPx(1.65, scale);
     ctx.stroke();
 
     // Endpoints
@@ -1215,7 +1369,7 @@ function drawMeasureTool(ctx, start, end, cursor, scale) {
       ctx.fillStyle = '#fef08a';
       ctx.fill();
       ctx.strokeStyle = '#b45309';
-      ctx.lineWidth = 0.05;
+      ctx.lineWidth = lineWidthScreenPx(1, scale);
       ctx.stroke();
     }
 
@@ -1233,8 +1387,8 @@ function drawMeasureTool(ctx, start, end, cursor, scale) {
     ctx.moveTo(start[0], start[1]);
     ctx.lineTo(cursor[0], cursor[1]);
     ctx.strokeStyle = '#fbbf24';
-    ctx.lineWidth = 0.1;
-    ctx.setLineDash([0.35, 0.22]);
+    ctx.lineWidth = lineWidthScreenPx(1.45, scale);
+    ctx.setLineDash(dashScreenPx([5.5, 3.5], scale));
     ctx.globalAlpha = 0.85;
     ctx.stroke();
     ctx.setLineDash([]);
@@ -1245,7 +1399,7 @@ function drawMeasureTool(ctx, start, end, cursor, scale) {
     ctx.fillStyle = '#fef08a';
     ctx.fill();
     ctx.strokeStyle = '#b45309';
-    ctx.lineWidth = 0.05;
+    ctx.lineWidth = lineWidthScreenPx(1, scale);
     ctx.stroke();
   }
 }

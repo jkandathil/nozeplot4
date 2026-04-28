@@ -84,6 +84,7 @@ export function migratePcbDoc(doc) {
     const g = Number(next.meta.gridMm);
     next.meta.gridMm = PCB_GRID_PRESETS_MM.includes(g) ? g : 0.5;
     if (typeof next.meta.snapToGrid !== 'boolean') next.meta.snapToGrid = true;
+    if (typeof next.meta.routeFreeAngle !== 'boolean') next.meta.routeFreeAngle = false;
     next.meta.designRules = {
         ...DEFAULT_DESIGN_RULES,
         ...(next.meta.designRules && typeof next.meta.designRules === 'object' ? next.meta.designRules : {}),
@@ -119,6 +120,8 @@ export function emptyPcbDoc() {
             defaultViaDiamMm: 0.8,
             gridMm: 0.5,
             snapToGrid: true,
+            /** If true, route tool uses arbitrary angles + per-axis grid snap (legacy). Default false = 45°/90° octilinear. */
+            routeFreeAngle: false,
             /** Per-copper-layer canvas visibility (Eagle-style layer display). */
             layerVisibility: {},
             /** Professional DRC inputs (extensible). */

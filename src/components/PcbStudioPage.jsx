@@ -62,6 +62,7 @@ import {
 import {
     snapBoard,
     snapInteractiveRoutePoint,
+    simplifyCollinearTrackPoints,
     pickTrackAt,
     pickViaAt,
     pickPolygonAt,
@@ -290,6 +291,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         brightInactiveLayers: true,
         boldSilk: true,
         highlightUnrouted: false,
+        cadWorkbench: true,
     });
     const [boardCursorMm, setBoardCursorMm] = useState(null);
     const [showBoardGrid, setShowBoardGrid] = useState(true);
@@ -330,6 +332,15 @@ function PcbStudioPage({ onBackToSchematic }) {
     const snap = useCallback(
         (v) => snapBoard(v, doc.meta?.gridMm ?? 0.5, doc.meta?.snapToGrid !== false),
         [doc.meta?.gridMm, doc.meta?.snapToGrid],
+    );
+
+    const routeSnapOpts = useMemo(
+        () => ({
+            gridMm: doc.meta?.gridMm ?? 0.5,
+            snapToGrid: doc.meta?.snapToGrid !== false,
+            routeFreeAngle: doc.meta?.routeFreeAngle === true,
+        }),
+        [doc.meta?.gridMm, doc.meta?.snapToGrid, doc.meta?.routeFreeAngle],
     );
 
     const docRef = useRef(doc);
@@ -814,14 +825,16 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
     }, [doc]);
 
-    /** Remove every routed copper trace (all layers). Footprints, vias, zones unchanged; Ctrl+Z restores. */
+    /** Remove every routed copper trace and every via (all layers). Footprints, zones unchanged; Ctrl+Z restores. */
     const handleClearAllTracks = useCallback(() => {
-        if (!(doc.tracks?.length > 0)) return;
+        const hasTracks = (doc.tracks?.length ?? 0) > 0;
+        const hasVias = (doc.vias?.length ?? 0) > 0;
+        if (!hasTracks && !hasVias) return;
         undoMgrRef.current.push(doc);
         routeNetRef.current = '';
         setRouteDraft(null);
-        setSelected((prev) => prev.filter((s) => s.kind !== 'track'));
-        setDoc((d) => ({ ...d, tracks: [] }));
+        setSelected((prev) => prev.filter((s) => s.kind !== 'track' && s.kind !== 'via'));
+        setDoc((d) => ({ ...d, tracks: [], vias: [] }));
     }, [doc]);
 
     const handleAddGndPlane = useCallback(() => {
@@ -953,7 +966,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             layer: activeLayer,
             widthMm: doc.meta?.defaultTrackMm || 0.35,
             net: routeNetRef.current || '',
-            points: routeDraft,
+            points: simplifyCollinearTrackPoints(routeDraft),
         };
         const bad = getCopperViolationsForProposedTrack(doc, getFootprint, newTrack);
         if (bad.length) {
@@ -989,9 +1002,11 @@ function PcbStudioPage({ onBackToSchematic }) {
         if (routeDraft && routeDraft.length >= 1) {
             const last = routeDraft[routeDraft.length - 1];
             const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
-            [cx, cy] = snapInteractiveRoutePoint(prev, last, cursor[0], cursor[1]);
+            [cx, cy] = snapInteractiveRoutePoint(prev, last, cursor[0], cursor[1], routeSnapOpts);
         }
-        const pt = [snap(cx), snap(cy)];
+        const pt = routeDraft && routeDraft.length >= 1
+            ? [cx, cy]
+            : [snap(cx), snap(cy)];
         const stack = activeCopperLayerIds(doc);
         let targetLayer;
         if (explicitTarget && stack.includes(explicitTarget)) {
@@ -1006,7 +1021,7 @@ function PcbStudioPage({ onBackToSchematic }) {
 
         // If routing, commit current segment up to the via point, add via, start new draft on other layer
         if (routeDraft && routeDraft.length >= 1) {
-            const draftWithVia = [...routeDraft, pt];
+            const draftWithVia = simplifyCollinearTrackPoints([...routeDraft, pt]);
             const net = routeNetRef.current || '';
             const newTrack = {
                 id: newId('tr'),
@@ -1064,7 +1079,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             setDoc((d) => ({ ...d, vias: [...(d.vias || []), newVia] }));
         }
         setActiveLayer(targetLayer);
-    }, [routeDraft, doc, activeLayer, snap]);
+    }, [routeDraft, doc, activeLayer, snap, routeSnapOpts]);
 
     useEffect(() => {
         // Don't capture keys when an input/select/textarea is focused
@@ -1441,16 +1456,16 @@ function PcbStudioPage({ onBackToSchematic }) {
             return;
         }
 
-        /* Route tool — free-angle routing from last vertex toward cursor, then grid snap */
+        /* Route tool — octilinear (45°/90°) from last vertex toward cursor, quantized on-grid along the leg */
         if (tool === 'route') {
             let ax = mx;
             let ay = my;
             if (routeDraft?.length >= 1) {
                 const last = routeDraft[routeDraft.length - 1];
                 const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
-                [ax, ay] = snapInteractiveRoutePoint(prev, last, mx, my);
+                [ax, ay] = snapInteractiveRoutePoint(prev, last, mx, my, routeSnapOpts);
             }
-            const spt = [snap(ax), snap(ay)];
+            const spt = routeDraft?.length >= 1 ? [ax, ay] : [snap(ax), snap(ay)];
             if (!routeDraft) {
                 // Starting a new route — pick up net from pad or trace ON THE ACTIVE LAYER only
                 routeNetRef.current = findPadNetAtBoard(doc, mx, my, 0.12, activeLayer) || findTrackNetAtPoint(doc, mx, my, 0.45, activeLayer) || '';
@@ -1473,7 +1488,13 @@ function PcbStudioPage({ onBackToSchematic }) {
                 if (landOnSameNetPad) {
                     autoCommit = true; // auto-commit on same-net pad
                 } else if (trSnap) {
-                    finalPt = [snap(trSnap.x), snap(trSnap.y)];
+                    finalPt = snapInteractiveRoutePoint(
+                        routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null,
+                        last,
+                        trSnap.x,
+                        trSnap.y,
+                        routeSnapOpts,
+                    );
                     autoCommit = true; // auto-commit on same-net trace (T-junction)
                 }
 
@@ -1493,7 +1514,7 @@ function PcbStudioPage({ onBackToSchematic }) {
 
                 if (autoCommit) {
                     // Landing on same-net copper: add final point and commit immediately
-                    const commitDraft = [...routeDraft, finalPt];
+                    const commitDraft = simplifyCollinearTrackPoints([...routeDraft, finalPt]);
                     if (commitDraft.length >= 2) {
                         const newTrack = {
                             id: newId('tr'),
@@ -1579,7 +1600,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                 setBoxSelectRect(null);
             }
         }
-    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint, activeLayer, selected]);
+    }, [tool, doc, pcbViewport, W, H, snap, routeSnapOpts, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint, activeLayer, selected]);
 
     /* ── Double-click: commit route/polygon ── */
     const onCanvasDoubleClick = useCallback((ev) => {
@@ -1922,9 +1943,9 @@ function PcbStudioPage({ onBackToSchematic }) {
                 <button
                     type="button"
                     className="pcb-topbtn pcb-topbtn--clear-traces"
-                    disabled={!(doc.tracks?.length > 0)}
+                    disabled={!((doc.tracks?.length ?? 0) > 0 || (doc.vias?.length ?? 0) > 0)}
                     onClick={handleClearAllTracks}
-                    title="Delete all copper trace segments on every layer. Vias, footprints, and copper pours are kept. Undo with Ctrl+Z (or the undo button)."
+                    title="Delete all copper trace segments and all vias on every layer. Footprints and copper pours are kept. Undo with Ctrl+Z (or the undo button)."
                 >
                     <Trash2 size={14} /> Clear traces
                 </button>
@@ -2225,6 +2246,14 @@ function PcbStudioPage({ onBackToSchematic }) {
                     <label className="pcb-field-row">
                         <input
                             type="checkbox"
+                            checked={boardPreview.cadWorkbench !== false}
+                            onChange={(e) => setBoardPreview((p) => ({ ...p, cadWorkbench: e.target.checked }))}
+                        />
+                        CAD workbench (grid, selection)
+                    </label>
+                    <label className="pcb-field-row">
+                        <input
+                            type="checkbox"
                             checked={boardPreview.solderMask}
                             onChange={(e) => setBoardPreview((p) => ({ ...p, solderMask: e.target.checked }))}
                         />
@@ -2357,6 +2386,17 @@ function PcbStudioPage({ onBackToSchematic }) {
                             onChange={(e) => setDoc((d) => ({ ...d, meta: { ...d.meta, snapToGrid: e.target.checked } }))}
                         />
                         Snap to grid
+                    </label>
+                    <label
+                        className="pcb-field-row"
+                        title="Unchecked: 45°/90° octilinear legs (Eagle/KiCad style), snapped along each leg. Checked: any angle + per-axis grid snap."
+                    >
+                        <input
+                            type="checkbox"
+                            checked={doc.meta.routeFreeAngle === true}
+                            onChange={(e) => setDoc((d) => ({ ...d, meta: { ...d.meta, routeFreeAngle: e.target.checked } }))}
+                        />
+                        Free-angle route (legacy)
                     </label>
                     <label className="pcb-field-col">
                         New track width (mm)
@@ -2710,7 +2750,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                 </aside>
 
                 <div className="pcb-stage">
-                    <div className="pcb-canvas-wrap" ref={canvasWrapRef}>
+                    <div
+                        className={`pcb-canvas-wrap${boardPreview.cadWorkbench !== false ? ' pcb-canvas-wrap--cad' : ''}`}
+                        ref={canvasWrapRef}
+                    >
                         <canvas
                             ref={canvasRef}
                             className={`pcb-board-canvas ${cursorClass}`}
@@ -2722,7 +2765,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                         />
                         <p className="pcb-hint">
                             Scroll=zoom &middot; Right-drag=pan &middot; Grid {doc.meta.gridMm ?? 0.5}mm
-                            {tool === 'route' && ' · Click=add point · Dbl-click/Enter/right=finish · V=via+next layer · Shift+V=prev layer · Esc=cancel'}
+                            {tool === 'route' && ' · Click=add 45°/90° leg · Dbl-click/Enter/right=finish · V=via+next layer · Shift+V=prev layer · Esc=cancel'}
                             {tool === 'polygon' && ' · Click=add vertex · Dbl-click/Enter=close · Esc=cancel'}
                             {tool === 'select' && ' · Click=select · Empty-drag / Alt-drag=box · Shift=add to selection · Drag selection=move · R=rotate · D=dupe · Del=delete'}
                             {tool === 'boxselect' && ' · Drag rectangle over anything to select · Shift=add · Click=point pick · Then S + drag to move'}

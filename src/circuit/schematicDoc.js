@@ -355,9 +355,10 @@ export function removeLabel(doc, labelId) {
 
 /**
  * Drop consecutive duplicate vertices, remove collinear Manhattan
- * middles (straightens A–B–C on one axis), then delete wires with
- * fewer than two points. Clears many spurious “junction dots” caused
- * by stacked vertices on the same grid point.
+ * middles (straightens A–B–C on one axis), insert bends on any
+ * diagonal segments, then straighten again. Deletes wires with fewer
+ * than two points. Helps junction-dot logic (geometric mode) by
+ * collapsing stacked wire vertices; net labels are not “branches”.
  */
 export function cleanupWireGeometry(doc) {
     if (!doc?.wires?.length) return { removedWires: 0, simplifiedWires: 0 };
@@ -409,12 +410,20 @@ export function cleanupWireGeometry(doc) {
     const next = [];
     for (const w of doc.wires) {
         const before = (w.points || []).length;
-        const pts = straighten((w.points || []).map((p) => [p[0], p[1]]));
+        const raw = (w.points || []).map((p) => [p[0], p[1]]);
+        let pts = straighten(raw);
+        if (pts.length >= 2) {
+            rekinkManhattan(pts);
+            pts = straighten(pts);
+        }
         if (pts.length < 2) {
             removedWires++;
             continue;
         }
-        if (pts.length !== before) simplifiedWires++;
+        const changed =
+            pts.length !== before
+            || pts.some((p, i) => p[0] !== (w.points[i]?.[0]) || p[1] !== (w.points[i]?.[1]));
+        if (changed) simplifiedWires++;
         next.push({ ...w, points: pts });
     }
     doc.wires = next;
@@ -1017,21 +1026,26 @@ function resolveNetsLabelMode(doc) {
         if (!/^n\d+$/.test(nm)) nodeLabels.set(nid, nm);
     }
 
-    // Junctions: any coord where ≥3 label/pin vertices coincide.
-    const incidence = new Map();
+    // Junctions: ≥3 distinct “branches” (pin vs net name). Count each
+    // net label name once per coord so pin + duplicate labels are not 3×.
+    const junctionSets = new Map();
+    function jAdd(k, id) {
+        if (!junctionSets.has(k)) junctionSets.set(k, new Set());
+        junctionSets.get(k).add(id);
+    }
     for (const lab of doc.labels) {
         const k = coordKey(lab.x, lab.y);
-        incidence.set(k, (incidence.get(k) || 0) + 1);
+        jAdd(k, `n:${String(lab.name).toLowerCase()}`);
     }
     for (const comp of doc.components) {
         for (const pin of componentPins(comp)) {
             const k = coordKey(pin.x, pin.y);
-            incidence.set(k, (incidence.get(k) || 0) + 1);
+            jAdd(k, `p:${comp.id}:${pin.id}`);
         }
     }
     const junctions = [];
-    for (const [k, n] of incidence) {
-        if (n >= 3) {
+    for (const [k, set] of junctionSets) {
+        if (set.size >= 3) {
             const [x, y] = k.split('|').map(Number);
             junctions.push({ x, y });
         }
@@ -1068,6 +1082,15 @@ function resolveNetsGeometricMode(doc) {
             addVertex({ kind: 'wire', x, y, wireId: wire.id });
         }
     }
+    for (const lab of doc.labels || []) {
+        addVertex({
+            kind: 'label',
+            x: lab.x,
+            y: lab.y,
+            labelId: lab.id,
+            name: String(lab.name),
+        });
+    }
 
     const p = ufMake(vertices.length);
 
@@ -1077,11 +1100,11 @@ function resolveNetsGeometricMode(doc) {
     // routed wires shouldn't collapse unrelated nets just because
     // they share a grid cell mid-path).
     const labelsByCoord = new Map(); // coordKey → Set<name>
-    for (const v of vertices) {
-        if (v.kind !== 'label') continue;
-        const k = coordKey(v.x, v.y);
+    for (const lab of doc.labels || []) {
+        const k = coordKey(lab.x, lab.y);
+        const nm = String(lab.name).toLowerCase();
         if (!labelsByCoord.has(k)) labelsByCoord.set(k, new Set());
-        labelsByCoord.get(k).add(v.name);
+        labelsByCoord.get(k).add(nm);
     }
     function labelsAt(x, y) { return labelsByCoord.get(coordKey(x, y)); }
     function coordsCompatible(aKey, bKey) {
@@ -1225,16 +1248,22 @@ function resolveNetsGeometricMode(doc) {
         nodeLabels.set(id, v.name);
     }
 
-    // 7) Junction dots: any coord with ≥3 distinct incident segments
-    //    (counting each wire leg and each pin as an incidence).
-    const incidence = new Map(); // coordKey → count
+    // 7) Junction dots: ≥3 distinct branches (pins + wire bodies).
+    // Labels name nets but are not extra branches — avoids a false dot
+    // at every pin that also has a wire-tool label.
+    const junctionSets = new Map();
+    function gjAdd(k, id) {
+        if (!junctionSets.has(k)) junctionSets.set(k, new Set());
+        junctionSets.get(k).add(id);
+    }
     for (const v of vertices) {
         const k = coordKey(v.x, v.y);
-        incidence.set(k, (incidence.get(k) || 0) + 1);
+        if (v.kind === 'pin') gjAdd(k, `p:${v.comp.id}:${v.pinId}`);
+        else if (v.kind === 'wire') gjAdd(k, `w:${v.wireId}`);
     }
     const junctions = [];
-    for (const [k, n] of incidence) {
-        if (n >= 3) {
+    for (const [k, set] of junctionSets) {
+        if (set.size >= 3) {
             const [x, y] = k.split('|').map(Number);
             junctions.push({ x, y });
         }

@@ -1030,7 +1030,10 @@
     min-height: 0;
     overflow: hidden;
     padding: 0;
-    background: #0a0f18;
+    background: linear-gradient(165deg, #0a1018 0%, #06090e 55%, #05070c 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.045),
+        inset 0 0 0 1px rgba(15, 23, 42, 0.85);
 }
 
 /* Canvas 2D board element */
@@ -1039,6 +1042,22 @@
     width: 100%;
     height: 100%;
     cursor: crosshair;
+    vertical-align: top;
+    touch-action: none;
+}
+
+/* Pro CAD viewport: inner instrument bezel (pointer-events none). */
+.pcb-canvas-wrap--cad::before {
+    content: '';
+    position: absolute;
+    inset: 5px;
+    border-radius: 3px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    box-shadow:
+        inset 0 0 0 1px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    pointer-events: none;
+    z-index: 3;
 }
 
 .pcb-board-canvas.pcb-cursor-select {

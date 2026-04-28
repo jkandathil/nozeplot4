@@ -37,6 +37,104 @@ function mulberry32(seed) {
 
 function snap(v) { return Math.round(v / GRID) * GRID; }
 
+/**
+ * Deterministic initial placement from connectivity (BFS depth from GND)
+ * instead of random scatter — much less wire crossing / clustering for
+ * typical analog netlists.
+ */
+function seedLayeredFromGround(parsed, W, H, nodeActors, compActors) {
+    const n = parsed.nNodes;
+    if (n <= 0) return;
+    const adj = Array.from({ length: n }, () => []);
+    for (const el of parsed.elements || []) {
+        const pins = collectPinNodes(el);
+        const uniq = [...new Set(pins.filter((x) => x != null && x >= 0 && x < n))];
+        for (let a = 0; a < uniq.length; a++) {
+            for (let b = a + 1; b < uniq.length; b++) {
+                adj[uniq[a]].push(uniq[b]);
+                adj[uniq[b]].push(uniq[a]);
+            }
+        }
+    }
+    const layer = new Array(n).fill(-1);
+    const q = [];
+    if (nodeActors.has(0)) {
+        layer[0] = 0;
+        q.push(0);
+    }
+    for (let qi = 0; qi < q.length; qi++) {
+        const u = q[qi];
+        for (const v of adj[u] || []) {
+            if (v < 0 || v >= n) continue;
+            if (layer[v] < 0) {
+                layer[v] = layer[u] + 1;
+                q.push(v);
+            }
+        }
+    }
+    let maxL = 0;
+    for (let i = 0; i < n; i++) {
+        if (layer[i] > maxL) maxL = layer[i];
+    }
+    const orphanLayer = maxL + 2;
+    for (let i = 0; i < n; i++) {
+        if (layer[i] < 0) layer[i] = orphanLayer;
+    }
+    maxL = 0;
+    for (let i = 0; i < n; i++) {
+        if (layer[i] > maxL) maxL = layer[i];
+    }
+
+    const byLayer = new Map();
+    for (let i = 0; i < n; i++) {
+        const L = layer[i];
+        if (!byLayer.has(L)) byLayer.set(L, []);
+        byLayer.get(L).push(i);
+    }
+    const stepX = Math.min(150, Math.max(95, (W - 200) / Math.max(maxL, 1)));
+    const sortedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+    for (const L of sortedLayers) {
+        const nodes = byLayer.get(L);
+        nodes.sort((a, b) => a - b);
+        const count = nodes.length;
+        const vSpan = Math.max(70, (H - 200) / Math.max(count, 1));
+        nodes.forEach((nid, j) => {
+            if (nid === 0) return;
+            const na = nodeActors.get(nid);
+            if (!na) return;
+            na.x = 90 + L * stepX;
+            na.y = 90 + (j + 0.5) * vSpan;
+        });
+    }
+    const g = nodeActors.get(0);
+    if (g) {
+        g.x = W / 2;
+        g.y = H - 60;
+    }
+    for (const c of compActors) {
+        const pins = collectPinNodes(c.element);
+        const uniq = [...new Set(pins.filter((x) => x != null && x >= 0 && x < n))];
+        let sx = 0;
+        let sy = 0;
+        let k = 0;
+        for (const nid of uniq) {
+            if (nid === 0) continue;
+            const na = nodeActors.get(nid);
+            if (!na) continue;
+            sx += na.x;
+            sy += na.y;
+            k++;
+        }
+        if (k === 0) {
+            c.x = W * 0.5;
+            c.y = H * 0.45;
+        } else {
+            c.x = sx / k;
+            c.y = sy / k;
+        }
+    }
+}
+
 /** Collect every node index that the given element connects to. */
 function collectPinNodes(el) {
     switch (el.type) {
@@ -84,8 +182,8 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
     const nodeLabels = parsed.nodeNames || [];
     for (let i = 0; i < parsed.nNodes; i++) {
         nodeActors.set(i, {
-            x: W * (0.2 + 0.6 * rand()),
-            y: H * (0.2 + 0.6 * rand()),
+            x: W * 0.5,
+            y: H * 0.45,
             vx: 0, vy: 0,
             pinned: i === 0,
             isGround: i === 0,
@@ -97,12 +195,14 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
     nodeActors.get(0).y = H - 60;
 
     const compActors = parsed.elements.map((el, i) => ({
-        x: W * (0.25 + 0.5 * rand()),
-        y: H * (0.25 + 0.5 * rand()),
+        x: W * 0.5,
+        y: H * 0.45,
         vx: 0, vy: 0,
         element: el,
         index: i,
     }));
+
+    seedLayeredFromGround(parsed, W, H, nodeActors, compActors);
 
     const edges = [];
     for (const c of compActors) {
@@ -112,9 +212,9 @@ export function layoutSchematic(parsed, { width = 1020, height = 620, seed = 1 }
         }
     }
 
-    const nIter = 400;
-    const kAttract = 0.045;
-    const kRepel = 2600;
+    const nIter = 220;
+    const kAttract = 0.055;
+    const kRepel = 1500;
     const damping = 0.82;
     const maxStep = 16;
     const all = [...nodeActors.values(), ...compActors];

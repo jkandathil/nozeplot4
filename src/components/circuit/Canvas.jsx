@@ -940,7 +940,7 @@ export default function Canvas({
                 </ToolButton>
                 <ToolButton
                     onClick={() => onDocChange((d) => { cleanupWireGeometry(d); })}
-                    title="Tidy wires — merge duplicate vertices & straighten collinear bends (removes many false junction dots)"
+                    title="Tidy wires — dedupe vertices, straighten collinear bends, orthogonalize diagonals"
                 >
                     <Sparkles size={14} />
                 </ToolButton>
