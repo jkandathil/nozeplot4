@@ -1171,6 +1171,15 @@ function PcbStudioPage({ onBackToSchematic }) {
         return null;
     }, [doc, selectionFilter, ratsnestPadCentersByNet]);
 
+    // Must be declared before any hook that lists it in a dependency array (TDZ if below useEffect).
+    const selectedRatsnestNets = useMemo(() => {
+        const nets = new Set();
+        for (const s of selected) {
+            if (s.kind === 'ratsnest' && s.net) nets.add(String(s.net));
+        }
+        return nets;
+    }, [selected]);
+
     /* ── Canvas → board coordinate helper (used in all mouse handlers) ── */
     const canvasToBoardAt = useCallback((ev) => {
         const canvas = canvasRef.current;
@@ -1421,15 +1430,6 @@ function PcbStudioPage({ onBackToSchematic }) {
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
         selectedRatsnestNets,
     ]);
-
-    // Derive selected ratsnest nets for highlighting
-    const selectedRatsnestNets = useMemo(() => {
-        const nets = new Set();
-        for (const s of selected) {
-            if (s.kind === 'ratsnest' && s.net) nets.add(String(s.net));
-        }
-        return nets;
-    }, [selected]);
 
     // Stable refs for render loop (avoids restarting rAF)
     const renderStateRef = useRef({});
