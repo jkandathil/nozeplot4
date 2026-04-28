@@ -469,6 +469,7 @@ export function renderPcbCanvas(ctx, params) {
     measureEnd = null,
     boardCursorMm = null,
     lockedLayers = new Set(),
+    selectedRatsnestNets = new Set(),
     dpr = window.devicePixelRatio || 1,
   } = params;
 
@@ -658,6 +659,7 @@ export function renderPcbCanvas(ctx, params) {
   // ─── Ratsnest (unrouted pad islands) ───
   drawRatsnest(ctx, padCentersByNet, schCrossNets, {
     emphasize: Boolean(boardPreview.highlightUnrouted),
+    selectedNets: selectedRatsnestNets,
   });
 
   // ─── Selection overlay ───
@@ -714,7 +716,7 @@ export function renderPcbCanvas(ctx, params) {
       ctx.fillStyle = '#f8fafc';
       ctx.fillText(lab, tx, ty);
     }
-    // Rubber-band to snapped corner (same 45° logic as click placement)
+    // Rubber-band to cursor (free-angle routing)
     if (boardCursorMm) {
       const last = routeDraft[routeDraft.length - 1];
       const prev = routeDraft.length >= 2 ? routeDraft[routeDraft.length - 2] : null;
@@ -1013,11 +1015,20 @@ function drawBoardFrame(ctx, W, H) {
 /* ─── Ratsnest ─── */
 function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
   const emphasize = Boolean(options.emphasize);
+  const selectedNets = options.selectedNets || new Set();
   for (const [net, pts] of padCentersByNet) {
     if (pts.length < 2) continue;
     const hub = pts[0];
     const linkNet = schCrossNets.has(String(net).toLowerCase());
-    if (emphasize) {
+    const isSel = selectedNets.has(String(net));
+    if (isSel) {
+      // Bright highlighted style for selected airwires
+      ctx.strokeStyle = '#fbbf24'; // amber-400
+      ctx.lineWidth = 0.32;
+      ctx.setLineDash([0.5, 0.18]);
+      ctx.shadowColor = 'rgba(251,191,36,0.6)';
+      ctx.shadowBlur = 3;
+    } else if (emphasize) {
       ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
       ctx.lineWidth = linkNet ? 0.24 : 0.18;
       ctx.setLineDash([0.45, 0.22]);
@@ -1033,18 +1044,23 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
       ctx.stroke();
     }
     ctx.setLineDash([]);
+    if (isSel) { ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; }
   }
-  if (emphasize) {
+  // Draw endpoint dots for emphasized or selected nets
+  const drawDots = emphasize || selectedNets.size > 0;
+  if (drawDots) {
     const r = 0.28;
-    for (const [, pts] of padCentersByNet) {
+    for (const [net, pts] of padCentersByNet) {
       if (pts.length < 2) continue;
+      const isSel = selectedNets.has(String(net));
+      if (!emphasize && !isSel) continue;
       for (const [x, y] of pts) {
         ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(250,204,21,0.55)';
+        ctx.arc(x, y, isSel ? 0.35 : r, 0, Math.PI * 2);
+        ctx.fillStyle = isSel ? 'rgba(251,191,36,0.7)' : 'rgba(250,204,21,0.55)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(251,191,36,0.9)';
-        ctx.lineWidth = 0.06;
+        ctx.strokeStyle = isSel ? '#f59e0b' : 'rgba(251,191,36,0.9)';
+        ctx.lineWidth = isSel ? 0.1 : 0.06;
         ctx.stroke();
       }
     }

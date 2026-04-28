@@ -107,7 +107,7 @@ import './PcbStudioPage.css';
 const PCB_STORAGE_KEY = 'nozePcbDoc:v1';
 
 function selectionKey(sel) {
-    return `${sel.kind}:${sel.id}`;
+    return `${sel.kind}:${sel.id || sel.net || ''}`;
 }
 
 function toggleSelectionItem(list, item) {
@@ -274,6 +274,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         track: true,
         via: true,
         polygon: true,
+        ratsnest: true,
     });
     const [measureStart, setMeasureStart] = useState(null);
     const [measureEnd, setMeasureEnd] = useState(null);
@@ -1155,8 +1156,20 @@ function PcbStudioPage({ onBackToSchematic }) {
                 }
             }
         }
+        // Ratsnest (airwire) hit-testing — check distance to each hub→spoke line
+        if (selectionFilter.ratsnest && ratsnestPadCentersByNet.size > 0) {
+            const airTol = 0.35; // mm tolerance for clicking an airwire
+            for (const [net, pts] of ratsnestPadCentersByNet) {
+                if (pts.length < 2) continue;
+                const hub = pts[0];
+                for (let i = 1; i < pts.length; i++) {
+                    const d = pointToSegmentDistance([mx, my], hub, pts[i]);
+                    if (d <= airTol) return { kind: 'ratsnest', net: String(net) };
+                }
+            }
+        }
         return null;
-    }, [doc, selectionFilter]);
+    }, [doc, selectionFilter, ratsnestPadCentersByNet]);
 
     /* ── Canvas → board coordinate helper (used in all mouse handlers) ── */
     const canvasToBoardAt = useCallback((ev) => {
@@ -1213,7 +1226,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             return;
         }
 
-        /* Route tool — KiCad-style 45° corner snap from last vertex toward cursor, then grid snap */
+        /* Route tool — free-angle routing from last vertex toward cursor, then grid snap */
         if (tool === 'route') {
             let ax = mx;
             let ay = my;
@@ -1406,7 +1419,17 @@ function PcbStudioPage({ onBackToSchematic }) {
         doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
         boardPreview, showBoardGrid, drcViolations, ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
+        selectedRatsnestNets,
     ]);
+
+    // Derive selected ratsnest nets for highlighting
+    const selectedRatsnestNets = useMemo(() => {
+        const nets = new Set();
+        for (const s of selected) {
+            if (s.kind === 'ratsnest' && s.net) nets.add(String(s.net));
+        }
+        return nets;
+    }, [selected]);
 
     // Stable refs for render loop (avoids restarting rAF)
     const renderStateRef = useRef({});
@@ -1415,6 +1438,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         boardPreview, showBoardGrid, drcViolations,
         padCentersByNet: ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
+        selectedRatsnestNets,
     };
 
     // Single persistent rAF loop — never restarts
