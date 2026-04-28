@@ -175,13 +175,23 @@ function footprintBBox(pl) {
     return { minX, maxX, minY, maxY };
 }
 
-/** Net name from a pad under the pointer (schematic → PCB pad net table). */
-function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12) {
+/**
+ * Net name from a pad under the pointer (schematic → PCB pad net table).
+ * @param {string} [routeLayer] — if provided, only match pads on this copper layer
+ *                                 (SMD pads live on their placement layer; TH pads match any layer).
+ */
+function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12, routeLayer = null) {
     for (const pl of doc.placements || []) {
         const fp = getFootprint(pl.footprintId);
         if (!fp?.pads) continue;
+        const plLayer = pl.layer || 'F.Cu';
         const nets = pl.padNets || {};
         for (const pad of fp.pads) {
+            // Layer check: SMD pads only match if placement layer equals route layer
+            if (routeLayer) {
+                const isTH = pad.type === 'th' || pad.drill;
+                if (!isTH && plLayer !== routeLayer) continue;
+            }
             const [px, py] = padWorld(pl, pad);
             const hw = pad.w / 2 + padTolMm;
             const hh = pad.h / 2 + padTolMm;
@@ -198,9 +208,11 @@ function findPadNetAtBoard(doc, mx, my, padTolMm = 0.12) {
  * Find the net at any point along any track (not just endpoints).
  * Returns the net label if the click is within tolerance of any track segment.
  * This lets users start or continue routing from any point on an existing trace.
+ * @param {string} [routeLayer] — if provided, only match tracks on this copper layer.
  */
-function findTrackNetAtPoint(doc, mx, my, tolMm = 0.45) {
+function findTrackNetAtPoint(doc, mx, my, tolMm = 0.45, routeLayer = null) {
     for (const tr of doc.tracks || []) {
+        if (routeLayer && tr.layer !== routeLayer) continue;
         const pts = tr.points || [];
         if (pts.length < 2) continue;
         const net = tr.net && String(tr.net);
@@ -226,12 +238,13 @@ function distToSegment2D(p, a, b) {
 
 /** Snap a point to the nearest position on the closest same-net track segment.
  *  Returns { x, y, net } or null if nothing nearby. */
-function snapToSameNetTrack(doc, mx, my, currentNet, tolMm = 0.6) {
+function snapToSameNetTrack(doc, mx, my, currentNet, tolMm = 0.6, routeLayer = null) {
     if (!currentNet) return null;
     let best = null;
     let bestDist = tolMm;
     for (const tr of doc.tracks || []) {
         if (String(tr.net || '') !== currentNet) continue;
+        if (routeLayer && tr.layer !== routeLayer) continue;
         const pts = tr.points || [];
         const hw = (Number(tr.widthMm) || 0.35) / 2;
         for (let i = 0; i < pts.length - 1; i++) {
@@ -1066,6 +1079,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                 if (routeDraft) {
                     routeNetRef.current = '';
                     setRouteDraft(null);
+                    setTool('select');
                     return;
                 }
                 if (polygonDraft) { setPolygonDraft(null); return; }
@@ -1077,6 +1091,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                     return;
                 }
                 if (selected.length > 0) { setSelected([]); return; }
+                if (tool === 'route') {
+                    setTool('select');
+                    return;
+                }
                 return;
             }
             /* ── Enter: commit draft ── */
@@ -1434,19 +1452,19 @@ function PcbStudioPage({ onBackToSchematic }) {
             }
             const spt = [snap(ax), snap(ay)];
             if (!routeDraft) {
-                // Starting a new route — pick up net from pad or ANY point on a trace
-                routeNetRef.current = findPadNetAtBoard(doc, mx, my) || findTrackNetAtPoint(doc, mx, my) || '';
+                // Starting a new route — pick up net from pad or trace ON THE ACTIVE LAYER only
+                routeNetRef.current = findPadNetAtBoard(doc, mx, my, 0.12, activeLayer) || findTrackNetAtPoint(doc, mx, my, 0.45, activeLayer) || '';
                 setRouteDraft([spt]);
             } else {
                 const last = routeDraft[routeDraft.length - 1];
                 const curNet = routeNetRef.current || '';
 
-                // Check if clicking on a same-net pad → snap to pad and auto-commit
-                const padNet = findPadNetAtBoard(doc, ax, ay, 0.5);
+                // Check if clicking on a same-net pad ON THE ACTIVE LAYER → snap and auto-commit
+                const padNet = findPadNetAtBoard(doc, ax, ay, 0.5, activeLayer);
                 const landOnSameNetPad = padNet && padNet === curNet;
 
-                // Check if clicking on a same-net trace → snap to nearest trace point and auto-commit
-                const trSnap = !landOnSameNetPad ? snapToSameNetTrack(doc, ax, ay, curNet, 0.6) : null;
+                // Check if clicking on a same-net trace ON THE ACTIVE LAYER → snap and auto-commit
+                const trSnap = !landOnSameNetPad ? snapToSameNetTrack(doc, ax, ay, curNet, 0.6, activeLayer) : null;
 
                 // Determine final endpoint
                 let finalPt = spt;

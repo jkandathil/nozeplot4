@@ -6,7 +6,7 @@
  */
 
 import { getFootprint } from './footprintLib.js';
-import { activeCopperLayerIds, getCopperLayerDisplayName, isCopperLayerVisible } from './pcbDoc.js';
+import { activeCopperLayerIds, isCopperLayerVisible } from './pcbDoc.js';
 import { snapBoard, snapInteractiveRoutePoint } from './pcbEditorUtils.js';
 import { NOZE_GND_PLANE_ID } from './gndPlane.js';
 
@@ -854,21 +854,6 @@ export function renderPcbCanvas(ctx, params) {
       ctx.globalAlpha = 0.5;
       ctx.fill();
       ctx.globalAlpha = 1;
-    }
-    // Layer label (board mm space): shows which layer this draft segment will commit to
-    if (scale > 4) {
-      const p0 = routeDraft[0];
-      const lab = getCopperLayerDisplayName(activeLayer || 'F.Cu', copperStack.length);
-      ctx.font = '600 1.05px system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      const tx = p0[0] + trackW * 1.1 + 0.25;
-      const ty = p0[1];
-      ctx.lineWidth = 0.2;
-      ctx.strokeStyle = 'rgba(0,0,0,0.82)';
-      ctx.strokeText(lab, tx, ty);
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillText(lab, tx, ty);
     }
     // Rubber-band to cursor (free-angle routing)
     if (boardCursorMm) {
