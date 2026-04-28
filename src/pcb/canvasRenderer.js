@@ -1022,12 +1022,10 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
     const linkNet = schCrossNets.has(String(net).toLowerCase());
     const isSel = selectedNets.has(String(net));
     if (isSel) {
-      // Bright highlighted style for selected airwires
-      ctx.strokeStyle = '#fbbf24'; // amber-400
-      ctx.lineWidth = 0.32;
-      ctx.setLineDash([0.5, 0.18]);
-      ctx.shadowColor = 'rgba(251,191,36,0.6)';
-      ctx.shadowBlur = 3;
+      // Selected: just a brighter version of the normal style
+      ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
+      ctx.lineWidth = linkNet ? 0.22 : 0.16;
+      ctx.setLineDash([0.45, 0.22]);
     } else if (emphasize) {
       ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
       ctx.lineWidth = linkNet ? 0.24 : 0.18;
@@ -1044,23 +1042,18 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    if (isSel) { ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; }
   }
-  // Draw endpoint dots for emphasized or selected nets
-  const drawDots = emphasize || selectedNets.size > 0;
-  if (drawDots) {
+  if (emphasize) {
     const r = 0.28;
-    for (const [net, pts] of padCentersByNet) {
+    for (const [, pts] of padCentersByNet) {
       if (pts.length < 2) continue;
-      const isSel = selectedNets.has(String(net));
-      if (!emphasize && !isSel) continue;
       for (const [x, y] of pts) {
         ctx.beginPath();
-        ctx.arc(x, y, isSel ? 0.35 : r, 0, Math.PI * 2);
-        ctx.fillStyle = isSel ? 'rgba(251,191,36,0.7)' : 'rgba(250,204,21,0.55)';
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(250,204,21,0.55)';
         ctx.fill();
-        ctx.strokeStyle = isSel ? '#f59e0b' : 'rgba(251,191,36,0.9)';
-        ctx.lineWidth = isSel ? 0.1 : 0.06;
+        ctx.strokeStyle = 'rgba(251,191,36,0.9)';
+        ctx.lineWidth = 0.06;
         ctx.stroke();
       }
     }
