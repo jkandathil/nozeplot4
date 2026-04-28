@@ -185,6 +185,146 @@ function dedupeConsecutiveTrackPoints(pts, eps = 1e-3) {
   return out;
 }
 
+/** Endpoint tolerance (mm) for merging separate `doc.tracks` into one drawn polyline. */
+const TRACK_MERGE_EPS_MM = 0.06;
+
+function endpointsEqualTrack(p, q, eps = TRACK_MERGE_EPS_MM) {
+  return Math.hypot(p[0] - q[0], p[1] - q[1]) <= eps;
+}
+
+/**
+ * If two open polylines meet at an endpoint pair, return merged vertices; else null.
+ * Used so canvas draws one continuous stroke (no stacked round-caps at the joint).
+ */
+function tryMergeTrackPolylinePoints(aPts, bPts, eps = TRACK_MERGE_EPS_MM) {
+  if (!aPts?.length || !bPts?.length || aPts.length < 2 || bPts.length < 2) return null;
+  const a0 = aPts[0];
+  const a1 = aPts[aPts.length - 1];
+  const b0 = bPts[0];
+  const b1 = bPts[bPts.length - 1];
+  if (endpointsEqualTrack(a1, b0, eps)) return [...aPts, ...bPts.slice(1)];
+  if (endpointsEqualTrack(a1, b1, eps)) return [...aPts, ...bPts.slice(0, -1).reverse()];
+  if (endpointsEqualTrack(a0, b0, eps)) return [...[...aPts].reverse(), ...bPts.slice(1)];
+  if (endpointsEqualTrack(a0, b1, eps)) return [...bPts, ...aPts.slice(1)];
+  return null;
+}
+
+/**
+ * Greedy-merge track polylines that share endpoints (same render bucket: net/width/selection).
+ */
+function mergeTrackPolylinesForDraw(trackRefs, eps = TRACK_MERGE_EPS_MM) {
+  let items = trackRefs
+    .map((tr) => ({ tr, pts: dedupeConsecutiveTrackPoints(tr.points || []) }))
+    .filter((x) => x.pts.length >= 2);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    outer: for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const merged = tryMergeTrackPolylinePoints(items[i].pts, items[j].pts, eps);
+        if (merged) {
+          items[i] = { tr: items[i].tr, pts: dedupeConsecutiveTrackPoints(merged) };
+          items.splice(j, 1);
+          changed = true;
+          break outer;
+        }
+      }
+    }
+  }
+  return items;
+}
+
+/** Filled stadium shape (mm space): trace segment as solid copper — no stroke seams at T-junctions. */
+function fillRoundCopperSegment(ctx, ax, ay, bx, by, halfW) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9 || halfW <= 0) return;
+  const ang = Math.atan2(dy, dx);
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(ang);
+  ctx.beginPath();
+  ctx.moveTo(0, -halfW);
+  ctx.lineTo(len, -halfW);
+  ctx.arc(len, 0, halfW, -Math.PI / 2, Math.PI / 2, false);
+  ctx.lineTo(0, halfW);
+  ctx.arc(0, 0, halfW, Math.PI / 2, -Math.PI / 2, false);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Draw all segments in a bucket as opaque fills (same conductor), then weld discs where
+ * ≥2 segment ends coincide — removes the “inner outline” at T-junctions from double-stroke.
+ */
+function drawTrackGroupCopperFill(ctx, mergedItems, fillStyle, halfW) {
+  const segments = [];
+  for (const { pts } of mergedItems) {
+    const pp = dedupeConsecutiveTrackPoints(pts || []);
+    for (let i = 0; i < pp.length - 1; i++) {
+      segments.push({ ax: pp[i][0], ay: pp[i][1], bx: pp[i + 1][0], by: pp[i + 1][1] });
+    }
+  }
+  if (!segments.length) return;
+
+  ctx.fillStyle = fillStyle;
+  for (const s of segments) {
+    fillRoundCopperSegment(ctx, s.ax, s.ay, s.bx, s.by, halfW);
+  }
+
+  const WELD = Math.max(TRACK_MERGE_EPS_MM * 1.5, halfW * 0.4);
+  const clusters = [];
+  for (const s of segments) {
+    for (const p of [[s.ax, s.ay], [s.bx, s.by]]) {
+      let hit = -1;
+      for (let i = 0; i < clusters.length; i++) {
+        const c = clusters[i];
+        if (Math.hypot(p[0] - c.x, p[1] - c.y) <= WELD) {
+          hit = i;
+          break;
+        }
+      }
+      if (hit >= 0) {
+        const c = clusters[hit];
+        c.n += 1;
+        c.x += (p[0] - c.x) / c.n;
+        c.y += (p[1] - c.y) / c.n;
+      } else {
+        clusters.push({ x: p[0], y: p[1], n: 1 });
+      }
+    }
+  }
+  const weldR = halfW * 1.08;
+  for (const c of clusters) {
+    if (c.n >= 2) {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, weldR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawTrackGroupSchDashOverlay(ctx, mergedItems, tw) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(192,132,252,0.92)';
+  ctx.lineWidth = Math.max(0.07, tw * 0.22);
+  ctx.setLineDash([0.45, 0.28]);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const { pts } of mergedItems) {
+    const pp = dedupeConsecutiveTrackPoints(pts || []);
+    if (pp.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(pp[0][0], pp[0][1]);
+    for (let i = 1; i < pp.length; i++) ctx.lineTo(pp[i][0], pp[i][1]);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 /**
  * Erase pour under trace+clearance using only axis-aligned rects (no stroke joins).
  * `overlapMm` closes sub-pixel gaps vs the bitmap grid and vertex seams.
@@ -277,7 +417,10 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
 
   // 2a. Component courtyard cutouts — bounding box around ALL pads + clearance
   //     for any component that has at least one non-GND pad.
+  //     Skip components on a different layer (SMD pads don't block other layers).
   for (const pl of doc.placements || []) {
+    const plLayer = pl.layer || 'F.Cu';
+    if (plLayer !== ly) continue; // Only carve pads on this copper layer
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
@@ -323,6 +466,8 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   // 2b. Individual non-GND pad cutouts (handles pads outside any component courtyard,
   //     e.g. test points, and provides conformal clearance for rotated pads)
   for (const pl of doc.placements || []) {
+    const plLayer = pl.layer || 'F.Cu';
+    if (plLayer !== ly) continue; // Only carve pads on this copper layer
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
@@ -379,6 +524,8 @@ function drawGndPlaneWithClearanceCarve(ctx, poly, ly, layerColor, polyFill, doc
   const thermalGap = clearMm * 0.6;    // gap width between spokes
   const thermalOuter = clearMm * 1.2;  // outer carve radius beyond pad
   for (const pl of doc.placements || []) {
+    const plLayer = pl.layer || 'F.Cu';
+    if (plLayer !== ly) continue; // Thermal relief only for pads on this layer
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads?.length) continue;
     const nets = pl.padNets || {};
@@ -470,6 +617,7 @@ export function renderPcbCanvas(ctx, params) {
     boardCursorMm = null,
     lockedLayers = new Set(),
     selectedRatsnestNets = new Set(),
+    boxSelectRect = null,
     dpr = window.devicePixelRatio || 1,
   } = params;
 
@@ -560,46 +708,35 @@ export function renderPcbCanvas(ctx, params) {
     const trackAlpha = isActive ? 1 : Math.min(1, inactiveCopperOpacity + 0.5);
     ctx.save();
     ctx.globalAlpha = trackAlpha;
-    for (const tr of (doc.tracks || [])) {
-      if (tr.layer !== ly) continue;
-      const pts = dedupeConsecutiveTrackPoints(tr.points || []);
-      if (pts.length < 2) continue;
+    const tracksThisLayer = (doc.tracks || []).filter((tr) => tr.layer === ly);
+    const trackBuckets = new Map();
+    for (const tr of tracksThisLayer) {
       const isSel = isSelected('track', tr.id);
-      const schLink = tr.net && schCrossNets.has(String(tr.net).toLowerCase());
+      const schLink = !!(tr.net && schCrossNets.has(String(tr.net).toLowerCase()));
+      const net = String(tr.net || '');
+      const twKey = Number(tr.widthMm) || 0.35;
+      const key = `${net}\0${twKey}\0${isSel ? 1 : 0}\0${schLink ? 1 : 0}`;
+      if (!trackBuckets.has(key)) trackBuckets.set(key, []);
+      trackBuckets.get(key).push(tr);
+    }
+    for (const group of trackBuckets.values()) {
+      const mergedItems = mergeTrackPolylinesForDraw(group).filter((x) => x.pts.length >= 2);
+      if (!mergedItems.length) continue;
+      const tr0 = mergedItems[0].tr;
+      const isSel = isSelected('track', tr0.id);
+      const schLink = tr0.net && schCrossNets.has(String(tr0.net).toLowerCase());
       const traceCol = PCB_TRACE_LAYER_COLORS[ly] || layerColor;
-      const stroke = isSel ? '#f472b6' : traceCol;
-      const tw = tr.widthMm || 0.35;
-
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      const tw = tr0.widthMm || 0.35;
+      const halfW = tw / 2;
 
       if (isSel) {
-        // Selected: bright glow halo + highlighted trace
-        ctx.strokeStyle = 'rgba(244,114,182,0.35)';
-        ctx.lineWidth = tw + Math.max(0.4, tw * 1.2);
-        ctx.stroke();
-        ctx.strokeStyle = '#f472b6';
-        ctx.lineWidth = tw + 0.08;
-        ctx.stroke();
+        drawTrackGroupCopperFill(ctx, mergedItems, 'rgba(244,114,182,0.42)', halfW + Math.max(0.2, tw * 0.55));
+        drawTrackGroupCopperFill(ctx, mergedItems, '#f472b6', halfW + 0.04);
       } else {
-        // Normal: dark border + layer-colored trace
-        ctx.strokeStyle = shadeHex(traceCol, 0.52);
-        ctx.lineWidth = tw + Math.max(0.05, tw * 0.28);
-        ctx.stroke();
-        ctx.strokeStyle = traceCol;
-        ctx.lineWidth = tw;
-        ctx.stroke();
+        drawTrackGroupCopperFill(ctx, mergedItems, traceCol, halfW);
       }
-      // Schematic cross-highlight: overlay only — hue stays the active copper layer.
       if (schLink && !isSel) {
-        ctx.strokeStyle = 'rgba(192,132,252,0.92)';
-        ctx.lineWidth = Math.max(0.07, tw * 0.22);
-        ctx.setLineDash([0.45, 0.28]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        drawTrackGroupSchDashOverlay(ctx, mergedItems, tw);
       }
     }
 
@@ -615,31 +752,41 @@ export function renderPcbCanvas(ctx, params) {
     }
   }
 
-  // ─── Pads ───
-  for (const pl of (doc.placements || [])) {
-    const fp = getFootprint(pl.footprintId);
-    if (!fp?.pads) continue;
-    for (const pad of fp.pads) {
-      const [px, py] = padWorld(pl, pad);
-      const rot = (Number(pl.rot) || 0) % 360;
+  // ─── Pads (draw per-layer: bottom first, then top, so top overlaps) ───
+  for (const drawSide of ['B.Cu', 'F.Cu']) {
+    for (const pl of (doc.placements || [])) {
+      const plLayer = pl.layer || 'F.Cu';
+      if (plLayer !== drawSide) continue;
+      const fp = getFootprint(pl.footprintId);
+      if (!fp?.pads) continue;
+      const isPlOnActive = plLayer === activeLayer;
+      const padAlpha = isPlOnActive ? 1 : inactiveCopperOpacity;
+      // SMD pads use the placement's layer color; through-hole pads always show
+      const padFill = plLayer === 'B.Cu' ? '#9b59b6' : '#b87333';
+      const padStroke = plLayer === 'B.Cu' ? '#6c3483' : '#7c4b12';
       ctx.save();
-      ctx.translate(px, py);
-      if (rot && Math.abs(pad.w - pad.h) > 0.001) {
-        ctx.rotate(rot * Math.PI / 180);
-      }
-      // Pad copper
-      ctx.fillStyle = '#b87333';
-      ctx.fillRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
-      ctx.strokeStyle = '#7c4b12';
-      ctx.lineWidth = 0.05;
-      ctx.strokeRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
-      // Pad number
-      if (pad.num && scale > 15) {
-        ctx.fillStyle = '#fff';
-        ctx.font = `bold ${Math.min(pad.w, pad.h) * 0.5}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(pad.num, 0, 0);
+      ctx.globalAlpha = padAlpha;
+      for (const pad of fp.pads) {
+        const [px, py] = padWorld(pl, pad);
+        const rot = (Number(pl.rot) || 0) % 360;
+        ctx.save();
+        ctx.translate(px, py);
+        if (rot && Math.abs(pad.w - pad.h) > 0.001) {
+          ctx.rotate(rot * Math.PI / 180);
+        }
+        ctx.fillStyle = padFill;
+        ctx.fillRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
+        ctx.strokeStyle = padStroke;
+        ctx.lineWidth = 0.05;
+        ctx.strokeRect(-pad.w / 2, -pad.h / 2, pad.w, pad.h);
+        if (pad.num && scale > 15) {
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${Math.min(pad.w, pad.h) * 0.5}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(pad.num, 0, 0);
+        }
+        ctx.restore();
       }
       ctx.restore();
     }
@@ -676,22 +823,29 @@ export function renderPcbCanvas(ctx, params) {
     ctx.setLineDash([]);
   }
 
+  // ─── Box-select rubber band ───
+  if (boxSelectRect) {
+    const bx = Math.min(boxSelectRect.x1, boxSelectRect.x2);
+    const by = Math.min(boxSelectRect.y1, boxSelectRect.y2);
+    const bw = Math.abs(boxSelectRect.x2 - boxSelectRect.x1);
+    const bh = Math.abs(boxSelectRect.y2 - boxSelectRect.y1);
+    ctx.fillStyle = 'rgba(96,165,250,0.12)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = 'rgba(96,165,250,0.7)';
+    ctx.lineWidth = 0.12;
+    ctx.setLineDash([0.3, 0.2]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+  }
+
   // ─── Route draft (color = active copper layer; changes after Via / V) ───
   if (routeDraft?.length) {
     const trackW = doc.meta?.defaultTrackMm || 0.35;
     const draftColor = PCB_TRACE_LAYER_COLORS[activeLayer] || PCB_LAYER_COLORS[activeLayer] || '#a855f7';
-    // Solid in-progress polyline
-    ctx.beginPath();
-    ctx.moveTo(routeDraft[0][0], routeDraft[0][1]);
-    for (let i = 1; i < routeDraft.length; i++) ctx.lineTo(routeDraft[i][0], routeDraft[i][1]);
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-    ctx.lineWidth = trackW + Math.max(0.06, trackW * 0.22);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    ctx.strokeStyle = draftColor;
-    ctx.lineWidth = trackW;
-    ctx.stroke();
+    const draftAsItems = [{ tr: {}, pts: routeDraft }];
+    const hw = trackW / 2;
+    drawTrackGroupCopperFill(ctx, draftAsItems, 'rgba(0,0,0,0.32)', hw + Math.max(0.04, trackW * 0.14));
+    drawTrackGroupCopperFill(ctx, draftAsItems, draftColor, hw);
     // Draw vertex dots
     for (const pt of routeDraft) {
       ctx.beginPath();
@@ -728,13 +882,10 @@ export function renderPcbCanvas(ctx, params) {
       ctx.beginPath();
       ctx.moveTo(last[0], last[1]);
       ctx.lineTo(ex, ey);
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = trackW + Math.max(0.05, trackW * 0.2);
-      ctx.setLineDash([0.3, 0.2]);
-      ctx.lineCap = 'round';
-      ctx.stroke();
-      ctx.strokeStyle = draftColor;
+      ctx.strokeStyle = hexToRgba(draftColor, 0.6);
       ctx.lineWidth = trackW;
+      ctx.lineCap = 'round';
+      ctx.setLineDash([0.3, 0.2]);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -963,13 +1114,14 @@ function drawSilkscreen(ctx, doc, boardPreview) {
       ctx.globalAlpha = 1;
     }
     // Reference designator text
-    const refCol = boardPreview.boldSilk ? '#ffffff' : '#e2e8f0';
+    const isBot = (pl.layer || 'F.Cu') === 'B.Cu';
+    const refCol = isBot ? '#d8b4fe' : (boardPreview.boldSilk ? '#ffffff' : '#e2e8f0');
     const refSize = boardPreview.boldSilk ? 1 : 0.9;
     ctx.fillStyle = refCol;
     ctx.font = `${boardPreview.boldSilk ? 'bold' : 'normal'} ${refSize}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(pl.ref || '', pl.x, pl.y - 2);
+    ctx.fillText((pl.ref || '') + (isBot ? ' [B]' : ''), pl.x, pl.y - 2);
   }
 }
 

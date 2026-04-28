@@ -49,7 +49,6 @@ import {
     migratePcbDoc,
     parsePcbDocJson,
     activeCopperLayerIds,
-    COPPER_LAYER_COUNT_OPTIONS,
     getCopperLayerDisplayName,
     PCB_GRID_PRESETS_MM,
     isCopperLayerVisible,
@@ -67,6 +66,7 @@ import {
     pickViaAt,
     pickPolygonAt,
     centroidClipboard,
+    segmentIntersectsAabb,
 } from '../pcb/pcbEditorUtils.js';
 import {
     PCB_BRIDGE_KEY,
@@ -102,9 +102,22 @@ import { generateBomCsv, generatePickAndPlaceCsv, generateIpcD356, downloadTextF
 import OnlineComponentModal from './OnlineComponentModal.jsx';
 import FootprintImportModal from './FootprintImportModal.jsx';
 import BoardPreviewModal from './BoardPreviewModal.jsx';
+import { getCurrentProjectId, loadProject } from '../circuit/projects.js';
 import './PcbStudioPage.css';
 
-const PCB_STORAGE_KEY = 'nozePcbDoc:v1';
+/** Legacy single-slot board (no Circuit Studio project id). */
+const PCB_LEGACY_STORAGE_KEY = 'nozePcbDoc:v1';
+
+/** localStorage key for the board layout — paired with the active Circuit Studio project when set. */
+function getPcbLayoutStorageKey() {
+    try {
+        const id = getCurrentProjectId();
+        if (id) return `${PCB_LEGACY_STORAGE_KEY}:${id}`;
+    } catch {
+        /* ignore */
+    }
+    return PCB_LEGACY_STORAGE_KEY;
+}
 
 function selectionKey(sel) {
     return `${sel.kind}:${sel.id || sel.net || ''}`;
@@ -260,7 +273,7 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [pcbWorkflowDemo, setPcbWorkflowDemo] = useState(false);
     const [showBoardPreview, setShowBoardPreview] = useState(false);
     const [boardPreview, setBoardPreview] = useState({
-        solderMask: true,
+        solderMask: false,
         brightInactiveLayers: true,
         boldSilk: true,
         highlightUnrouted: false,
@@ -281,6 +294,8 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [lockedLayers, setLockedLayers] = useState(new Set());
     const [footprintSearchQuery, setFootprintSearchQuery] = useState('');
     const [showNetClassesPanel, setShowNetClassesPanel] = useState(false);
+    const [boxSelectAnchor, setBoxSelectAnchor] = useState(null); // [x,y] board-mm start corner
+    const [boxSelectRect, setBoxSelectRect] = useState(null); // { x1,y1,x2,y2 } board-mm
 
     const canvasRef = useRef(null);
     const canvasWrapRef = useRef(null);
@@ -288,6 +303,10 @@ function PcbStudioPage({ onBackToSchematic }) {
     const boardJsonImportRef = useRef(null);
     const clipboardRef = useRef(null);
     const lastPointerBoardRef = useRef([20, 20]);
+    /** Last localStorage key written for this board — flush here before switching Circuit project. */
+    const lastPcbStorageKeyRef = useRef(null);
+    /** Shift held when starting marquee → union rect hits with existing selection on mouseup. */
+    const boxSelectAdditiveRef = useRef(false);
     const undoMgrRef = useRef(createUndoManager(64));
     /** Refs for fast-changing state used in render loop (avoids effect restarts) */
     const boardCursorMmRef = useRef(null);
@@ -351,7 +370,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         return listFootprintSummaries();
     }, [libVersion, footprintSearchQuery]);
 
-    const copperStack = useMemo(() => activeCopperLayerIds(doc), [doc.meta?.copperLayerCount]);
+    const copperStack = useMemo(() => activeCopperLayerIds(null), []);
 
     useEffect(() => {
         setGndPlaneLayer((prev) => {
@@ -359,7 +378,7 @@ function PcbStudioPage({ onBackToSchematic }) {
             if (stack.includes(prev)) return prev;
             return suggestGndPlaneLayer(doc);
         });
-    }, [doc.meta?.copperLayerCount]);
+    }, [doc]);
 
     const gndPlanePoly = useMemo(
         () => doc.polygons?.find((p) => p.id === NOZE_GND_PLANE_ID),
@@ -426,17 +445,26 @@ function PcbStudioPage({ onBackToSchematic }) {
         };
 
         const boot = () => {
-            // Try loading from localStorage first, then consume bridge on top
+            const key = getPcbLayoutStorageKey();
             try {
-                const saved = localStorage.getItem(PCB_STORAGE_KEY);
+                const saved = localStorage.getItem(key);
                 if (saved) {
-                    const restored = migratePcbDoc(JSON.parse(saved));
+                    let restored = migratePcbDoc(JSON.parse(saved));
+                    const pid = getCurrentProjectId();
+                    const proj = pid ? loadProject(pid) : null;
+                    if (proj?.name) {
+                        restored = {
+                            ...restored,
+                            meta: { ...restored.meta, name: String(proj.name).slice(0, 128) },
+                        };
+                    }
                     setDoc(restored);
                     docRef.current = restored;
                 }
             } catch {
                 /* ignore */
             }
+            lastPcbStorageKeyRef.current = key;
             consumeBridge();
         };
 
@@ -475,13 +503,51 @@ function PcbStudioPage({ onBackToSchematic }) {
         setDrcViolations([]);
         const t = setTimeout(() => {
             try {
-                localStorage.setItem(PCB_STORAGE_KEY, JSON.stringify(doc));
+                const key = getPcbLayoutStorageKey();
+                lastPcbStorageKeyRef.current = key;
+                localStorage.setItem(key, JSON.stringify(doc));
             } catch {
                 /* quota */
             }
         }, 400);
         return () => clearTimeout(t);
     }, [doc]);
+
+    // When the active Circuit Studio project changes, flush the old slot and load the board for the new id.
+    useEffect(() => {
+        const onCircuitProject = () => {
+            const newKey = getPcbLayoutStorageKey();
+            const prevKey = lastPcbStorageKeyRef.current;
+            if (prevKey && prevKey !== newKey) {
+                try {
+                    localStorage.setItem(prevKey, JSON.stringify(docRef.current));
+                } catch {
+                    /* quota */
+                }
+            }
+            lastPcbStorageKeyRef.current = newKey;
+            try {
+                const raw = localStorage.getItem(newKey);
+                let next = raw ? migratePcbDoc(JSON.parse(raw)) : emptyPcbDoc();
+                const pid = getCurrentProjectId();
+                const proj = pid ? loadProject(pid) : null;
+                if (proj?.name) {
+                    next = {
+                        ...next,
+                        meta: { ...next.meta, name: String(proj.name).slice(0, 128) },
+                    };
+                }
+                setDoc(next);
+                docRef.current = next;
+                setDrcViolations([]);
+                setSelected([]);
+            } catch {
+                /* ignore */
+            }
+        };
+        window.addEventListener('noze-circuit-current-project', onCircuitProject);
+        return () => window.removeEventListener('noze-circuit-current-project', onCircuitProject);
+    }, []);
 
     const W = Number(doc.meta?.boardWmm) || 80;
     const H = Number(doc.meta?.boardHmm) || 50;
@@ -721,7 +787,9 @@ function PcbStudioPage({ onBackToSchematic }) {
 
     const handleSavePcbNow = useCallback(() => {
         try {
-            localStorage.setItem(PCB_STORAGE_KEY, JSON.stringify(doc));
+            const key = getPcbLayoutStorageKey();
+            lastPcbStorageKeyRef.current = key;
+            localStorage.setItem(key, JSON.stringify(doc));
             setPcbSaveFeedback('Saved');
             if (pcbSaveFeedbackTimerRef.current) window.clearTimeout(pcbSaveFeedbackTimerRef.current);
             pcbSaveFeedbackTimerRef.current = window.setTimeout(() => {
@@ -731,6 +799,16 @@ function PcbStudioPage({ onBackToSchematic }) {
         } catch (e) {
             window.alert('Could not save layout: ' + (e?.message || String(e)));
         }
+    }, [doc]);
+
+    /** Remove every routed copper trace (all layers). Footprints, vias, zones unchanged; Ctrl+Z restores. */
+    const handleClearAllTracks = useCallback(() => {
+        if (!(doc.tracks?.length > 0)) return;
+        undoMgrRef.current.push(doc);
+        routeNetRef.current = '';
+        setRouteDraft(null);
+        setSelected((prev) => prev.filter((s) => s.kind !== 'track'));
+        setDoc((d) => ({ ...d, tracks: [] }));
     }, [doc]);
 
     const handleAddGndPlane = useCallback(() => {
@@ -984,6 +1062,12 @@ function PcbStudioPage({ onBackToSchematic }) {
                 }
                 if (polygonDraft) { setPolygonDraft(null); return; }
                 if (measureStart || measureEnd) { setMeasureStart(null); setMeasureEnd(null); return; }
+                if (boxSelectAnchor) {
+                    boxSelectAdditiveRef.current = false;
+                    setBoxSelectAnchor(null);
+                    setBoxSelectRect(null);
+                    return;
+                }
                 if (selected.length > 0) { setSelected([]); return; }
                 return;
             }
@@ -1109,18 +1193,36 @@ function PcbStudioPage({ onBackToSchematic }) {
             }
             /* ── Tool shortcuts: S=select, T=route, P=place, M=measure, G=polygon ── */
             if (e.key === 's' || e.key === 'S') { setTool('select'); return; }
+            if (e.key === 'b' || e.key === 'B') { setTool('boxselect'); return; }
             if (e.key === 't' || e.key === 'T') { setTool('route'); return; }
             if (e.key === 'p' || e.key === 'P') { setTool('place'); return; }
             if (e.key === 'm' || e.key === 'M') { setTool('measure'); return; }
             if (e.key === 'g' || e.key === 'G') { setTool('polygon'); return; }
-            /* ── F: fit view ── */
-            if (e.key === 'f' || e.key === 'F') { fitViewport(); return; }
+            /* ── F: flip selected placements between F.Cu ↔ B.Cu (or fit view if nothing selected) ── */
+            if (e.key === 'f' || e.key === 'F') {
+                const plIds = selected.filter((s) => s.kind === 'placement').map((s) => s.id);
+                if (plIds.length > 0) {
+                    undoMgrRef.current.push(doc);
+                    setDoc((d) => ({
+                        ...d,
+                        placements: d.placements?.map((p) => {
+                            if (!plIds.includes(p.id)) return p;
+                            const cur = p.layer || 'F.Cu';
+                            return { ...p, layer: cur === 'F.Cu' ? 'B.Cu' : 'F.Cu' };
+                        }),
+                    }));
+                    return;
+                }
+                fitViewport();
+                return;
+            }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [selected, doc, boardCursorMm, snap, handleCopy, handlePaste, handleUndo, handleRedo,
         routeDraft, polygonDraft, measureStart, measureEnd, tool, activeLayer,
-        commitRouteDraft, commitPolygonDraft, insertViaAndSwitchLayer, fitViewport]);
+        commitRouteDraft, commitPolygonDraft, insertViaAndSwitchLayer, fitViewport,
+        boxSelectAnchor]);
 
     /* ── Hit testing helper ── */
     const pickAtPoint = useCallback((mx, my) => {
@@ -1171,6 +1273,84 @@ function PcbStudioPage({ onBackToSchematic }) {
         return null;
     }, [doc, selectionFilter, ratsnestPadCentersByNet]);
 
+    /** Collect all items whose center / bounding box intersects a board-mm rectangle. */
+    const pickInRect = useCallback((x1, y1, x2, y2) => {
+        const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+        const hits = [];
+        if (selectionFilter.placement) {
+            for (const pl of doc.placements || []) {
+                const bb = footprintBBox(pl);
+                // Select if bounding boxes overlap
+                if (bb.maxX >= minX && bb.minX <= maxX && bb.maxY >= minY && bb.minY <= maxY) {
+                    hits.push({ kind: 'placement', id: pl.id });
+                }
+            }
+        }
+        if (selectionFilter.track) {
+            for (const tr of doc.tracks || []) {
+                if (!isCopperLayerVisible(doc, tr.layer)) continue;
+                const pts = tr.points || [];
+                let hit = pts.some(([px, py]) => px >= minX && px <= maxX && py >= minY && py <= maxY);
+                if (!hit) {
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        const a = pts[i];
+                        const b = pts[i + 1];
+                        if (segmentIntersectsAabb(a[0], a[1], b[0], b[1], minX, maxX, minY, maxY)) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
+                if (hit) hits.push({ kind: 'track', id: tr.id });
+            }
+        }
+        if (selectionFilter.via) {
+            for (const v of doc.vias || []) {
+                if (v.x >= minX && v.x <= maxX && v.y >= minY && v.y <= maxY) {
+                    hits.push({ kind: 'via', id: v.id });
+                }
+            }
+        }
+        if (selectionFilter.polygon) {
+            for (const pg of doc.polygons || []) {
+                if (!isCopperLayerVisible(doc, pg.layer)) continue;
+                const pts = pg.points || [];
+                if (pts.length < 2) continue;
+                let pgMinX = Infinity;
+                let pgMaxX = -Infinity;
+                let pgMinY = Infinity;
+                let pgMaxY = -Infinity;
+                for (const [px, py] of pts) {
+                    pgMinX = Math.min(pgMinX, px);
+                    pgMaxX = Math.max(pgMaxX, px);
+                    pgMinY = Math.min(pgMinY, py);
+                    pgMaxY = Math.max(pgMaxY, py);
+                }
+                if (pgMaxX < minX || pgMinX > maxX || pgMaxY < minY || pgMinY > maxY) continue;
+                let hit = pts.some(([px, py]) => px >= minX && px <= maxX && py >= minY && py <= maxY);
+                if (!hit) {
+                    const n = pts.length;
+                    for (let i = 0; i < n; i++) {
+                        const a = pts[i];
+                        const b = pts[(i + 1) % n];
+                        if (segmentIntersectsAabb(a[0], a[1], b[0], b[1], minX, maxX, minY, maxY)) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hit && pts.length >= 3) {
+                    const cx = (minX + maxX) / 2;
+                    const cy = (minY + maxY) / 2;
+                    if (pointInPolygon([cx, cy], pts)) hit = true;
+                }
+                if (hit) hits.push({ kind: 'polygon', id: pg.id });
+            }
+        }
+        return hits;
+    }, [doc, selectionFilter]);
+
     // Must be declared before any hook that lists it in a dependency array (TDZ if below useEffect).
     const selectedRatsnestNets = useMemo(() => {
         const nets = new Set();
@@ -1196,8 +1376,8 @@ function PcbStudioPage({ onBackToSchematic }) {
         );
     }, [pcbViewport, W, H]);
 
-    /* ── Drag state for moving placements ── */
-    const [dragMove, setDragMove] = useState(null); // { id, startX, startY, origX, origY }
+    /* ── Drag state for moving selected items ── */
+    const [dragMove, setDragMove] = useState(null); // { startX, startY, originals: Map<id, {x,y,points?}>, pushed }
 
     const onCanvasMouseDown = useCallback((ev) => {
         const pt = canvasToBoardAt(ev);
@@ -1323,44 +1503,57 @@ function PcbStudioPage({ onBackToSchematic }) {
 
         /* Select / BoxSelect tool */
         if (tool === 'select' || tool === 'boxselect') {
-            const pickResult = pickAtPoint(mx, my);
-            if (ev.shiftKey) {
-                if (pickResult) setSelected((prev) => toggleSelectionItem(prev, pickResult));
-            } else {
-                if (pickResult) {
-                    // Net-wide highlight: when clicking a track or via, also select
-                    // all other tracks/vias on the same net for visual net tracing.
-                    if (pickResult.kind === 'track') {
-                        const clickedTr = doc.tracks?.find((t) => t.id === pickResult.id);
-                        const net = clickedTr?.net;
-                        if (net && net !== '') {
-                            const netItems = [];
-                            for (const tr of doc.tracks || []) {
-                                if (tr.net === net) netItems.push({ kind: 'track', id: tr.id });
-                            }
-                            for (const v of doc.vias || []) {
-                                if (v.net === net) netItems.push({ kind: 'via', id: v.id });
-                            }
-                            setSelected(netItems.length > 0 ? netItems : [pickResult]);
-                        } else {
-                            setSelected([pickResult]);
+            const forceMarquee = tool === 'boxselect' || ev.altKey;
+            const pickResult = forceMarquee ? null : pickAtPoint(mx, my);
+            if (ev.shiftKey && pickResult) {
+                setSelected((prev) => toggleSelectionItem(prev, pickResult));
+            } else if (pickResult) {
+                const alreadySel = selected.some((s) => selectionKey(s) === selectionKey(pickResult));
+                let newSelection = [pickResult];
+                if (!alreadySel && pickResult.kind === 'track') {
+                    const clickedTr = doc.tracks?.find((t) => t.id === pickResult.id);
+                    const net = clickedTr?.net;
+                    if (net && net !== '') {
+                        const netItems = [];
+                        for (const tr of doc.tracks || []) {
+                            if (tr.net === net) netItems.push({ kind: 'track', id: tr.id });
                         }
-                    } else {
-                        setSelected([pickResult]);
-                    }
-                    // Begin drag-to-move for placements
-                    if (pickResult.kind === 'placement') {
-                        const pl = doc.placements?.find((p) => p.id === pickResult.id);
-                        if (pl) {
-                            setDragMove({ id: pl.id, startX: mx, startY: my, origX: pl.x, origY: pl.y, pushed: false });
+                        for (const v of doc.vias || []) {
+                            if (v.net === net) netItems.push({ kind: 'via', id: v.id });
                         }
+                        newSelection = netItems.length > 0 ? netItems : [pickResult];
                     }
-                } else {
-                    setSelected([]);
                 }
+                if (!alreadySel) setSelected(newSelection);
+                const itemsToMove = alreadySel ? selected : newSelection;
+                const originals = new Map();
+                for (const s of itemsToMove) {
+                    if (s.kind === 'placement') {
+                        const pl = doc.placements?.find((p) => p.id === s.id);
+                        if (pl) originals.set(s.id, { x: pl.x, y: pl.y });
+                    } else if (s.kind === 'via') {
+                        const v = doc.vias?.find((vi) => vi.id === s.id);
+                        if (v) originals.set(s.id, { x: v.x, y: v.y });
+                    } else if (s.kind === 'track') {
+                        const tr = doc.tracks?.find((t) => t.id === s.id);
+                        if (tr) originals.set(s.id, { points: tr.points.map(([x, y]) => [x, y]) });
+                    } else if (s.kind === 'polygon') {
+                        const pg = doc.polygons?.find((p) => p.id === s.id);
+                        if (pg) originals.set(s.id, { points: pg.points.map(([x, y]) => [x, y]) });
+                    }
+                }
+                if (originals.size > 0) {
+                    setDragMove({ startX: mx, startY: my, originals, pushed: false });
+                }
+            } else {
+                // Marquee: empty miss, Box Select tool (always), or Select + Alt over copper
+                boxSelectAdditiveRef.current = !!ev.shiftKey;
+                if (!ev.shiftKey) setSelected([]);
+                setBoxSelectAnchor([mx, my]);
+                setBoxSelectRect(null);
             }
         }
-    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint, activeLayer]);
+    }, [tool, doc, pcbViewport, W, H, snap, routeDraft, polygonDraft, placeFootprintId, measureStart, canvasToBoardAt, pickAtPoint, activeLayer, selected]);
 
     /* ── Double-click: commit route/polygon ── */
     const onCanvasDoubleClick = useCallback((ev) => {
@@ -1382,7 +1575,13 @@ function PcbStudioPage({ onBackToSchematic }) {
         boardCursorMmRef.current = [mx, my];
         renderDirtyRef.current = true;
 
-        /* Drag-to-move placement */
+        /* Box-select rubber band */
+        if (boxSelectAnchor) {
+            setBoxSelectRect({ x1: boxSelectAnchor[0], y1: boxSelectAnchor[1], x2: mx, y2: my });
+            return;
+        }
+
+        /* Drag-to-move all selected items */
         if (dragMove) {
             if (!dragMove.pushed) {
                 undoMgrRef.current.push(doc);
@@ -1390,24 +1589,70 @@ function PcbStudioPage({ onBackToSchematic }) {
             }
             const dx = mx - dragMove.startX;
             const dy = my - dragMove.startY;
-            setDoc((d) => ({
-                ...d,
-                placements: d.placements?.map((p) =>
-                    p.id === dragMove.id
-                        ? { ...p, x: snap(dragMove.origX + dx), y: snap(dragMove.origY + dy) }
-                        : p,
-                ),
-            }));
+            setDoc((d) => {
+                const origs = dragMove.originals;
+                return {
+                    ...d,
+                    placements: d.placements?.map((p) => {
+                        const o = origs.get(p.id);
+                        if (!o || o.points) return p; // not this item or it's a track/polygon
+                        return { ...p, x: snap(o.x + dx), y: snap(o.y + dy) };
+                    }),
+                    vias: d.vias?.map((v) => {
+                        const o = origs.get(v.id);
+                        if (!o || o.points) return v;
+                        return { ...v, x: snap(o.x + dx), y: snap(o.y + dy) };
+                    }),
+                    tracks: d.tracks?.map((tr) => {
+                        const o = origs.get(tr.id);
+                        if (!o?.points) return tr;
+                        return { ...tr, points: o.points.map(([ox, oy]) => [snap(ox + dx), snap(oy + dy)]) };
+                    }),
+                    polygons: d.polygons?.map((pg) => {
+                        const o = origs.get(pg.id);
+                        if (!o?.points) return pg;
+                        return { ...pg, points: o.points.map(([ox, oy]) => [snap(ox + dx), snap(oy + dy)]) };
+                    }),
+                };
+            });
         }
-    }, [pcbViewport, W, H, canvasToBoardAt, dragMove, doc, snap]);
+    }, [pcbViewport, W, H, canvasToBoardAt, dragMove, doc, snap, boxSelectAnchor]);
 
-    /* ── Global mouseup to finish drag ── */
+    /* ── Global mouseup to finish drag or box-select ── */
     useEffect(() => {
-        if (!dragMove) return;
-        const onUp = () => setDragMove(null);
+        if (!dragMove && !boxSelectAnchor) return;
+        const onUp = () => {
+            const additive = boxSelectAdditiveRef.current;
+            if (boxSelectAnchor) {
+                let hits = [];
+                if (boxSelectRect) {
+                    hits = pickInRect(boxSelectRect.x1, boxSelectRect.y1, boxSelectRect.x2, boxSelectRect.y2);
+                } else if (tool === 'boxselect') {
+                    const [ax, ay] = boxSelectAnchor;
+                    const h = pickAtPoint(ax, ay);
+                    if (h) hits = [h];
+                }
+                if (hits.length) {
+                    if (additive) {
+                        setSelected((prev) => {
+                            const m = new Map();
+                            for (const s of prev) m.set(selectionKey(s), s);
+                            for (const h of hits) m.set(selectionKey(h), h);
+                            return Array.from(m.values());
+                        });
+                    } else {
+                        setSelected(hits);
+                    }
+                }
+            }
+            boxSelectAdditiveRef.current = false;
+            setBoxSelectAnchor(null);
+            setBoxSelectRect(null);
+            setDragMove(null);
+        };
         window.addEventListener('mouseup', onUp);
         return () => window.removeEventListener('mouseup', onUp);
-    }, [dragMove]);
+    }, [dragMove, boxSelectAnchor, boxSelectRect, pickInRect, pickAtPoint, tool]);
 
     const onCanvasMouseLeave = useCallback(() => {
         setBoardCursorMm(null);
@@ -1428,7 +1673,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         doc, pcbViewport, activeLayer, selected, routeDraft, polygonDraft,
         boardPreview, showBoardGrid, drcViolations, ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
-        selectedRatsnestNets,
+        selectedRatsnestNets, boxSelectRect,
     ]);
 
     // Stable refs for render loop (avoids restarting rAF)
@@ -1438,7 +1683,7 @@ function PcbStudioPage({ onBackToSchematic }) {
         boardPreview, showBoardGrid, drcViolations,
         padCentersByNet: ratsnestPadCentersByNet,
         schCrossRefs, schCrossNets, measureStart, measureEnd, lockedLayers,
-        selectedRatsnestNets,
+        selectedRatsnestNets, boxSelectRect,
     };
 
     // Single persistent rAF loop — never restarts
@@ -1623,13 +1868,22 @@ function PcbStudioPage({ onBackToSchematic }) {
                 >
                     <AlertTriangle size={14} /> DRC
                 </button>
+                <button
+                    type="button"
+                    className="pcb-topbtn pcb-topbtn--clear-traces"
+                    disabled={!(doc.tracks?.length > 0)}
+                    onClick={handleClearAllTracks}
+                    title="Delete all copper trace segments on every layer. Vias, footprints, and copper pours are kept. Undo with Ctrl+Z (or the undo button)."
+                >
+                    <Trash2 size={14} /> Clear traces
+                </button>
                 <div className="pcb-sep" />
                 <div className="pcb-save-toolbar-group">
                     <button
                         type="button"
                         className="pcb-topbtn"
                         onClick={handleSavePcbNow}
-                        title="Save layout in this browser (edits also autosave after a short delay)"
+                        title="Saves layout in this browser under the active Circuit Studio project (same id as File → Save there). Edits also autosave after a short delay."
                     >
                         <Save size={14} /> Save
                     </button>
@@ -1761,25 +2015,10 @@ function PcbStudioPage({ onBackToSchematic }) {
                         </p>
                     </div>
                     <h2>Copper Layers</h2>
-                    <label className="pcb-field-col pcb-layer-stack-field">
-                        Copper stack depth
-                        <select
-                            className="pcb-layer-stack-select"
-                            value={copperStack.length}
-                            onChange={(e) => {
-                                const nn = Number(e.target.value);
-                                if (!COPPER_LAYER_COUNT_OPTIONS.includes(nn)) return;
-                                setDoc((d) => ({ ...d, meta: { ...d.meta, copperLayerCount: nn } }));
-                            }}
-                            title="KiCad-style layer ids: F.Cu, In1…In6, B.Cu. Four layers = Top Cu, GND, VCC, Bottom Cu."
-                        >
-                            {COPPER_LAYER_COUNT_OPTIONS.map((n) => (
-                                <option key={n} value={n}>
-                                    {n} layers{n === 4 ? ' — Top / GND / VCC / Bottom' : n === 2 ? ' — Top / Bottom' : ''}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
+                    <p className="pcb-layer-stack-fixed-hint">
+                        Fixed <strong>4-layer</strong> stack: <strong>Top copper</strong> (F.Cu), <strong>GND</strong> (In1.Cu),{' '}
+                        <strong>VCC</strong> (In2.Cu), <strong>Bottom copper</strong> (B.Cu). KiCad / Gerber exports use the same ids.
+                    </p>
                     <p className="pcb-dr-hint">
                         <strong>Manual route:</strong> choose <strong>Route</strong> (T), pick the <strong>active layer</strong> below, then click the board to chain track points. <strong>Bends:</strong> each new corner snaps to a <strong>45° family</strong> relative to the incoming segment (same idea as KiCad interactive 45° mode), then the grid — so you get orthogonal or 45° diagonals instead of random angles (better for manufacturability; not a full SI / length-matched router).
                         <strong>Nets:</strong> start on a pad (footprint pad nets from the schematic flow) or on an <strong>existing track end</strong> to inherit that net; otherwise the trace has no net until you type one in the sidebar after selecting the track.
@@ -1890,7 +2129,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                         board edge clearance. Ratsnest and DRC treat pads inside that outline as tied to the pour.
                         On the canvas, non-GND traces, vias, and pads on the <strong>same layer</strong> get isolation slots
                         (KiCad-style) using <strong>min copper clearance</strong>; GND stays one hue for that layer.
-                        Gerber export is still a solid zone outline (no boolean subtract yet). Prefer an inner GND layer (In1 on 4-layer) or bottom for 2-layer.
+                        Gerber export is still a solid zone outline (no boolean subtract yet). Prefer the <strong>GND</strong> inner layer (In1.Cu) or bottom copper for the pour.
                     </p>
                     <label className="pcb-field-col">
                         Pour layer
@@ -2154,9 +2393,28 @@ function PcbStudioPage({ onBackToSchematic }) {
                         >
                             <RotateCw size={12} /> Rotate
                         </button>
+                        <button
+                            className="pcb-action-btn"
+                            onClick={() => {
+                                const plIds = selected.filter((s) => s.kind === 'placement').map((s) => s.id);
+                                if (!plIds.length) return;
+                                undoMgrRef.current.push(doc);
+                                setDoc((d) => ({
+                                    ...d,
+                                    placements: d.placements?.map((p) => {
+                                        if (!plIds.includes(p.id)) return p;
+                                        const cur = p.layer || 'F.Cu';
+                                        return { ...p, layer: cur === 'F.Cu' ? 'B.Cu' : 'F.Cu' };
+                                    }),
+                                }));
+                            }}
+                            title="Flip selected footprints to other side (F)"
+                        >
+                            <Layers size={12} /> Flip Side
+                        </button>
                     </div>
                     <p className="pcb-keys-hint">
-                        ⌘/Ctrl+C copy · V paste · D duplicate · R rotate · arrows nudge · Shift+click multi · Del delete
+                        ⌘/Ctrl+C copy · V paste · D duplicate · R rotate · F flip side · arrows nudge · Del delete
                     </p>
 
                     {inspectorTarget?.kind === 'placement' ? (
@@ -2165,7 +2423,28 @@ function PcbStudioPage({ onBackToSchematic }) {
                             <p className="pcb-sel-meta">
                                 <strong>{inspectorTarget.p.ref}</strong>
                                 <span className="pcb-sel-fp">{inspectorTarget.p.footprintId}</span>
+                                <span className="pcb-sel-fp" style={{ marginLeft: 6 }}>
+                                    [{(inspectorTarget.p.layer || 'F.Cu') === 'F.Cu' ? 'Top' : 'Bottom'}]
+                                </span>
                             </p>
+                            <label className="pcb-field-col">
+                                Side
+                                <select
+                                    value={inspectorTarget.p.layer || 'F.Cu'}
+                                    onChange={(e) => {
+                                        const id = inspectorTarget.p.id;
+                                        const layer = e.target.value;
+                                        undoMgrRef.current.push(doc);
+                                        setDoc((d) => ({
+                                            ...d,
+                                            placements: d.placements?.map((p) => (p.id === id ? { ...p, layer } : p)),
+                                        }));
+                                    }}
+                                >
+                                    <option value="F.Cu">Top (F.Cu)</option>
+                                    <option value="B.Cu">Bottom (B.Cu)</option>
+                                </select>
+                            </label>
                             <label className="pcb-field-col">
                                 X (mm)
                                 <input
@@ -2394,8 +2673,9 @@ function PcbStudioPage({ onBackToSchematic }) {
                             Scroll=zoom &middot; Right-drag=pan &middot; Grid {doc.meta.gridMm ?? 0.5}mm
                             {tool === 'route' && ' · Click=add point · Dbl-click/Enter/right=finish · V=via+next layer · Shift+V=prev layer · Esc=cancel'}
                             {tool === 'polygon' && ' · Click=add vertex · Dbl-click/Enter=close · Esc=cancel'}
-                            {tool === 'select' && ' · Drag=move · R=rotate · D=dupe · Del=delete'}
-                            {' · 1-8=layer · S/T/P/M/G=tool · F=fit'}
+                            {tool === 'select' && ' · Click=select · Empty-drag / Alt-drag=box · Shift=add to selection · Drag selection=move · R=rotate · D=dupe · Del=delete'}
+                            {tool === 'boxselect' && ' · Drag rectangle over anything to select · Shift=add · Click=point pick · Then S + drag to move'}
+                            {' · 1-8=layer · S/B/T/P/M/G=tool · F=fit'}
                         </p>
                     </div>
 

@@ -85,13 +85,18 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, tra
   }
 
   // Block pads (skip same-net — A* reaches them freely)
+  // SMD pads only block on their placement's layer; through-hole pads block all layers.
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads) continue;
+    const plLayer = pl.layer || 'F.Cu';
     const plNets = pl.padNets || {};
     for (const pad of fp.pads) {
       const padNet = plNets[pad.num] || plNets[pad.id];
       if (skipNet != null && padNet === skipNet) continue;
+      // SMD pad: only blocks on its placement layer
+      const isTH = pad.type === 'th' || pad.drill;
+      if (!isTH && plLayer !== layer) continue;
       const [px, py] = padWorld(pl, pad);
       blockRadius(px, py, Math.max(pad.w, pad.h) / 2 + clearanceMm + trackHalfWidth);
     }

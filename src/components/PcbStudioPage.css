@@ -180,6 +180,14 @@
     color: #e9d5ff;
 }
 
+.pcb-topbtn.pcb-topbtn--clear-traces:not(:disabled) {
+    color: #f87171;
+}
+
+.pcb-topbtn.pcb-topbtn--clear-traces:not(:disabled):hover {
+    color: #fca5a5;
+}
+
 .pcb-topbtn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
@@ -567,6 +575,13 @@
     line-height: 1.35;
     font-weight: 500;
     color: #64748b;
+}
+
+.pcb-layer-stack-fixed-hint {
+    margin: 0 0 10px;
+    font-size: 0.62rem;
+    line-height: 1.45;
+    color: #94a3b8;
 }
 
 .pcb-sidebar-head {

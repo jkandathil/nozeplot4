@@ -1,20 +1,17 @@
 /**
- * PCB document model for PCB Studio — up to 8 copper layers (signal + plane routing).
- * Stack order top → bottom: F.Cu, In1…In6, B.Cu (KiCad-style ids).
- * For a 4-layer board, In1.Cu / In2.Cu are presented as GND / VCC in the UI.
+ * PCB document model for PCB Studio — **fixed 4-layer** stack only (KiCad-style ids).
+ * Top → bottom: **F.Cu** (top copper), **In1.Cu** (GND), **In2.Cu** (VCC), **B.Cu** (bottom copper).
  */
 
-export const PCB_LAYERS = [
-    'F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'In5.Cu', 'In6.Cu', 'B.Cu',
-    'F.SilkS', 'B.SilkS', 'Edge.Cuts',
-];
+/** Physical copper stack (frozen). In1/In2 are the inner plane pair; ids match KiCad 4-layer naming. */
+export const PCB_FIXED_COPPER_STACK = Object.freeze(['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']);
 
-export const COPPER_LAYERS = [
-    'F.Cu', 'In1.Cu', 'In2.Cu', 'In3.Cu', 'In4.Cu', 'In5.Cu', 'In6.Cu', 'B.Cu',
-];
+/** @deprecated alias — use {@link PCB_FIXED_COPPER_STACK} */
+export const COPPER_LAYERS = PCB_FIXED_COPPER_STACK;
 
-/** Allowed copper layer counts (even stacks; 8 = full inner set). */
-export const COPPER_LAYER_COUNT_OPTIONS = [2, 4, 6, 8];
+export const PCB_COPPER_LAYER_COUNT = 4;
+
+export const PCB_LAYERS = [...PCB_FIXED_COPPER_STACK, 'F.SilkS', 'B.SilkS', 'Edge.Cuts'];
 
 /** Preset grid steps (mm) for the board editor. */
 export const PCB_GRID_PRESETS_MM = [0.05, 0.1, 0.25, 0.5, 1.0];
@@ -45,42 +42,25 @@ export function isCopperLayerVisible(doc, layerId) {
 }
 
 /**
- * @param {object} doc
- * @returns {string[]} Active copper layer ids for this board (length = meta.copperLayerCount or 4 if unset/invalid).
+ * @param {object} [_doc] reserved; stack is always the fixed 4-layer board
+ * @returns {readonly string[]} F.Cu, In1.Cu (GND), In2.Cu (VCC), B.Cu
  */
-export function activeCopperLayerIds(doc) {
-    const n = Number(doc?.meta?.copperLayerCount);
-    const count = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
-    return COPPER_LAYERS.slice(0, count);
+export function activeCopperLayerIds(_doc) {
+    return PCB_FIXED_COPPER_STACK;
 }
 
 /**
- * User-facing copper name (editor labels). Canonical ids stay F.Cu / In1.Cu / … for export.
+ * User-facing copper name (editor labels). Canonical ids stay KiCad-style for export.
  * @param {string} layerId
- * @param {number} [copperLayerCount] active stack size (2, 4, 6, or 8)
+ * @param {number} [_copperLayerCount] ignored (stack is always four layers)
  */
-export function getCopperLayerDisplayName(layerId, copperLayerCount) {
-    const n = Number(copperLayerCount);
-    const count = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
-    const stack = COPPER_LAYERS.slice(0, count);
-    if (!stack.includes(layerId)) {
-        return String(layerId).replace(/\.Cu$/, '');
-    }
-    if (count === 2) {
-        if (layerId === 'F.Cu') return 'Top Cu';
-        if (layerId === 'B.Cu') return 'Bottom Cu';
-    }
-    if (count === 4) {
-        if (layerId === 'F.Cu') return 'Top Cu';
-        if (layerId === 'In1.Cu') return 'GND';
-        if (layerId === 'In2.Cu') return 'VCC';
-        if (layerId === 'B.Cu') return 'Bottom Cu';
-    }
-    if (layerId === 'F.Cu') return 'Top Cu';
-    if (layerId === 'B.Cu') return 'Bottom Cu';
-    const m = /^In(\d+)\.Cu$/.exec(layerId);
-    const inn = m ? Number(m[1]) : 1;
-    return `Inner ${inn}`;
+export function getCopperLayerDisplayName(layerId, _copperLayerCount) {
+    const id = String(layerId || '');
+    if (id === 'F.Cu') return 'Top copper';
+    if (id === 'In1.Cu') return 'GND';
+    if (id === 'In2.Cu') return 'VCC';
+    if (id === 'B.Cu') return 'Bottom copper';
+    return id.replace(/\.Cu$/, '') || id;
 }
 
 /**
@@ -91,8 +71,7 @@ export function migratePcbDoc(doc) {
     if (!doc || typeof doc !== 'object') return emptyPcbDoc();
     const next = JSON.parse(JSON.stringify(doc));
     next.meta = next.meta || {};
-    const n = Number(next.meta.copperLayerCount);
-    next.meta.copperLayerCount = COPPER_LAYER_COUNT_OPTIONS.includes(n) ? n : 4;
+    next.meta.copperLayerCount = PCB_COPPER_LAYER_COUNT;
     const allowed = new Set(activeCopperLayerIds(next));
     next.placements = Array.isArray(next.placements) ? next.placements : [];
     next.tracks = (Array.isArray(next.tracks) ? next.tracks : [])
@@ -134,7 +113,7 @@ export function emptyPcbDoc() {
             name: 'Untitled board',
             boardWmm: 80,
             boardHmm: 50,
-            copperLayerCount: 4,
+            copperLayerCount: PCB_COPPER_LAYER_COUNT,
             defaultTrackMm: 0.35,
             defaultViaDrillMm: 0.4,
             defaultViaDiamMm: 0.8,

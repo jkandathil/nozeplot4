@@ -174,6 +174,13 @@ export function setCurrentProjectId(id) {
     if (!ls) return;
     if (id) ls.setItem(CURRENT_KEY, id);
     else ls.removeItem(CURRENT_KEY);
+    try {
+        window.dispatchEvent(
+            new CustomEvent('noze-circuit-current-project', { detail: { id: id || null } }),
+        );
+    } catch {
+        /* non-browser */
+    }
 }
 
 /* --------------------- naming + utilities -------------------- */

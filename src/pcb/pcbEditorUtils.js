@@ -25,6 +25,36 @@ export function distPointToSegment(px, py, ax, ay, bx, by) {
     return Math.sqrt(dist2(px, py, qx, qy));
 }
 
+/**
+ * True if segment AB intersects the closed axis-aligned rectangle [minX,maxX]×[minY,maxY] (mm).
+ * Used for marquee / box selection of tracks and polygon edges.
+ */
+export function segmentIntersectsAabb(ax, ay, bx, by, minX, maxX, minY, maxY) {
+    const inside = (x, y) => x >= minX && x <= maxX && y >= minY && y <= maxY;
+    if (inside(ax, ay) || inside(bx, by)) return true;
+    const sMinX = Math.min(ax, bx);
+    const sMaxX = Math.max(ax, bx);
+    const sMinY = Math.min(ay, by);
+    const sMaxY = Math.max(ay, by);
+    if (sMaxX < minX || sMinX > maxX || sMaxY < minY || sMinY > maxY) return false;
+
+    const crossVertical = (xLine) => {
+        if (Math.abs(bx - ax) < 1e-12) return false;
+        const t = (xLine - ax) / (bx - ax);
+        if (t < 0 || t > 1) return false;
+        const y = ay + t * (by - ay);
+        return y >= minY && y <= maxY;
+    };
+    const crossHorizontal = (yLine) => {
+        if (Math.abs(by - ay) < 1e-12) return false;
+        const t = (yLine - ay) / (by - ay);
+        if (t < 0 || t > 1) return false;
+        const x = ax + t * (bx - ax);
+        return x >= minX && x <= maxX;
+    };
+    return crossVertical(minX) || crossVertical(maxX) || crossHorizontal(minY) || crossHorizontal(maxY);
+}
+
 export function pickTrackAt(doc, mx, my, tolMm = 0.45) {
     const tracks = doc.tracks || [];
     for (let ti = tracks.length - 1; ti >= 0; ti--) {

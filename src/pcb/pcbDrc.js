@@ -80,17 +80,19 @@ function buildDrcIndex(doc, getFootprint) {
     );
   }
 
-  // Index pads
+  // Index pads (with placement layer for cross-layer filtering)
   for (const pl of (doc.placements || [])) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads) continue;
     const nets = pl.padNets || {};
+    const plLayer = pl.layer || 'F.Cu';
     for (const pad of fp.pads) {
       const [px, py] = padWorld(pl, pad);
       const r = Math.max(pad.w, pad.h) / 2;
       const net = nets[pad.num] || nets[pad.id] || '';
+      const isTH = pad.type === 'th' || pad.drill;
       idx.insert(
-        { kind: 'pad', ref: pl.ref, padNum: pad.num, net, x: px, y: py, w: pad.w, h: pad.h, r },
+        { kind: 'pad', ref: pl.ref, padNum: pad.num, net, x: px, y: py, w: pad.w, h: pad.h, r, layer: plLayer, throughHole: isTH },
         px - r, py - r, px + r, py + r,
       );
     }
@@ -177,6 +179,8 @@ export function runDRC(doc, getFootprint, options = {}) {
       for (const item of spatialIdx.query(minX, minY, maxX, maxY)) {
         if (item.kind !== 'pad') continue;
         if (item.net && tr.net && item.net === tr.net) continue; // same net
+        // Skip pads on different layers (SMD only blocks its own layer; TH blocks all)
+        if (!item.throughHole && item.layer !== tr.layer) continue;
 
         const dist = distToSegment([item.x, item.y], seg[0], seg[1]);
         const requiredClearance = hw + item.r + minClearance;
@@ -386,6 +390,8 @@ export function getCopperViolationsForProposedTrack(doc, getFootprint, track) {
     for (const item of spatialIdx.query(minX, minY, maxX, maxY)) {
       if (item.kind !== 'pad') continue;
       if (item.net && t1.net && item.net === t1.net) continue;
+      // Skip pads on different layers (SMD only blocks its own layer; TH blocks all)
+      if (!item.throughHole && item.layer !== t1.layer) continue;
 
       const dist = distToSegment([item.x, item.y], seg[0], seg[1]);
       const requiredClearance = hw + item.r + minClearance;
