@@ -1,5 +1,14 @@
 /**
  * Ratsnest (air-wires) between pad islands on the same net, hidden when copper connects them.
+ *
+ * Layer-aware connectivity:
+ *   - SMD pad ↔ track: only if track.layer matches pad's placement layer
+ *   - track ↔ track: only if they are on the same layer AND endpoints touch
+ *   - via ↔ track: always (vias span all layers)
+ *   - via ↔ pad: always (vias span all layers)
+ *   - polygon zone ↔ pad: only if zone.layer matches pad's placement layer
+ *
+ * This means an F.Cu pad and a B.Cu trace are NOT connected unless a via bridges them.
  */
 
 import { pointInPolygon } from './pcbEditorUtils.js';
@@ -46,21 +55,15 @@ function trackEndpointsTouch(ptsA, ptsB, eps) {
   if (!ptsA?.length || !ptsB?.length) return false;
   const endsA = [ptsA[0], ptsA[ptsA.length - 1]];
   const endsB = [ptsB[0], ptsB[ptsB.length - 1]];
-  // Check A's endpoints against B's full polyline (segment-level)
   for (const a of endsA) {
     if (minDistPointToPolyline(a[0], a[1], ptsB) <= eps) return true;
   }
-  // Check B's endpoints against A's full polyline
   for (const b of endsB) {
     if (minDistPointToPolyline(b[0], b[1], ptsA) <= eps) return true;
   }
   return false;
 }
 
-/**
- * Does a point (e.g. via center) lie within `eps` of any segment on the track?
- * (Not just endpoints — handles T-junctions and mid-segment landings.)
- */
 function trackTouchesPoint(pts, x, y, eps) {
   if (!pts?.length) return false;
   return minDistPointToPolyline(x, y, pts) <= eps;
@@ -83,20 +86,22 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
   const endpointEpsMm = 0.42;
   const viaSlopMm = 0.55;
 
-  /** @type {Map<string, { x: number, y: number }[]>} */
+  /** @type {Map<string, { x: number, y: number, layer: string }[]>} */
   const padsByNet = new Map();
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp) continue;
     const nets = pl.padNets || {};
+    const plLayer = pl.layer || 'F.Cu';
     for (const pad of fp.pads || []) {
       const net = nets[pad.num] || nets[pad.id];
-      // "0" is the GND net label from the schematic bridge, not unassigned copper.
       if (net == null || net === '') continue;
       const [x, y] = padWorld(pl, pad);
       const key = String(net);
       if (!padsByNet.has(key)) padsByNet.set(key, []);
-      padsByNet.get(key).push({ x, y });
+      // Store pad layer for layer-aware connectivity
+      const isTH = pad.type === 'th' || pad.drill;
+      padsByNet.get(key).push({ x, y, layer: plLayer, throughHole: isTH });
     }
   }
 
@@ -115,30 +120,39 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
       adj.get(b).add(a);
     };
 
+    // Pad ↔ Track: only connect if track is on the pad's layer (or pad is through-hole)
     for (let i = 0; i < n; i++) {
       const pi = `p${i}`;
-      const { x, y } = pads[i];
+      const { x, y, layer: padLayer, throughHole } = pads[i];
       for (const tr of tracksOnNet) {
-        if (!tr.id || !padTouchesTrack(x, y, tr, padSlopMm)) continue;
+        if (!tr.id) continue;
+        // Layer check: SMD pad only connects to tracks on its own layer
+        if (!throughHole && (tr.layer || 'F.Cu') !== padLayer) continue;
+        if (!padTouchesTrack(x, y, tr, padSlopMm)) continue;
         addEdge(pi, `t${tr.id}`);
       }
+      // Pad ↔ Via: always (vias span all layers)
       for (const v of viasOnNet) {
         const vr = (Number(v.diamMm) || 0.8) / 2 + 0.18;
         if (Math.hypot(x - v.x, y - v.y) <= vr + viaSlopMm) addEdge(pi, `via${v.id}`);
       }
     }
 
+    // Track ↔ Track: only connect if they are on the SAME layer
     for (let a = 0; a < tracksOnNet.length; a++) {
       const ta = tracksOnNet[a];
       const ptsA = ta.points || [];
       for (let b = a + 1; b < tracksOnNet.length; b++) {
         const tb = tracksOnNet[b];
+        // Different layers → no direct connection (need a via)
+        if ((ta.layer || 'F.Cu') !== (tb.layer || 'F.Cu')) continue;
         if (trackEndpointsTouch(ptsA, tb.points || [], endpointEpsMm)) {
           addEdge(`t${ta.id}`, `t${tb.id}`);
         }
       }
     }
 
+    // Via ↔ Track: always (vias span all layers)
     for (const v of viasOnNet) {
       const vnode = `via${v.id}`;
       for (const tr of tracksOnNet) {
@@ -146,15 +160,19 @@ export function buildRatsnestHubsByNet(doc, getFootprint) {
       }
     }
 
-    // Filled copper polygons (e.g. GND plane): pads whose centers lie inside a same-net zone
-    // are treated as connected through that pour (2D board projection).
-    const zoneNode = `_zone_${net}`;
+    // Filled copper polygons: pad connects through zone only if zone.layer matches pad layer
+    const zoneNodes = new Map(); // layer → node id
     for (const poly of doc.polygons || []) {
       const pts = poly.points || [];
       if (pts.length < 3) continue;
       if (String(poly.net || '') !== String(net)) continue;
+      const polyLayer = poly.layer || 'F.Cu';
+      const zoneNode = `_zone_${net}_${polyLayer}`;
+      if (!zoneNodes.has(polyLayer)) zoneNodes.set(polyLayer, zoneNode);
       for (let i = 0; i < n; i++) {
-        const { x, y } = pads[i];
+        const { x, y, layer: padLayer, throughHole } = pads[i];
+        // Zone connects pad only if same layer (or through-hole pad)
+        if (!throughHole && padLayer !== polyLayer) continue;
         if (pointInPolygon(x, y, pts)) addEdge(`p${i}`, zoneNode);
       }
     }
