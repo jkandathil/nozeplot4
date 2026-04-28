@@ -84,8 +84,54 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, tra
     blockRadius(v.x, v.y, (Number(v.diamMm) || 0.8) / 2 + clearanceMm);
   }
 
-  // Block pads (skip same-net — A* reaches them freely)
-  // SMD pads only block on their placement's layer; through-hole pads block all layers.
+  // Block component courtyards FIRST — prevents traces from threading between pads
+  // of the same component even when one pad is on the routed net (skipNet).
+  // Then block individual pads for extra margin.
+  for (const pl of doc.placements || []) {
+    const fp = getFootprint(pl.footprintId);
+    if (!fp?.pads?.length) continue;
+    const plLayer = pl.layer || 'F.Cu';
+    // SMD components: courtyard only blocks on their layer
+    if (plLayer !== layer) continue;
+
+    // Do not fill the whole courtyard when every pad is on the net we are routing —
+    // A* must still reach those pads (courtyard would cover them).
+    if (skipNet != null) {
+      const plNets = pl.padNets || {};
+      let hasOffNetPad = false;
+      for (const pad of fp.pads) {
+        const pn = plNets[pad.num] || plNets[pad.id];
+        if (pn !== skipNet) {
+          hasOffNetPad = true;
+          break;
+        }
+      }
+      if (!hasOffNetPad) continue;
+    }
+
+    // Compute courtyard bounding box from all pads
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const pad of fp.pads) {
+      const [px, py] = padWorld(pl, pad);
+      const hw = pad.w / 2;
+      const hh = pad.h / 2;
+      minX = Math.min(minX, px - hw);
+      maxX = Math.max(maxX, px + hw);
+      minY = Math.min(minY, py - hh);
+      maxY = Math.max(maxY, py + hh);
+    }
+    // Block entire courtyard rectangle + clearance
+    const cMarg = clearanceMm + trackHalfWidth;
+    const gx0 = Math.max(0, Math.floor((minX - cMarg) / gridRes));
+    const gy0 = Math.max(0, Math.floor((minY - cMarg) / gridRes));
+    const gx1 = Math.min(cols - 1, Math.ceil((maxX + cMarg) / gridRes));
+    const gy1 = Math.min(rows - 1, Math.ceil((maxY + cMarg) / gridRes));
+    for (let gy = gy0; gy <= gy1; gy++)
+      for (let gx = gx0; gx <= gx1; gx++)
+        blockCell(gx, gy);
+  }
+
+  // Also block individual pads that might extend beyond their component courtyard
   for (const pl of doc.placements || []) {
     const fp = getFootprint(pl.footprintId);
     if (!fp?.pads) continue;
@@ -94,7 +140,6 @@ function buildObstacleGrid(doc, layer, gridRes, clearanceMm, boardW, boardH, tra
     for (const pad of fp.pads) {
       const padNet = plNets[pad.num] || plNets[pad.id];
       if (skipNet != null && padNet === skipNet) continue;
-      // SMD pad: only blocks on its placement layer
       const isTH = pad.type === 'th' || pad.drill;
       if (!isTH && plLayer !== layer) continue;
       const [px, py] = padWorld(pl, pad);
