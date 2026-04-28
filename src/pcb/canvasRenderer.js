@@ -1022,10 +1022,10 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
     const linkNet = schCrossNets.has(String(net).toLowerCase());
     const isSel = selectedNets.has(String(net));
     if (isSel) {
-      // Selected: just a brighter version of the normal style
-      ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
-      ctx.lineWidth = linkNet ? 0.22 : 0.16;
-      ctx.setLineDash([0.45, 0.22]);
+      // Selected airwire: same dash rhythm as idle, slightly wider + brighter (no solid “halo” line)
+      ctx.strokeStyle = linkNet ? 'rgba(237, 222, 255, 0.98)' : 'rgba(214, 178, 255, 0.95)';
+      ctx.lineWidth = linkNet ? 0.14 : 0.1;
+      ctx.setLineDash([0.4, 0.25]);
     } else if (emphasize) {
       ctx.strokeStyle = linkNet ? 'rgba(216,180,254,0.95)' : 'rgba(192,132,252,0.88)';
       ctx.lineWidth = linkNet ? 0.24 : 0.18;
@@ -1043,17 +1043,18 @@ function drawRatsnest(ctx, padCentersByNet, schCrossNets, options = {}) {
     }
     ctx.setLineDash([]);
   }
-  if (emphasize) {
-    const r = 0.28;
+  // Yellow pad dots help “unrouted” mode, but clash with a selected airwire (reads as a thick yellow trace).
+  if (emphasize && selectedNets.size === 0) {
+    const r = 0.22;
     for (const [, pts] of padCentersByNet) {
       if (pts.length < 2) continue;
       for (const [x, y] of pts) {
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(250,204,21,0.55)';
+        ctx.fillStyle = 'rgba(250, 204, 21, 0.4)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(251,191,36,0.9)';
-        ctx.lineWidth = 0.06;
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.65)';
+        ctx.lineWidth = 0.05;
         ctx.stroke();
       }
     }
