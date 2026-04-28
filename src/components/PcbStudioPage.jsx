@@ -969,6 +969,7 @@ function PcbStudioPage({ onBackToSchematic }) {
     /* ── Insert via at cursor and switch layer (V / top bar during routing) ── */
     const insertViaAndSwitchLayer = useCallback((opts = {}) => {
         const reverse = !!opts.reverseLayer;
+        const explicitTarget = opts.targetLayer || null;
         const cursor = boardCursorMmRef.current || lastPointerBoardRef.current;
         let cx = cursor[0];
         let cy = cursor[1];
@@ -979,9 +980,16 @@ function PcbStudioPage({ onBackToSchematic }) {
         }
         const pt = [snap(cx), snap(cy)];
         const stack = activeCopperLayerIds(doc);
-        const curIdx = Math.max(0, stack.indexOf(activeLayer));
-        const dir = reverse ? -1 : 1;
-        const targetLayer = stack[(curIdx + dir + stack.length) % stack.length];
+        let targetLayer;
+        if (explicitTarget && stack.includes(explicitTarget)) {
+            targetLayer = explicitTarget;
+        } else {
+            const curIdx = Math.max(0, stack.indexOf(activeLayer));
+            const dir = reverse ? -1 : 1;
+            targetLayer = stack[(curIdx + dir + stack.length) % stack.length];
+        }
+        // If already on the target layer, nothing to do
+        if (targetLayer === activeLayer) return;
 
         // If routing, commit current segment up to the via point, add via, start new draft on other layer
         if (routeDraft && routeDraft.length >= 1) {
@@ -1822,14 +1830,39 @@ function PcbStudioPage({ onBackToSchematic }) {
                 {tool === 'route' ? (
                     <>
                         <div className="pcb-sep" />
-                        <button
-                            type="button"
-                            className="pcb-topbtn"
-                            onClick={(e) => insertViaAndSwitchLayer({ reverseLayer: e.shiftKey })}
-                            title="Via + next copper layer (same as V). Commits the in-progress trace to the cursor, adds a via, switches to the next layer in the stack, and continues routing from the via. Shift+click or Shift+V: previous layer."
-                        >
-                            <CircleDot size={14} /> Via layer
-                        </button>
+                        {activeCopperLayerIds(doc).map((ly) => {
+                            const isActive = ly === activeLayer;
+                            const colors = { 'F.Cu': '#ef4444', 'In1.Cu': '#22c55e', 'In2.Cu': '#3b82f6', 'B.Cu': '#a855f7' };
+                            const labels = { 'F.Cu': 'Top', 'In1.Cu': 'GND', 'In2.Cu': 'VCC', 'B.Cu': 'Bot' };
+                            return (
+                                <button
+                                    key={ly}
+                                    type="button"
+                                    className={`pcb-topbtn${isActive ? ' pcb-topbtn--active-layer' : ''}`}
+                                    style={{
+                                        borderBottom: `2px solid ${colors[ly] || '#94a3b8'}`,
+                                        opacity: isActive ? 1 : 0.7,
+                                        fontWeight: isActive ? 700 : 400,
+                                    }}
+                                    onClick={() => {
+                                        if (isActive) return;
+                                        if (routeDraft && routeDraft.length >= 1) {
+                                            insertViaAndSwitchLayer({ targetLayer: ly });
+                                        } else {
+                                            setActiveLayer(ly);
+                                        }
+                                    }}
+                                    title={isActive
+                                        ? `Currently routing on ${getCopperLayerDisplayName(ly)}`
+                                        : routeDraft?.length >= 1
+                                            ? `Add via and switch to ${getCopperLayerDisplayName(ly)}`
+                                            : `Switch to ${getCopperLayerDisplayName(ly)}`}
+                                >
+                                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: colors[ly], marginRight: 4 }} />
+                                    {labels[ly] || ly}
+                                </button>
+                            );
+                        })}
                     </>
                 ) : null}
                 <div className="pcb-sep" />
