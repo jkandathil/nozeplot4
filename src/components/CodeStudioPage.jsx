@@ -27,24 +27,32 @@ import {
 } from '../utils/codeStudioBridge.js';
 import './CodeStudioPage.css';
 
-/** Must match the `pyodide` npm version so the CDN assets match the JS API. */
-const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
+/** Pyodide release pinned for Code Studio (ESM loader + indexURL must match). */
+const PYODIDE_VERSION = '0.26.4';
+/** Wheel + wasm + stdlib zip base (official jsDelivr full build). */
+const PYODIDE_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+/**
+ * Official Pyodide ESM entry from the same CDN as `indexURL`.
+ * We avoid `import('pyodide')` from the app bundle: Vite emits `assets/pyodide-*.js` on GitHub Pages,
+ * which often fails to fetch (stale hashes after deploy, cache, or asset edge cases).
+ */
+const PYODIDE_ESM_LOADER = `${PYODIDE_INDEX_URL}pyodide.mjs`;
 
 /**
- * Browser note: stock C `time.sleep` does not yield to the UI. We line-buffer streams and patch
- * `time.sleep` to use `asyncio.sleep` via `pyodide.ffi.run_sync` when stack switching is available
- * (requires `runPythonAsync`, so the browser can paint between sleeps and stdout batches).
- * Falls back to `run_until_complete` if `can_run_sync()` is false (older browsers without JSPI).
- * Top-level `await` in the editor is allowed when using `runPythonAsync`.
+ * Browser note: stock C `time.sleep` does not yield to the UI. We patch `time.sleep` to use
+ * `asyncio.sleep` via `pyodide.ffi.run_sync` when stack switching is available (requires
+ * `runPythonAsync`, so the browser can paint between sleeps and stdout batches). Falls back to
+ * `run_until_complete` if `can_run_sync()` is false. Top-level `await` in the editor is allowed.
+ *
+ * We do not call `TextIOWrapper.reconfigure()` on sys.stdout/stderr — it can break Pyodide's
+ * stream proxies and raise `OSError: [Errno 29] I/O error`. Newline joining is handled in JS
+ * (`appendCapturedStream`).
+ *
+ * `builtins.input` is patched to call into the Code Studio UI via `globalThis.nozeCodeStudioRequestInput`
+ * and `pyodide.ffi.run_sync` (needs the same stack switching as cooperative `time.sleep`).
+ * Raw `sys.stdin` reads still use Pyodide `setStdin` EOF mode (no `window.prompt()`).
  */
 const PYODIDE_RUN_PRELUDE = `
-import sys as __noze_sys
-for __noze_stream in (__noze_sys.stdout, __noze_sys.stderr):
-    try:
-        __noze_stream.reconfigure(line_buffering=True)
-    except Exception:
-        pass
-
 import time as __noze_time
 import asyncio as __noze_asyncio
 
@@ -99,6 +107,26 @@ def __noze_configure_mpl():
         pass
 
 __noze_configure_mpl()
+
+import builtins as __noze_bi
+
+def __noze_input(prompt=""):
+    from pyodide.ffi import run_sync, can_run_sync
+    from js import globalThis
+    _req = getattr(globalThis, "nozeCodeStudioRequestInput", None)
+    if _req is None:
+        raise EOFError("stdin UI is not available")
+    if not can_run_sync():
+        raise RuntimeError(
+            "input() needs WASM stack switching (e.g. current Chrome). Update the browser, or avoid input()."
+        )
+    _p = "" if prompt is None else str(prompt)
+    _res = run_sync(_req(_p))
+    if _res is None:
+        raise EOFError("cancelled")
+    return str(_res)
+
+__noze_bi.input = __noze_input
 `.trim();
 
 function languageFromFileName(name) {
@@ -215,6 +243,33 @@ export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDele
     const [output, setOutput] = useState('');
     const [showFileList, setShowFileList] = useState(() => readStoredBool(LS_CODE_STUDIO_SHOW_FILES, true));
     const [showOutputPanel, setShowOutputPanel] = useState(() => readStoredBool(LS_CODE_STUDIO_SHOW_OUTPUT, true));
+    const [stdinModal, setStdinModal] = useState(null);
+    const [stdinDraft, setStdinDraft] = useState('');
+    const stdinDraftRef = useRef('');
+    const openStdinPromptRef = useRef(() => Promise.resolve(null));
+
+    openStdinPromptRef.current = (prompt) =>
+        new Promise((resolve) => {
+            flushSync(() => {
+                stdinDraftRef.current = '';
+                setStdinDraft('');
+                setStdinModal({ prompt: String(prompt ?? ''), resolve });
+            });
+        });
+
+    useEffect(() => {
+        stdinDraftRef.current = stdinDraft;
+    }, [stdinDraft]);
+
+    useEffect(() => {
+        const fn = (p) => openStdinPromptRef.current(p);
+        globalThis.nozeCodeStudioRequestInput = fn;
+        return () => {
+            if (globalThis.nozeCodeStudioRequestInput === fn) {
+                delete globalThis.nozeCodeStudioRequestInput;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         try {
@@ -293,10 +348,15 @@ export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDele
         if (pyodideRef.current) return pyodideRef.current;
         setPyodideLoading(true);
         try {
-            const { loadPyodide } = await import('pyodide');
+            const { loadPyodide } = await import(/* @vite-ignore */ PYODIDE_ESM_LOADER);
             const py = await loadPyodide({
                 indexURL: PYODIDE_INDEX_URL,
                 fullStdLib: false,
+            });
+            /* Raw sys.stdin reads: EOF. `input()` uses patched builtins + in-app modal (not window.prompt()). */
+            py.setStdin({
+                isatty: false,
+                stdin: () => null,
             });
             py.setStdout({
                 batched: (s) => {
@@ -357,6 +417,18 @@ await micropip.install(${specJson})
         if (installBusy) return;
         const code = editorRef.current?.getValue?.() ?? editorValue;
         setOutput('');
+        setStdinModal((m) => {
+            if (m?.resolve) {
+                try {
+                    m.resolve(null);
+                } catch {
+                    /* ignore */
+                }
+            }
+            return null;
+        });
+        stdinDraftRef.current = '';
+        setStdinDraft('');
         const mplEl = mplTargetRef.current;
         if (mplEl) {
             mplEl.replaceChildren();
@@ -437,6 +509,29 @@ await micropip.install(${specJson})
             mplEl.replaceChildren();
         }
     }, []);
+
+    const finishStdin = useCallback((value) => {
+        setStdinModal((m) => {
+            if (m?.resolve) {
+                try {
+                    m.resolve(value);
+                } catch {
+                    /* ignore */
+                }
+            }
+            return null;
+        });
+        stdinDraftRef.current = '';
+        setStdinDraft('');
+    }, []);
+
+    const handleStdinOk = useCallback(() => {
+        finishStdin(stdinDraftRef.current);
+    }, [finishStdin]);
+
+    const handleStdinCancel = useCallback(() => {
+        finishStdin(null);
+    }, [finishStdin]);
 
     const applyFromMarkdown = useCallback(
         (markdown) => {
@@ -798,6 +893,55 @@ await micropip.install(${specJson})
                     />
                 </main>
             </div>
+            {stdinModal ? (
+                <div
+                    className="code-studio-stdin-root"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="code-studio-stdin-title"
+                >
+                    <button
+                        type="button"
+                        className="code-studio-stdin-backdrop"
+                        aria-label="Dismiss input dialog"
+                        onClick={handleStdinCancel}
+                    />
+                    <div className="code-studio-stdin-card">
+                        <h2 id="code-studio-stdin-title" className="code-studio-stdin-title">
+                            Program input
+                        </h2>
+                        <pre className="code-studio-stdin-prompt" role="status">
+                            {stdinModal.prompt || ' '}
+                        </pre>
+                        <input
+                            type="text"
+                            className="code-studio-stdin-input"
+                            value={stdinDraft}
+                            autoComplete="off"
+                            autoFocus
+                            onChange={(e) => setStdinDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleStdinOk();
+                                }
+                                if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    handleStdinCancel();
+                                }
+                            }}
+                        />
+                        <div className="code-studio-stdin-actions">
+                            <button type="button" className="code-studio-btn code-studio-btn-primary" onClick={handleStdinOk}>
+                                OK
+                            </button>
+                            <button type="button" className="code-studio-btn" onClick={handleStdinCancel}>
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

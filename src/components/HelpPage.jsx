@@ -1645,11 +1645,12 @@ export const GUIDE_SECTIONS = [
         title: 'Code Studio',
         subtitle: 'Python and text in the Codes folder',
         intro:
-            '**Code Studio** is a browser-based editor for scripts and notes stored under the **`Codes`** workspace folder. Python files can be **Run** with **Pyodide** (same major version as the bundled `pyodide` package). Output streams to the panel; **matplotlib** figures render in the dedicated **Plots** area instead of covering the whole page.',
+            '**Code Studio** is a browser-based editor for scripts and notes stored under the **`Codes`** workspace folder. Python files can be **Run** with **Pyodide** (pinned **0.26.x** loaded from jsDelivr; WASM/stdlib use the same CDN). Output streams to the panel; **matplotlib** figures render in the dedicated **Plots** area instead of covering the whole page.',
         fundamentals: [
             '**No server Python:** execution is WASM in your tab — great for privacy, but not every **pip** package has a compatible wheel.',
             '**micropip:** use **Install packages** for extra libraries when a Pyodide wheel exists; failures usually mean the package is not built for the browser.',
             '**Save often:** **Ctrl/⌘+S** saves the active file into the workspace; **Ctrl/⌘+Enter** runs a `.py` file.',
+            '**Stdin:** `input()` opens an in-app line prompt (works with the same WASM stack switching as cooperative `time.sleep`, e.g. current Chrome). Cancel or Escape raises **EOFError**; raw `sys.stdin` reads still behave as EOF.',
         ],
         implemented: [
             'Monaco editor with syntax highlighting for common languages',
