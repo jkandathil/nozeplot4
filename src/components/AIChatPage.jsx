@@ -519,29 +519,6 @@ export default function AIChatPage() {
         };
     }, [finalizeAssistantMessageByRef]);
 
-    /* Gemini backend: ready when API key is set (no model download). */
-    useEffect(() => {
-        if (!isGeminiBackend) return;
-        if (isGenerating) return;
-        if (effectiveGeminiKey) {
-            setStatus('ready');
-            setLoadedModelId(`gemini/${geminiModel}`);
-            setErrorMsg('');
-        } else {
-            setStatus('idle');
-            setLoadedModelId('');
-        }
-    }, [isGeminiBackend, effectiveGeminiKey, geminiModel, isGenerating]);
-
-    /* Leaving Gemini: clear cloud "ready" state until a local model loads. */
-    useEffect(() => {
-        if (isGeminiBackend || isLocalLoaded) return;
-        if (loadedModelId.startsWith('gemini/')) {
-            setLoadedModelId('');
-            setStatus('idle');
-        }
-    }, [isGeminiBackend, isLocalLoaded, loadedModelId]);
-
     /* ============ WebGPU probe ============ */
     useEffect(() => {
         (async () => {
@@ -644,6 +621,29 @@ export default function AIChatPage() {
         : isLocalLoaded;
     const isLoading = !isGeminiBackend && status === 'loading';
     const isGenerating = status === 'generating';
+
+    /* Gemini backend: ready when API key is set (no model download). */
+    useEffect(() => {
+        if (!isGeminiBackend) return;
+        if (isGenerating) return;
+        if (effectiveGeminiKey) {
+            setStatus('ready');
+            setLoadedModelId(`gemini/${geminiModel}`);
+            setErrorMsg('');
+        } else {
+            setStatus('idle');
+            setLoadedModelId('');
+        }
+    }, [isGeminiBackend, effectiveGeminiKey, geminiModel, isGenerating]);
+
+    /* Leaving Gemini: clear cloud "ready" state until a local model loads. */
+    useEffect(() => {
+        if (isGeminiBackend || isLocalLoaded) return;
+        if (loadedModelId.startsWith('gemini/')) {
+            setLoadedModelId('');
+            setStatus('idle');
+        }
+    }, [isGeminiBackend, isLocalLoaded, loadedModelId]);
 
     /* ============ Actions ============ */
     const handleLoadModel = useCallback(() => {
