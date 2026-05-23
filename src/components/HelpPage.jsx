@@ -1654,7 +1654,7 @@ export const GUIDE_SECTIONS = [
         implemented: [
             'Monaco editor with syntax highlighting for common languages',
             'Files constrained to the **Codes** folder via the app workspace model',
-            'Run stdout/stderr capture with cooperative **time.sleep** mapping',
+            '**Run** via Pyodide **runPythonAsync** with stdout/stderr capture; **`time.sleep`** is patched with cooperative **asyncio** delays so the output panel can update between waits on browsers that support stack switching (current Chromium); other engines may batch output until the script ends.',
             'Optional **micropip** installs; matplotlib mount target for in-app figures',
             '**Toolbar & panel edges:** **Files** / **Output** in the top bar; the control beside **CODES** and the chevron on the output header shrink those panels; slim **Codes** / **Output & plots** strips restore them (persist in this browser).',
             '**Code assistant** (right rail): chat about your open file; uses the same **AI Agents** backend and keys (Cloud API or local model). Fenced code in replies can be applied automatically to the Monaco editor when enabled under AI Agents → Code Studio.',
@@ -1663,7 +1663,7 @@ export const GUIDE_SECTIONS = [
             'Open **Code Studio** from the sidebar.',
             'Create or open a file under **Codes**; edit your script.',
             'For extra packages, type names in **Install packages** and install, then **import** in your script.',
-            'Click **Run** on a `.py` file to execute; read text output and **Plots (matplotlib)** below it.',
+            'Click **Run** on a `.py` file to execute; read text output and **Plots (matplotlib)** below it. Use **Clear** on the output bar (or **Clear output** in the editor toolbar) to wipe the console and figures.',
         ],
     },
     {

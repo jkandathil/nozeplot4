@@ -31,10 +31,11 @@ import './CodeStudioPage.css';
 const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
 
 /**
- * Browser note: stock C `time.sleep` does not yield to the UI. We line-buffer streams and replace
- * `time.sleep` with `asyncio.sleep` via the event loop (same pattern as cooperative blocking).
- * User scripts are executed with synchronous `runPython` (not `runPythonAsync`) so this matches
- * normal desktop Python and `time.sleep` works in plain scripts.
+ * Browser note: stock C `time.sleep` does not yield to the UI. We line-buffer streams and patch
+ * `time.sleep` to use `asyncio.sleep` via `pyodide.ffi.run_sync` when stack switching is available
+ * (requires `runPythonAsync`, so the browser can paint between sleeps and stdout batches).
+ * Falls back to `run_until_complete` if `can_run_sync()` is false (older browsers without JSPI).
+ * Top-level `await` in the editor is allowed when using `runPythonAsync`.
  */
 const PYODIDE_RUN_PRELUDE = `
 import sys as __noze_sys
@@ -48,8 +49,16 @@ import time as __noze_time
 import asyncio as __noze_asyncio
 
 def __noze_sleep(seconds):
+    sec = float(seconds)
+    try:
+        from pyodide.ffi import run_sync, can_run_sync
+        if can_run_sync():
+            run_sync(__noze_asyncio.sleep(sec))
+            return
+    except Exception:
+        pass
     __noze_loop = __noze_asyncio.get_event_loop()
-    __noze_loop.run_until_complete(__noze_asyncio.sleep(float(seconds)))
+    __noze_loop.run_until_complete(__noze_asyncio.sleep(sec))
 
 __noze_time.sleep = __noze_sleep
 
@@ -366,9 +375,12 @@ await micropip.install(${specJson})
             if (mplEl) {
                 document.pyodideMplTarget = mplEl;
             }
-            // Sync execution so `time.sleep` / prelude asyncio bridge behaves like desktop Python.
-            // Top-level `await` in the editor is not supported (use asyncio.run + async def if needed).
-            py.runPython(`${PYODIDE_RUN_PRELUDE}\n\n${code}`);
+            try {
+                await py.loadPackagesFromImports(code);
+            } catch {
+                /* micropip / missing wheels surface on run; avoid blocking Run on scan errors */
+            }
+            await py.runPythonAsync(`${PYODIDE_RUN_PRELUDE}\n\n${code}`);
             setOutput((prev) => (prev ? prev : '(no output)\n'));
         } catch (e) {
             const msg = e?.message || String(e);
@@ -417,6 +429,14 @@ await micropip.install(${specJson})
         [editorValue]
     );
     const getProgramOutput = useCallback(() => output, [output]);
+
+    const handleClearConsole = useCallback(() => {
+        setOutput('');
+        const mplEl = mplTargetRef.current;
+        if (mplEl) {
+            mplEl.replaceChildren();
+        }
+    }, []);
 
     const applyFromMarkdown = useCallback(
         (markdown) => {
@@ -636,8 +656,8 @@ await micropip.install(${specJson})
                                 <button
                                     type="button"
                                     className="code-studio-btn-ghost-sm"
-                                    onClick={() => setOutput('')}
-                                    title="Clear output"
+                                    onClick={handleClearConsole}
+                                    title="Clear output console and matplotlib figures"
                                 >
                                     <Eraser size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
                                     Clear output
@@ -687,16 +707,27 @@ await micropip.install(${specJson})
                                 />
                             </div>
                             {showEditor && !showOutputPanel ? (
-                                <button
-                                    type="button"
-                                    className="code-studio-collapsed-output-tab"
-                                    title="Show output and matplotlib plots"
-                                    aria-expanded={showOutputPanel}
-                                    onClick={() => setShowOutputPanel(true)}
-                                >
-                                    <ChevronUp size={16} aria-hidden />
-                                    <span>Output & plots</span>
-                                </button>
+                                <div className="code-studio-collapsed-output-row" role="group" aria-label="Output panel collapsed">
+                                    <button
+                                        type="button"
+                                        className="code-studio-collapsed-output-tab"
+                                        title="Show output and matplotlib plots"
+                                        aria-expanded={showOutputPanel}
+                                        onClick={() => setShowOutputPanel(true)}
+                                    >
+                                        <ChevronUp size={16} aria-hidden />
+                                        <span>Output & plots</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="code-studio-collapsed-output-clear"
+                                        title="Clear output console and matplotlib figures"
+                                        onClick={handleClearConsole}
+                                    >
+                                        <Eraser size={14} aria-hidden />
+                                        Clear
+                                    </button>
+                                </div>
                             ) : null}
                             <section
                                 className={`code-studio-output-panel${showOutputPanel ? '' : ' code-studio-output-panel--hidden'}`}
@@ -705,15 +736,26 @@ await micropip.install(${specJson})
                             >
                                 <div className="code-studio-output-head">
                                     <span className="code-studio-output-head-title">Output (stdout / stderr)</span>
-                                    <button
-                                        type="button"
-                                        className="code-studio-output-head-shrink"
-                                        title="Shrink output and plots — click the bar under the editor to show again"
-                                        aria-label="Hide output and plots"
-                                        onClick={() => setShowOutputPanel(false)}
-                                    >
-                                        <ChevronDown size={17} strokeWidth={2.25} aria-hidden />
-                                    </button>
+                                    <div className="code-studio-output-head-actions">
+                                        <button
+                                            type="button"
+                                            className="code-studio-output-head-clear"
+                                            title="Clear output console and matplotlib figures"
+                                            onClick={handleClearConsole}
+                                        >
+                                            <Eraser size={14} aria-hidden />
+                                            <span>Clear</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="code-studio-output-head-shrink"
+                                            title="Shrink output and plots — click the bar under the editor to show again"
+                                            aria-label="Hide output and plots"
+                                            onClick={() => setShowOutputPanel(false)}
+                                        >
+                                            <ChevronDown size={17} strokeWidth={2.25} aria-hidden />
+                                        </button>
+                                    </div>
                                 </div>
                                 <pre
                                     className={`code-studio-output-body${output.trim() ? '' : ' is-empty'}`}
