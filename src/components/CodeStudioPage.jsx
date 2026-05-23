@@ -1,7 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import { flushSync } from 'react-dom';
 import Editor from '@monaco-editor/react';
-import { Code2, FilePlus, Save, Trash2, Play, Eraser, Package, PanelLeftClose, PanelLeftOpen, Terminal } from 'lucide-react';
+import {
+    ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronUp,
+    Code2,
+    Eraser,
+    FilePlus,
+    Package,
+    PanelLeftClose,
+    PanelLeftOpen,
+    Play,
+    Save,
+    Terminal,
+    Trash2,
+} from 'lucide-react';
 import { CODES_WORKSPACE_FOLDER_NAME } from '../utils/workspaceFilename.js';
 import CodeStudioAiPanel from './CodeStudioAiPanel.jsx';
 import {
@@ -538,7 +553,18 @@ await micropip.install(${specJson})
             </header>
             <div className={`code-studio-body${showFileList ? '' : ' code-studio-body--hide-files'}`}>
                 <aside className="code-studio-files">
-                    <div className="code-studio-files-head">{CODES_WORKSPACE_FOLDER_NAME}</div>
+                    <div className="code-studio-files-head">
+                        <span className="code-studio-files-head-label">{CODES_WORKSPACE_FOLDER_NAME}</span>
+                        <button
+                            type="button"
+                            className="code-studio-files-head-shrink"
+                            title="Shrink file list — a slim Codes strip appears on the editor edge to open it again"
+                            aria-label="Hide file list"
+                            onClick={() => setShowFileList(false)}
+                        >
+                            <ChevronLeft size={17} strokeWidth={2.25} aria-hidden />
+                        </button>
+                    </div>
                     {codeFiles.length === 0 ? (
                         <p className="code-studio-files-empty">
                             No files yet. Use <strong>New file</strong> to create your first script in this folder.
@@ -578,6 +604,18 @@ await micropip.install(${specJson})
                     )}
                 </aside>
                 <main className="code-studio-editor-wrap">
+                    {!showFileList ? (
+                        <button
+                            type="button"
+                            className="code-studio-collapsed-files-tab"
+                            title="Show file list"
+                            aria-expanded={showFileList}
+                            onClick={() => setShowFileList(true)}
+                        >
+                            <ChevronRight size={18} aria-hidden />
+                            <span className="code-studio-collapsed-files-tab-text">Codes</span>
+                        </button>
+                    ) : null}
                     <div className="code-studio-editor-core">
                     {showEditor ? (
                         <>
@@ -648,12 +686,35 @@ await micropip.install(${specJson})
                                     }}
                                 />
                             </div>
+                            {showEditor && !showOutputPanel ? (
+                                <button
+                                    type="button"
+                                    className="code-studio-collapsed-output-tab"
+                                    title="Show output and matplotlib plots"
+                                    aria-expanded={showOutputPanel}
+                                    onClick={() => setShowOutputPanel(true)}
+                                >
+                                    <ChevronUp size={16} aria-hidden />
+                                    <span>Output & plots</span>
+                                </button>
+                            ) : null}
                             <section
                                 className={`code-studio-output-panel${showOutputPanel ? '' : ' code-studio-output-panel--hidden'}`}
                                 aria-label="Program output"
                                 aria-hidden={!showOutputPanel}
                             >
-                                <div className="code-studio-output-head">Output (stdout / stderr)</div>
+                                <div className="code-studio-output-head">
+                                    <span className="code-studio-output-head-title">Output (stdout / stderr)</span>
+                                    <button
+                                        type="button"
+                                        className="code-studio-output-head-shrink"
+                                        title="Shrink output and plots — click the bar under the editor to show again"
+                                        aria-label="Hide output and plots"
+                                        onClick={() => setShowOutputPanel(false)}
+                                    >
+                                        <ChevronDown size={17} strokeWidth={2.25} aria-hidden />
+                                    </button>
+                                </div>
                                 <pre
                                     className={`code-studio-output-body${output.trim() ? '' : ' is-empty'}`}
                                     role="log"

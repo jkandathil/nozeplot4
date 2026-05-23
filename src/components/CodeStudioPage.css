@@ -215,12 +215,46 @@
 }
 
 .code-studio-files-head {
-    padding: 12px 14px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 10px 8px 14px;
     font-size: 0.68rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-muted);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.35);
+}
+
+.code-studio-files-head-label {
+    min-width: 0;
+}
+
+.code-studio-files-head-shrink {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition:
+        color 0.12s ease,
+        background 0.12s ease,
+        border-color 0.12s ease;
+}
+
+.code-studio-files-head-shrink:hover {
+    color: var(--accent-primary);
+    background: rgba(30, 41, 59, 0.55);
+    border-color: rgba(51, 65, 85, 0.65);
 }
 
 .code-studio-files-empty {
@@ -307,6 +341,41 @@
     background: #0c1117;
 }
 
+.code-studio-collapsed-files-tab {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: 36px;
+    min-height: 0;
+    padding: 14px 0 18px;
+    border: none;
+    border-right: 1px solid var(--border-color);
+    background: rgba(15, 23, 42, 0.75);
+    color: var(--text-muted);
+    cursor: pointer;
+    font: inherit;
+    transition:
+        color 0.15s ease,
+        background 0.15s ease;
+}
+
+.code-studio-collapsed-files-tab:hover {
+    color: var(--accent-primary);
+    background: rgba(30, 41, 59, 0.75);
+}
+
+.code-studio-collapsed-files-tab-text {
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    user-select: none;
+}
+
 .code-studio-editor-core {
     flex: 1;
     min-width: 0;
@@ -318,6 +387,24 @@
 @media (max-width: 960px) {
     .code-studio-editor-wrap {
         flex-direction: column;
+    }
+
+    .code-studio-collapsed-files-tab {
+        flex-direction: row;
+        justify-content: center;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        padding: 8px 12px;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        gap: 8px;
+    }
+
+    .code-studio-collapsed-files-tab-text {
+        writing-mode: horizontal-tb;
+        transform: none;
+        letter-spacing: 0.1em;
     }
 }
 
@@ -399,13 +486,69 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 12px;
+    gap: 10px;
+    padding: 6px 8px 6px 12px;
     font-size: 0.68rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
     border-bottom: 1px solid rgba(51, 65, 85, 0.45);
+}
+
+.code-studio-output-head-title {
+    min-width: 0;
+}
+
+.code-studio-output-head-shrink {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition:
+        color 0.12s ease,
+        background 0.12s ease,
+        border-color 0.12s ease;
+}
+
+.code-studio-output-head-shrink:hover {
+    color: var(--accent-primary);
+    background: rgba(30, 41, 59, 0.55);
+    border-color: rgba(51, 65, 85, 0.65);
+}
+
+.code-studio-collapsed-output-tab {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    border-top: 1px solid rgba(51, 65, 85, 0.65);
+    background: rgba(10, 14, 20, 0.92);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition:
+        color 0.12s ease,
+        background 0.12s ease;
+}
+
+.code-studio-collapsed-output-tab:hover {
+    color: var(--accent-primary);
+    background: rgba(30, 41, 59, 0.55);
 }
 
 .code-studio-output-body {
