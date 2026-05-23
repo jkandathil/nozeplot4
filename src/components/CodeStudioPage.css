@@ -163,6 +163,17 @@
     color: var(--accent-hover);
 }
 
+.code-studio-btn-toggle[aria-pressed='true'] {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+}
+
+.code-studio-btn-toggle[aria-pressed='true']:hover {
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    color: var(--accent-hover);
+}
+
 .code-studio-status {
     font-size: 0.78rem;
     color: var(--text-muted);
@@ -176,10 +187,22 @@
     gap: 0;
 }
 
+.code-studio-body--hide-files {
+    grid-template-columns: 1fr;
+}
+
+.code-studio-body--hide-files .code-studio-files {
+    display: none;
+}
+
 @media (max-width: 840px) {
     .code-studio-body {
         grid-template-columns: 1fr;
         grid-template-rows: auto 1fr;
+    }
+
+    .code-studio-body--hide-files {
+        grid-template-rows: 1fr;
     }
 }
 
@@ -365,6 +388,11 @@
     max-height: min(55vh, 520px);
     border-top: 1px solid rgba(51, 65, 85, 0.65);
     background: #070a0e;
+}
+
+/* Keep in DOM so #code-studio-mpl-target ref stays valid for matplotlib; remove from layout when hidden. */
+.code-studio-output-panel--hidden {
+    display: none !important;
 }
 
 .code-studio-output-head {

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import { flushSync } from 'react-dom';
 import Editor from '@monaco-editor/react';
-import { Code2, FilePlus, Save, Trash2, Play, Eraser, Package } from 'lucide-react';
+import { Code2, FilePlus, Save, Trash2, Play, Eraser, Package, PanelLeftClose, PanelLeftOpen, Terminal } from 'lucide-react';
 import { CODES_WORKSPACE_FOLDER_NAME } from '../utils/workspaceFilename.js';
 import CodeStudioAiPanel from './CodeStudioAiPanel.jsx';
 import {
@@ -120,6 +120,21 @@ function nextUntitledName(existing) {
 
 const noopEvt = { stopPropagation() {} };
 
+const LS_CODE_STUDIO_SHOW_FILES = 'noze-code-studio-show-file-list';
+const LS_CODE_STUDIO_SHOW_OUTPUT = 'noze-code-studio-show-output-panel';
+
+function readStoredBool(key, defaultValue) {
+    if (typeof window === 'undefined') return defaultValue;
+    try {
+        const v = window.localStorage.getItem(key);
+        if (v === '0' || v === 'false') return false;
+        if (v === '1' || v === 'true') return true;
+    } catch {
+        /* ignore */
+    }
+    return defaultValue;
+}
+
 /** Split user input into requirement strings (names, pins, URLs). Not a full pip parser. */
 function parsePackageSpecs(raw) {
     const t = String(raw ?? '').trim();
@@ -174,6 +189,24 @@ export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDele
     const [installBusy, setInstallBusy] = useState(false);
     const [packageInput, setPackageInput] = useState('');
     const [output, setOutput] = useState('');
+    const [showFileList, setShowFileList] = useState(() => readStoredBool(LS_CODE_STUDIO_SHOW_FILES, true));
+    const [showOutputPanel, setShowOutputPanel] = useState(() => readStoredBool(LS_CODE_STUDIO_SHOW_OUTPUT, true));
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(LS_CODE_STUDIO_SHOW_FILES, showFileList ? '1' : '0');
+        } catch {
+            /* ignore */
+        }
+    }, [showFileList]);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(LS_CODE_STUDIO_SHOW_OUTPUT, showOutputPanel ? '1' : '0');
+        } catch {
+            /* ignore */
+        }
+    }, [showOutputPanel]);
 
     const resolvedFileId = useMemo(() => {
         if (activeFileId && codeFiles.some((f) => f.id === activeFileId)) return activeFileId;
@@ -445,6 +478,26 @@ await micropip.install(${specJson})
                         <button type="button" className="code-studio-btn" onClick={() => void saveHandlerRef.current()}>
                             <Save size={16} /> Save
                         </button>
+                        <button
+                            type="button"
+                            className="code-studio-btn code-studio-btn-toggle"
+                            aria-pressed={showFileList}
+                            title={showFileList ? 'Hide file list (more editor width)' : 'Show file list'}
+                            onClick={() => setShowFileList((v) => !v)}
+                        >
+                            {showFileList ? <PanelLeftClose size={16} aria-hidden /> : <PanelLeftOpen size={16} aria-hidden />}
+                            Files
+                        </button>
+                        <button
+                            type="button"
+                            className="code-studio-btn code-studio-btn-toggle"
+                            aria-pressed={showOutputPanel}
+                            title={showOutputPanel ? 'Hide output & plots (taller editor)' : 'Show output & plots'}
+                            onClick={() => setShowOutputPanel((v) => !v)}
+                        >
+                            <Terminal size={16} aria-hidden />
+                            Output
+                        </button>
                         {status ? <span className="code-studio-status">{status}</span> : null}
                         {pyodideLoading ? <span className="code-studio-status">Loading Python runtime (first run)…</span> : null}
                     </div>
@@ -483,7 +536,7 @@ await micropip.install(${specJson})
                     </div>
                 </div>
             </header>
-            <div className="code-studio-body">
+            <div className={`code-studio-body${showFileList ? '' : ' code-studio-body--hide-files'}`}>
                 <aside className="code-studio-files">
                     <div className="code-studio-files-head">{CODES_WORKSPACE_FOLDER_NAME}</div>
                     {codeFiles.length === 0 ? (
@@ -595,7 +648,11 @@ await micropip.install(${specJson})
                                     }}
                                 />
                             </div>
-                            <section className="code-studio-output-panel" aria-label="Program output">
+                            <section
+                                className={`code-studio-output-panel${showOutputPanel ? '' : ' code-studio-output-panel--hidden'}`}
+                                aria-label="Program output"
+                                aria-hidden={!showOutputPanel}
+                            >
                                 <div className="code-studio-output-head">Output (stdout / stderr)</div>
                                 <pre
                                     className={`code-studio-output-body${output.trim() ? '' : ' is-empty'}`}

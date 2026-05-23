@@ -1656,6 +1656,7 @@ export const GUIDE_SECTIONS = [
             'Files constrained to the **Codes** folder via the app workspace model',
             'Run stdout/stderr capture with cooperative **time.sleep** mapping',
             'Optional **micropip** installs; matplotlib mount target for in-app figures',
+            '**Toolbar layout:** **Files** and **Output** toggle the left file list and the bottom output/plots panel (choices are remembered in this browser) for a wider or taller editor.',
             '**Code assistant** (right rail): chat about your open file; uses the same **AI Agents** backend and keys (Cloud API or local model). Fenced code in replies can be applied automatically to the Monaco editor when enabled under AI Agents → Code Studio.',
         ],
         steps: [
