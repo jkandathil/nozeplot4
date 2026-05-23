@@ -45,6 +45,7 @@ import {
     resolveGeminiApiKey,
     streamGeminiChat,
 } from '../ai/geminiChat.js';
+import { CURATED_MODELS } from '../ai/curatedChatModels.js';
 
 /** Must match `UPLOAD_MODEL_ID` in `src/ai/aiChatWorker.js` (synthetic HF repo for zip uploads). */
 const UPLOADED_ONNX_MODEL_ID = 'hf-internal/user-upload';
@@ -72,105 +73,6 @@ function stripZipCommonRoot(files) {
     }
     return out;
 }
-
-/* ------------------------------------------------------------------ */
-/* Curated models — all hosted on the HF hub as ONNX, known to work   */
-/* with @huggingface/transformers v4 `text-generation` pipeline.      */
-/*                                                                     */
-/* Users can still type any HF model id in the "Custom model" field.  */
-/*                                                                     */
-/* `dtypeWebGPU` / `dtypeWasm` are the recommended precisions: WebGPU */
-/* likes fp16-based variants, WASM is happiest on plain `q4`/`q8`.    */
-/* `sizeMB` is a rough upper bound on on-device footprint, used to    */
-/* warn users before committing to a slow download on CPU-only.       */
-/* ------------------------------------------------------------------ */
-/* Quality tiers set the user's expectation *up-front*. Sub-500M-param
-   models produce plausible-sounding but incoherent output on anything
-   complex (RAG, multi-step reasoning) — they hallucinate APIs and
-   drop garbage tokens. Tiers:
-     'experimental' — novelty-only, <= 400M params. Chat only, no RAG.
-     'basic'        — usable for simple Q&A, 400–700M params.
-     'good'         — reliable general assistant, 700M–1.5B params.
-     'great'        — best quality we can run in the browser, 1.5B+.  */
-const CURATED_MODELS = [
-    {
-        id: 'onnx-community/Llama-3.2-1B-Instruct-q4f16',
-        label: 'Llama 3.2 1B · Instruct',
-        family: 'Llama',
-        size: '~750 MB',
-        sizeMB: 750,
-        quality: 'good',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4f16',
-        description: 'Meta Llama 3.2 1B — recommended default. Strong general chat and follows RAG instructions well.',
-    },
-    {
-        id: 'onnx-community/Qwen2.5-0.5B-Instruct',
-        label: 'Qwen 2.5 0.5B · Instruct',
-        family: 'Qwen',
-        size: '~380 MB',
-        sizeMB: 380,
-        quality: 'basic',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'Alibaba Qwen 2.5 — fast, passable for simple Q&A, may struggle with RAG synthesis.',
-    },
-    {
-        id: 'onnx-community/gemma-3-1b-it-ONNX',
-        label: 'Gemma 3 1B · Instruct',
-        family: 'Gemma',
-        size: '~800 MB',
-        sizeMB: 800,
-        quality: 'good',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'Gemma 3 1B. Good quality, WebGPU recommended.',
-    },
-    {
-        id: 'onnx-community/SmolLM2-1.7B-Instruct',
-        label: 'SmolLM2 1.7B · Instruct',
-        family: 'SmolLM',
-        size: '~1.4 GB',
-        sizeMB: 1400,
-        quality: 'great',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'SmolLM2 1.7B — best SmolLM quality tier. WebGPU recommended.',
-    },
-    {
-        id: 'onnx-community/Phi-3.5-mini-instruct-onnx-web',
-        label: 'Phi-3.5 mini · Instruct (WebGPU)',
-        family: 'Phi',
-        size: '~2.2 GB',
-        sizeMB: 2200,
-        quality: 'great',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: null,
-        description: 'Microsoft Phi-3.5 mini. WebGPU + fp16 only — not practical on CPU.',
-    },
-    {
-        id: 'onnx-community/SmolLM2-360M-Instruct',
-        label: 'SmolLM2 360M · Instruct',
-        family: 'SmolLM',
-        size: '~290 MB',
-        sizeMB: 290,
-        quality: 'experimental',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'Tiny, snappy — but hallucinates and cannot use RAG well.',
-    },
-    {
-        id: 'onnx-community/gemma-3-270m-it-ONNX',
-        label: 'Gemma 3 270M · Instruct',
-        family: 'Gemma',
-        size: '~230 MB',
-        sizeMB: 230,
-        quality: 'experimental',
-        dtypeWebGPU: 'q4f16',
-        dtypeWasm: 'q4',
-        description: 'Ultra-small — produces incoherent output with RAG. Demo/speed test only.',
-    },
-];
 
 const QUALITY_LABELS = {
     experimental: { label: 'Experimental', tone: 'warn' },

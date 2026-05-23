@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import Editor from '@monaco-editor/react';
 import { Code2, FilePlus, Save, Trash2, Play, Eraser, Package } from 'lucide-react';
 import { CODES_WORKSPACE_FOLDER_NAME } from '../utils/workspaceFilename.js';
+import CodeStudioAiPanel from './CodeStudioAiPanel.jsx';
 import './CodeStudioPage.css';
 
 /** Must match the `pyodide` npm version so the CDN assets match the JS API. */
@@ -341,6 +342,12 @@ await micropip.install(${specJson})
         [resolvedFileId, onDeleteFile]
     );
 
+    const getEditorCode = useCallback(
+        () => editorRef.current?.getValue?.() ?? editorValue,
+        [editorValue]
+    );
+    const getProgramOutput = useCallback(() => output, [output]);
+
     const beforeMount = useCallback((monaco) => {
         monaco.editor.defineTheme('noze-code', {
             base: 'vs-dark',
@@ -462,6 +469,7 @@ await micropip.install(${specJson})
                     )}
                 </aside>
                 <main className="code-studio-editor-wrap">
+                    <div className="code-studio-editor-core">
                     {showEditor ? (
                         <>
                             <div className="code-studio-editor-chrome">
@@ -564,6 +572,13 @@ await micropip.install(${specJson})
                             </button>
                         </div>
                     )}
+                    </div>
+                    <CodeStudioAiPanel
+                        fileName={activeMeta?.name || ''}
+                        language={language}
+                        getCode={getEditorCode}
+                        getOutput={getProgramOutput}
+                    />
                 </main>
             </div>
         </div>

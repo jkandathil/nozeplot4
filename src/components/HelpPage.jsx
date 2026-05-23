@@ -1656,6 +1656,7 @@ export const GUIDE_SECTIONS = [
             'Files constrained to the **Codes** folder via the app workspace model',
             'Run stdout/stderr capture with cooperative **time.sleep** mapping',
             'Optional **micropip** installs; matplotlib mount target for in-app figures',
+            '**Code assistant** (right rail): chat about your open file; uses the same **AI Agents** backend and keys (Cloud API or local model)',
         ],
         steps: [
             'Open **Code Studio** from the sidebar.',
