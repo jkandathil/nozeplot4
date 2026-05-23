@@ -21,9 +21,15 @@ const DEPRECATED_GEMINI_MODEL_IDS = {
  * @param {string | undefined} id
  */
 export function normalizeGeminiModelId(id) {
-    const t = String(id || '').trim();
+    let t = String(id || '').trim();
     if (!t) return DEFAULT_GEMINI_MODEL;
-    return DEPRECATED_GEMINI_MODEL_IDS[t] || t;
+    // Strip resource prefix sometimes stored or echoed by APIs (`models/gemini-2.0-flash`)
+    t = t.replace(/^models\//, '');
+    if (DEPRECATED_GEMINI_MODEL_IDS[t]) return DEPRECATED_GEMINI_MODEL_IDS[t];
+    // Any other 2.0 Flash variant (preview, exp, dated, …) → 2.5
+    if (t.startsWith('gemini-2.0-flash-lite')) return 'gemini-2.5-flash-lite';
+    if (t.startsWith('gemini-2.0-flash')) return 'gemini-2.5-flash';
+    return t;
 }
 
 export const GEMINI_MODEL_OPTIONS = [

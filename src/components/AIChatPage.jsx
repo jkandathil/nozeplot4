@@ -1100,7 +1100,7 @@ export default function AIChatPage() {
                           };
                     const result = await streamGeminiChat({
                         apiKey: effectiveGeminiKey,
-                        model: geminiModel,
+                        model: normalizeGeminiModelId(geminiModel),
                         messages: payload,
                         params: geminiParams,
                         signal: ac.signal,
