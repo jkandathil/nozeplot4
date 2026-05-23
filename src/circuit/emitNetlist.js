@@ -26,6 +26,16 @@ import { BUILTIN_MODELS } from './library.js';
 
 const GND_LABEL = '0'; // Spice's canonical ground.
 
+/** Warn when both terminals resolved to the same net (degenerate branch in SPICE). */
+function warnDegenerateTwoTerminal(warnings, ref, n1, n2, hint = '') {
+    if (n1 !== '?' && n2 !== '?' && n1 === n2) {
+        const h = hint ? ` ${hint}` : '';
+        warnings.push(
+            `${ref}: both pins are on the same net (${n1}) — the part is shorted out.${h}`
+        );
+    }
+}
+
 function nodeLabel(nodeId, nets) {
     if (nodeId == null) return '?';
     if (nodeId === 0) return GND_LABEL;
@@ -123,6 +133,14 @@ export function emitNetlist(doc, opts = {}) {
 
         switch (comp.elementType) {
             case 'R': case 'C': case 'L': {
+                if (comp.elementType === 'L') {
+                    warnDegenerateTwoTerminal(
+                        warnings, ref, nodes[0], nodes[1],
+                        'A single wire through both pins gives "L n n" in the netlist; break the bus so the inductor is in series between two nets.'
+                    );
+                } else {
+                    warnDegenerateTwoTerminal(warnings, ref, nodes[0], nodes[1]);
+                }
                 lines.push(`${ref} ${nodes[0]} ${nodes[1]} ${formatValue(comp.value)}`);
                 break;
             }
@@ -130,10 +148,15 @@ export function emitNetlist(doc, opts = {}) {
                 // Synthesize second terminal if autoGround (VCC rail).
                 const n1 = nodes[0] ?? '?';
                 const n2 = comp.autoGround ? '0' : (nodes[1] ?? '?');
+                warnDegenerateTwoTerminal(
+                    warnings, ref, n1, n2,
+                    'A voltage source with both nodes equal is a no-op in the matrix; check connections.'
+                );
                 lines.push(`${ref} ${n1} ${n2} ${formatSourceSpec(comp.sourceSpec)}`);
                 break;
             }
             case 'I': {
+                warnDegenerateTwoTerminal(warnings, ref, nodes[0], nodes[1]);
                 lines.push(`${ref} ${nodes[0]} ${nodes[1]} ${formatSourceSpec(comp.sourceSpec)}`);
                 break;
             }
@@ -186,6 +209,7 @@ export function emitNetlist(doc, opts = {}) {
                 // parser sees it as a voltage source even if the user
                 // chose a custom IP ref; the leading letter is what
                 // netlist.js dispatches on.
+                warnDegenerateTwoTerminal(warnings, ref, nodes[0], nodes[1]);
                 const spiceName = ref.startsWith('V') ? ref : `V${ref}`;
                 lines.push(`${spiceName} ${nodes[0]} ${nodes[1]} DC 0`);
                 break;

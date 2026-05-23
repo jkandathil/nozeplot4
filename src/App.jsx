@@ -37,6 +37,10 @@ import HomePage from './components/HomePage';
 import FlowLabPage from './components/FlowLabPage';
 import CircuitStudioPage from './components/CircuitStudioPage';
 import PcbStudioPage from './components/PcbStudioPage';
+import MemsMaskStudioPage from './components/MemsMaskStudioPage';
+import ThermalStudio from './components/ThermalStudio';
+import PrinterPage from './components/PrinterPage';
+import HspStudioPage from './components/HspStudioPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
@@ -1857,6 +1861,33 @@ function App() {
                   case 'pcbStudio':
                     content = (
                       <PcbStudioPage onBackToSchematic={() => setActivePage('circuitStudio')} />
+                    );
+                    break;
+                  case 'memsMaskStudio':
+                    content = (
+                        <MemsMaskStudioPage
+                            workspaceFiles={files}
+                            onSaveJsonToWorkspace={handleSaveJsonToWorkspace}
+                        />
+                    );
+                    break;
+                  case 'thermalStudio':
+                    content = (
+                        <ThermalStudio
+                            workspaceFiles={files}
+                            onSaveJson={handleSaveJsonToWorkspace}
+                            onDeleteFile={deleteFile}
+                        />
+                    );
+                    break;
+                  case 'printer':
+                    content = (
+                        <PrinterPage />
+                    );
+                    break;
+                  case 'hspStudio':
+                    content = (
+                        <HspStudioPage />
                     );
                     break;
                   case 'spreadsheet':

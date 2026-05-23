@@ -13,8 +13,8 @@ export const PCB_COPPER_LAYER_COUNT = 4;
 
 export const PCB_LAYERS = [...PCB_FIXED_COPPER_STACK, 'F.SilkS', 'B.SilkS', 'Edge.Cuts'];
 
-/** Preset grid steps (mm) for the board editor. */
-export const PCB_GRID_PRESETS_MM = [0.05, 0.1, 0.25, 0.5, 1.0];
+/** Preset grid steps (mm) for the board editor — finest first (higher spatial resolution). */
+export const PCB_GRID_PRESETS_MM = [0.02, 0.025, 0.05, 0.1, 0.125, 0.25, 0.5, 1.0];
 
 /** Default design rules (Eagle/KiCad-style fields — full DRC suite). */
 export const DEFAULT_DESIGN_RULES = {

@@ -1,0 +1,702 @@
+/**
+ * Thermal Studio — UI styles. Keeps the page in the same colour family as
+ * Flow Lab / MEMS Studio so the mode switch in Flow Lab feels seamless.
+ */
+
+.ts-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    min-width: 0;
+    background: var(--bg-primary, #0b1220);
+    color: var(--text-primary, #e2e8f0);
+    overflow: hidden;
+}
+
+/* ───────── Toolbar ───────── */
+.ts-toolbar {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.2));
+    background: var(--bg-secondary, #0f172a);
+    flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.ts-tg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.ts-tg-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    font-weight: 600;
+}
+.ts-tg-body {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ts-sep {
+    width: 1px;
+    align-self: stretch;
+    min-height: 32px;
+    background: rgba(148, 163, 184, 0.2);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
+.ts-spacer {
+    flex: 1;
+}
+
+.ts-toolbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 9px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.12s ease;
+}
+.ts-toolbtn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: #f8fafc;
+    border-color: rgba(148, 163, 184, 0.25);
+}
+.ts-toolbtn.is-active {
+    background: rgba(56, 189, 248, 0.16);
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.45);
+}
+.ts-toolbtn--primary {
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(14, 165, 233, 0.22));
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.4);
+}
+.ts-toolbtn--accent {
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+    border-color: rgba(99, 102, 241, 0.35);
+}
+.ts-toolbtn--warn {
+    background: rgba(251, 146, 60, 0.16);
+    color: #fdba74;
+    border-color: rgba(251, 146, 60, 0.45);
+}
+.ts-toolbtn--xs {
+    padding: 2px 6px;
+    font-size: 0.7rem;
+}
+.ts-toolbtn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ts-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #fb923c;
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: rgba(251, 146, 60, 0.12);
+    border: 1px solid rgba(251, 146, 60, 0.4);
+}
+
+.ts-select {
+    background: rgba(15, 23, 42, 0.7);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 6px;
+    padding: 3px 6px;
+    font-size: 0.75rem;
+}
+
+.ts-help {
+    color: #94a3b8;
+    cursor: help;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* ───────── Main grid ───────── */
+.ts-main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    min-height: 0;
+    min-width: 0;
+}
+
+.ts-palette,
+.ts-results {
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.45);
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+.ts-results {
+    border-right: none;
+    border-left: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.ts-pal-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ts-pal-title {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    font-weight: 700;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    padding-bottom: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.ts-tool-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+}
+.ts-tool-row--three {
+    grid-template-columns: repeat(3, 1fr);
+}
+.ts-tool-row--two {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+.ts-tool {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(30, 41, 59, 0.6);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    font-size: 0.74rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+.ts-tool:hover {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #7dd3fc;
+}
+.ts-tool.is-active {
+    background: rgba(56, 189, 248, 0.18);
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.55);
+}
+
+.ts-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 60px;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: #cbd5e1;
+}
+.ts-row--inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.ts-row--inline span {
+    font-size: 0.74rem;
+    color: #94a3b8;
+}
+.ts-row input[type='number'],
+.ts-row input[type='range'] {
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font-size: 0.75rem;
+    width: 100%;
+}
+.ts-num {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    text-align: right;
+    padding-right: 2px;
+}
+.ts-hint {
+    font-size: 0.7rem;
+    color: #64748b;
+    padding-left: 2px;
+}
+
+.ts-mat-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.ts-mat {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    background: rgba(30, 41, 59, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-size: 0.74rem;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.12s ease;
+}
+.ts-mat:hover {
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.35);
+}
+.ts-mat.is-active {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: rgba(56, 189, 248, 0.6);
+}
+.ts-mat-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid rgba(15, 23, 42, 0.5);
+    flex-shrink: 0;
+}
+.ts-mat-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ts-tool {
+    min-width: 0;
+}
+.ts-tool span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* widen left palette for the new CAD ribbon */
+@media (min-width: 1100px) {
+    .ts-main {
+        grid-template-columns: 280px 1fr 280px;
+    }
+}
+
+/* ───────── Canvas ───────── */
+.ts-canvas-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+.ts-canvas-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    min-height: 0;
+    background: radial-gradient(circle at 40% 20%, rgba(56, 189, 248, 0.06), transparent 60%),
+        var(--bg-primary, #0b1220);
+}
+.ts-canvas-stack {
+    position: relative;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6), 0 4px 18px rgba(0, 0, 0, 0.45);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.ts-canvas-base,
+.ts-canvas-overlay {
+    position: absolute;
+    inset: 0;
+}
+.ts-canvas-base {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+}
+.ts-canvas-overlay {
+    cursor: crosshair;
+    touch-action: none;
+}
+svg.ts-canvas-overlay {
+    background: transparent;
+    pointer-events: auto;
+}
+
+/* Pulsing "● LIVE" badge — appears top-left of the canvas while the solver is running. */
+.ts-live-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 9999px;
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    color: #fda4af;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    user-select: none;
+    z-index: 3;
+}
+.ts-live-meta {
+    font-weight: 500;
+    letter-spacing: 0;
+    color: #cbd5e1;
+}
+.ts-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f87171;
+    box-shadow: 0 0 8px #f87171;
+    animation: ts-live-pulse 1.05s ease-in-out infinite;
+}
+@keyframes ts-live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+/* Hint button bottom-centre when a temperature field exists but the user
+   is still on the materials view. Clicking it switches to the heatmap. */
+.ts-view-hint {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 9999px;
+    border: 1px solid rgba(251, 146, 60, 0.55);
+    background: rgba(15, 23, 42, 0.85);
+    color: #fdba74;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+    z-index: 3;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.ts-view-hint:hover {
+    background: rgba(251, 146, 60, 0.18);
+    border-color: rgba(251, 146, 60, 0.85);
+    color: #fed7aa;
+}
+
+.ts-canvas-legend {
+    flex-shrink: 0;
+    padding: 6px 16px 12px;
+}
+
+.ts-cmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 0.72rem;
+    color: #cbd5e1;
+}
+.ts-cmap-strip {
+    width: 200px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+.ts-cmap-ticks {
+    display: flex;
+    gap: 12px;
+    color: #94a3b8;
+}
+.ts-cmap-mode {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: auto;
+}
+.ts-cmap-mode input[type='number'] {
+    width: 60px;
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-size: 0.72rem;
+}
+
+/* ───────── Right column ───────── */
+.ts-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.76rem;
+    color: #cbd5e1;
+}
+.ts-stat-row strong {
+    color: #f1f5f9;
+    font-weight: 600;
+}
+.ts-stat-row--accent {
+    color: #7dd3fc;
+}
+.ts-stat-row--accent strong {
+    color: #7dd3fc;
+}
+
+.ts-chart-wrap {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.ts-tips {
+    margin: 0;
+    padding-left: 14px;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.45;
+}
+.ts-tips li {
+    margin-bottom: 4px;
+}
+.ts-tips em {
+    color: #7dd3fc;
+    font-style: normal;
+}
+
+/* Landing screen */
+.ts-landing-mode {
+    background: radial-gradient(circle at 30% 20%, rgba(251, 146, 60, 0.08), transparent 60%),
+        radial-gradient(circle at 70% 70%, rgba(56, 189, 248, 0.08), transparent 60%),
+        var(--bg-primary, #0b1220);
+}
+.ts-landing {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 36px 28px;
+    overflow-y: auto;
+}
+.ts-landing-card {
+    width: min(900px, 100%);
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 8px 36px rgba(0, 0, 0, 0.45);
+    color: #e2e8f0;
+}
+.ts-landing-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+}
+.ts-landing-head svg {
+    color: #fb923c;
+}
+.ts-landing-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+.ts-landing-sub {
+    font-size: 0.86rem;
+    color: #94a3b8;
+}
+.ts-landing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 22px;
+}
+.ts-landing-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    text-align: left;
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    color: #e2e8f0;
+    cursor: pointer;
+    transition: all 0.14s ease;
+    min-height: 110px;
+}
+.ts-landing-tile:hover {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.5);
+    transform: translateY(-1px);
+}
+.ts-landing-tile--primary {
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.18), rgba(248, 113, 113, 0.16));
+    border-color: rgba(251, 146, 60, 0.55);
+    color: #fdba74;
+}
+.ts-landing-tile--primary:hover {
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.26), rgba(248, 113, 113, 0.22));
+    border-color: rgba(251, 146, 60, 0.8);
+}
+.ts-landing-tile-title {
+    font-size: 0.94rem;
+    font-weight: 700;
+}
+.ts-landing-tile-sub {
+    font-size: 0.74rem;
+    color: #94a3b8;
+}
+.ts-landing-tile--primary .ts-landing-tile-sub {
+    color: #fed7aa;
+}
+.ts-landing-list {
+    margin-top: 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    padding-top: 16px;
+}
+.ts-landing-list-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748b;
+    margin-bottom: 8px;
+}
+.ts-landing-list ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.ts-landing-tip {
+    margin-top: 18px;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    line-height: 1.55;
+    padding-top: 14px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+.ts-landing-tip strong {
+    color: #f1f5f9;
+}
+.ts-landing-tip em {
+    color: #7dd3fc;
+    font-style: normal;
+}
+
+.ts-project-name {
+    margin-left: 10px;
+    font-size: 0.78rem;
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.ts-bc-inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(56, 189, 248, 0.06);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+/* Electrical drive panel */
+.ts-drive-modes {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.ts-drive-readout {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: rgba(248, 113, 113, 0.08);
+    border: 1px solid rgba(248, 113, 113, 0.32);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+/* ───────── Status ───────── */
+.ts-statusbar {
+    flex-shrink: 0;
+    padding: 6px 14px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    background: var(--bg-secondary, #0f172a);
+    display: flex;
+    gap: 14px;
+    font-size: 0.74rem;
+    color: #94a3b8;
+}
+.ts-status-err {
+    color: #fda4af;
+}
+
+/* small screens */
+@media (max-width: 1100px) {
+    .ts-main {
+        grid-template-columns: 200px 1fr 240px;
+    }
+}
+@media (max-width: 900px) {
+    .ts-main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+    }
+    .ts-palette,
+    .ts-results {
+        max-height: 240px;
+        border: none;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    }
+}

@@ -36,6 +36,7 @@ import {
     packHistory,
     buildRetrievalQuery,
     computeHistoryBudget,
+    sanitizeHistory,
 } from '../ai/chatContext.js';
 import {
     DEFAULT_GEMINI_MODEL,
@@ -204,6 +205,8 @@ const DEFAULT_SYSTEM_PROMPT = [
     'You are embedded inside NozePlot, an analytics app for sensor / aroma data. If the user asks about NozePlot or its features, background knowledge will be added to your context when relevant — synthesize it in your own words, do not read it back. For anything not about NozePlot, answer from your own knowledge.',
     '',
     'You remember the conversation. Prior messages in this chat are real — use them to resolve references ("that plot", "what I said", "the previous answer"), stay consistent with earlier explanations, and build on previous answers when the user follows up. Do not ask the user to repeat things they already told you.',
+    '',
+    'When the user asks a follow-up ("why?", "change it", "same but in Python"), infer what "it" refers to from the latest assistant reply and earlier user turns — do not reset the topic unless they clearly start a new one.',
 ].join('\n');
 
 // Default character budget for retrieved help snippets grafted into the
@@ -818,7 +821,10 @@ export default function AIChatPage() {
                 /* Thread the loaded model's capability tier through so
                    tiny experimental models get a minimal prompt (no
                    primer, no rule list) — otherwise they hallucinate. */
-                modelTier: currentModelMeta?.quality || 'good',
+                modelTier: isGeminiBackend ? 'great' : (currentModelMeta?.quality || 'good'),
+                /* Cloud models: reasoned synthesis from docs; local
+                   models: existing RAG policy + optional grounded path. */
+                ragStyle: isGeminiBackend ? 'cloud' : 'local',
             });
             effectiveSystem = prompt;
             usedSources = sources;
@@ -829,12 +835,17 @@ export default function AIChatPage() {
         const hasStrongGrounding = usedSources.length > 0 && topSourceScore >= 1.6;
         const isUngroundedAppQuestion = useKnowledgeBase && isLikelyAppQuestion && !hasStrongGrounding;
 
-        /* Grounded intelligence path:
+        /* Grounded intelligence path (local HF only):
            For app-specific questions with strong retrieval, answer
            directly from retrieved knowledge chunks (deterministic
-           synthesis) instead of free-form generation. This removes the
-           remaining hallucination surface while preserving source chips. */
-        if (useKnowledgeBase && isLikelyAppQuestion && hasStrongGrounding) {
+           synthesis) instead of free-form generation. Skipped for the
+           cloud API so the model can reason and tailor depth. */
+        if (
+            useKnowledgeBase &&
+            isLikelyAppQuestion &&
+            hasStrongGrounding &&
+            !isGeminiBackend
+        ) {
             const grounded = buildGroundedAppAnswer({ query: text, minScore: 1.6, k: 5 });
             if (grounded?.text) {
                 const newUserMsg = { role: 'user', content: text, ts: Date.now() };
@@ -931,6 +942,16 @@ export default function AIChatPage() {
             ].join('\n');
         }
 
+        const priorTurns = sanitizeHistory(history);
+        if (priorTurns.length > 0) {
+            effectiveSystem = [
+                effectiveSystem,
+                '',
+                '## Conversation memory',
+                'This request includes earlier user and assistant messages in chronological order before the latest user question. Treat that thread as authoritative: resolve pronouns and "it"/"that", stay consistent with what you already said, and extend or revise prior answers when asked.',
+            ].join('\n');
+        }
+
         /* ---------- 2. Context-aware history packing ----------
            Small local models almost always have a 2–4k token window.
            If we don't trim ourselves, the tokenizer will truncate from
@@ -940,10 +961,15 @@ export default function AIChatPage() {
            a budget computed from the system prompt + reply size. */
         const budget = computeHistoryBudget({
             systemPromptChars: effectiveSystem.length,
-            maxNewTokens: params.max_new_tokens || 512,
+            maxNewTokens: isGeminiBackend
+                ? Math.min(params.max_new_tokens || 2048, 8192)
+                : (params.max_new_tokens || 512),
             targetPromptTokens: isGeminiBackend ? 120000 : 3200,
         });
-        const packed = packHistory(history, { budgetChars: budget, minKeepTurns: 2 });
+        const packed = packHistory(history, {
+            budgetChars: budget,
+            minKeepTurns: isGeminiBackend ? 8 : 3,
+        });
 
         const newUserMsg = { role: 'user', content: text, ts: Date.now() };
         const newAssistantMsg = {
@@ -1002,87 +1028,89 @@ export default function AIChatPage() {
             });
         } catch { /* ignore */ }
 
-        /* Per-tier sampling clamps.
-           Small LLMs love to fall into a degeneracy trap: the model
-           latches onto a cadence ('circumstantial circumstances
-           surrounding dialogue participants ...') and keeps emitting
-           off-distribution tokens until max_new_tokens runs out. Two
-           counter-measures work together:
-             1. Cap max_new_tokens so even if it drifts, it dies fast.
-             2. Raise repetition_penalty so the drift is less likely
-                to begin in the first place.
-           We ONLY override when user's param is looser than the tier
-           ceiling — if the user dialled it down manually we respect
-           their choice. */
-        const tier = currentModelMeta?.quality || 'good';
-        const clamp = (v, ceil) => (v == null ? ceil : Math.min(v, ceil));
-
-        /* Tier-aware guardrails.
-           LESSON LEARNED: the previous "universal" no_repeat_ngram_size=4
-           + repetition_penalty=1.15 combo works great for tiny models
-           but actively DAMAGES 'great' tier models. With Phi-3.5, once
-           common 4-grams like "one mole of a" or "the number of atoms"
-           get blocked, the model drops articles/prepositions to avoid
-           any 4-gram repeat and spirals into word salad
-           ("count macroscale amounts material science physical sciences
-           rely heavily today thanks largely contribution…"). We now
-           scale the guardrails to the model's self-regulation ability.
-
-           • experimental: hard clamps — small models absolutely need
-             them or they loop ("circumstantial circumstances…").
-           • basic/good: moderate clamps.
-           • great: disable no_repeat_ngram_size entirely and use a
-             gentle repetition penalty (1.08). Phi-3.5 & SmolLM2-1.7B
-             self-regulate well enough that heavier clamps do more harm
-             than good. */
         let effectiveParams = { ...params };
-        if (tier === 'experimental') {
-            effectiveParams = {
-                ...effectiveParams,
-                temperature: clamp(params.temperature, 0.35),
-                top_p: clamp(params.top_p, 0.85),
-                top_k: clamp(params.top_k ?? 30, 30),
-                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.2),
-                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
-                max_new_tokens: clamp(params.max_new_tokens, 280),
-            };
-        } else if (tier === 'basic' || tier === 'good') {
-            effectiveParams = {
-                ...effectiveParams,
-                temperature: clamp(params.temperature, 0.5),
-                top_p: clamp(params.top_p, 0.9),
-                top_k: params.top_k ?? 40,
-                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
-                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
-                max_new_tokens: clamp(params.max_new_tokens, 420),
-            };
-        } else {
-            // 'great' tier (Phi-3.5, SmolLM2-1.7B): gentle guards only.
-            effectiveParams = {
-                ...effectiveParams,
-                temperature: clamp(params.temperature, 0.5),
-                top_p: clamp(params.top_p, 0.9),
-                top_k: params.top_k ?? 50,
-                repetition_penalty: Math.max(params.repetition_penalty ?? 1.05, 1.08),
-                no_repeat_ngram_size: params.no_repeat_ngram_size ?? 0,
-                max_new_tokens: clamp(params.max_new_tokens, 600),
-            };
-        }
+        if (!isGeminiBackend) {
+            /* Per-tier sampling clamps (browser HF worker only).
+               Small LLMs love to fall into a degeneracy trap: the model
+               latches onto a cadence ('circumstantial circumstances
+               surrounding dialogue participants ...') and keeps emitting
+               off-distribution tokens until max_new_tokens runs out. Two
+               counter-measures work together:
+                 1. Cap max_new_tokens so even if it drifts, it dies fast.
+                 2. Raise repetition_penalty so the drift is less likely
+                    to begin in the first place.
+               We ONLY override when user's param is looser than the tier
+               ceiling — if the user dialled it down manually we respect
+               their choice. */
+            const tier = currentModelMeta?.quality || 'good';
+            const clamp = (v, ceil) => (v == null ? ceil : Math.min(v, ceil));
 
-        /* App-feature Q&A should be factual and stable, not creative.
-           If retrieval found relevant app passages, force deterministic
-           decoding so answers don't drift into verbose nonsense. */
-        if (isAppFeatureQuestion) {
-            effectiveParams = {
-                ...effectiveParams,
-                do_sample: false,
-                temperature: 0,
-                top_p: 1,
-                top_k: 0,
-                max_new_tokens: clamp(params.max_new_tokens, 220),
-                repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
-                no_repeat_ngram_size: Math.max(effectiveParams.no_repeat_ngram_size ?? 0, 4),
-            };
+            /* Tier-aware guardrails.
+               LESSON LEARNED: the previous "universal" no_repeat_ngram_size=4
+               + repetition_penalty=1.15 combo works great for tiny models
+               but actively DAMAGES 'great' tier models. With Phi-3.5, once
+               common 4-grams like "one mole of a" or "the number of atoms"
+               get blocked, the model drops articles/prepositions to avoid
+               any 4-gram repeat and spirals into word salad
+               ("count macroscale amounts material science physical sciences
+               rely heavily today thanks largely contribution…"). We now
+               scale the guardrails to the model's self-regulation ability.
+
+               • experimental: hard clamps — small models absolutely need
+                 them or they loop ("circumstantial circumstances…").
+               • basic/good: moderate clamps.
+               • great: disable no_repeat_ngram_size entirely and use a
+                 gentle repetition penalty (1.08). Phi-3.5 & SmolLM2-1.7B
+                 self-regulate well enough that heavier clamps do more harm
+                 than good. */
+            if (tier === 'experimental') {
+                effectiveParams = {
+                    ...effectiveParams,
+                    temperature: clamp(params.temperature, 0.35),
+                    top_p: clamp(params.top_p, 0.85),
+                    top_k: clamp(params.top_k ?? 30, 30),
+                    repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.2),
+                    no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
+                    max_new_tokens: clamp(params.max_new_tokens, 280),
+                };
+            } else if (tier === 'basic' || tier === 'good') {
+                effectiveParams = {
+                    ...effectiveParams,
+                    temperature: clamp(params.temperature, 0.5),
+                    top_p: clamp(params.top_p, 0.9),
+                    top_k: params.top_k ?? 40,
+                    repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
+                    no_repeat_ngram_size: params.no_repeat_ngram_size ?? 4,
+                    max_new_tokens: clamp(params.max_new_tokens, 420),
+                };
+            } else {
+                // 'great' tier (Phi-3.5, SmolLM2-1.7B): gentle guards only.
+                effectiveParams = {
+                    ...effectiveParams,
+                    temperature: clamp(params.temperature, 0.5),
+                    top_p: clamp(params.top_p, 0.9),
+                    top_k: params.top_k ?? 50,
+                    repetition_penalty: Math.max(params.repetition_penalty ?? 1.05, 1.08),
+                    no_repeat_ngram_size: params.no_repeat_ngram_size ?? 0,
+                    max_new_tokens: clamp(params.max_new_tokens, 600),
+                };
+            }
+
+            /* App-feature Q&A should be factual and stable, not creative.
+               If retrieval found relevant app passages, force deterministic
+               decoding so answers don't drift into verbose nonsense. */
+            if (isAppFeatureQuestion) {
+                effectiveParams = {
+                    ...effectiveParams,
+                    do_sample: false,
+                    temperature: 0,
+                    top_p: 1,
+                    top_k: 0,
+                    max_new_tokens: clamp(params.max_new_tokens, 220),
+                    repetition_penalty: Math.max(params.repetition_penalty ?? 1.1, 1.12),
+                    no_repeat_ngram_size: Math.max(effectiveParams.no_repeat_ngram_size ?? 0, 4),
+                };
+            }
         }
 
         if (isGeminiBackend) {
@@ -1095,7 +1123,17 @@ export default function AIChatPage() {
             (async () => {
                 try {
                     const geminiParams = isAppFeatureQuestion
-                        ? { temperature: 0, top_p: 1, max_new_tokens: 512 }
+                        ? {
+                              /* Slight sampling avoids near-verbatim
+                                 regurgitation of retrieved help text while
+                                 staying close to the facts. */
+                              temperature: 0.2,
+                              top_p: 0.9,
+                              max_new_tokens: Math.min(
+                                  params.max_new_tokens || 2048,
+                                  8192
+                              ),
+                          }
                         : {
                               temperature: params.temperature,
                               top_p: params.top_p,

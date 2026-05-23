@@ -1,0 +1,1504 @@
+/* MEMS Mask Studio — lithography-style layout shell */
+
+.mems-mask-studio {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: linear-gradient(165deg, #0c1222 0%, #0a0e18 45%);
+    color: #e2e8f0;
+    --mems-input-bg: rgba(0, 0, 0, 0.32);
+    --mems-input-border: rgba(255, 255, 255, 0.12);
+    --mems-input-focus: rgba(129, 140, 248, 0.45);
+}
+
+.mems-mask-studio__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+
+.mems-mask-studio__brand-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    flex: 1 1 280px;
+    min-width: 0;
+}
+
+.mems-layout-controls {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.mems-layout-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.22);
+    color: #94a3b8;
+    font-size: 0.68rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease;
+}
+
+.mems-layout-chip:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+}
+
+.mems-layout-chip--active {
+    border-color: rgba(129, 140, 248, 0.45);
+    background: rgba(129, 140, 248, 0.14);
+    color: #e0e7ff;
+}
+
+.mems-layout-chip--accent {
+    border-color: rgba(52, 211, 153, 0.28);
+    color: #a7f3d0;
+}
+
+.mems-layout-chip--accent:hover {
+    background: rgba(52, 211, 153, 0.12);
+    border-color: rgba(52, 211, 153, 0.4);
+}
+
+.mems-layout-chip__pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+}
+
+.mems-mask-studio__title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #c7d2fe;
+}
+
+.mems-mask-studio__subtitle {
+    font-weight: 400;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.mems-mask-studio__workspace-bar {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mems-workspace-path {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: min(100%, 240px);
+}
+
+.mems-workspace-path__label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.mems-workspace-path__input {
+    flex: 1;
+    min-width: 140px;
+    max-width: min(100%, 480px);
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.28);
+    color: #e2e8f0;
+    font-size: 0.72rem;
+}
+
+.mems-workspace-path__input::placeholder {
+    color: #64748b;
+}
+
+.mems-workspace-path__input:focus {
+    outline: none;
+    border-color: rgba(129, 140, 248, 0.45);
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.12);
+}
+
+.mems-mask-studio__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.mems-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.mems-tool-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.mems-tool-btn.is-active {
+    border-color: rgba(129, 140, 248, 0.45);
+    background: rgba(129, 140, 248, 0.15);
+    color: #e0e7ff;
+}
+
+.mems-tool-btn--primary {
+    border-color: rgba(52, 211, 153, 0.35);
+    background: rgba(52, 211, 153, 0.12);
+    color: #a7f3d0;
+}
+
+.mems-tool-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.mems-geom-cluster {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding-left: 8px;
+    margin-left: 4px;
+    border-left: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.mems-geom-cluster__label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-right: 2px;
+}
+
+.mems-geom-cluster__offset {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 2px;
+    color: #94a3b8;
+}
+
+.mems-geom-cluster__offset input {
+    width: 56px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.25);
+    color: #e2e8f0;
+    font-size: 0.72rem;
+}
+
+.mems-geom-cluster__um {
+    font-size: 0.65rem;
+    color: #64748b;
+}
+
+.mems-geom-cluster__derived {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.68rem;
+    color: #94a3b8;
+    margin-left: 4px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.mems-geom-cluster__derived input {
+    accent-color: #818cf8;
+}
+
+/** Boolean row: icon + word label (planar ops: union, intersect, subtract, xor). */
+.mems-geom-cluster__bools {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.mems-tool-btn--bool {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+}
+
+.mems-tool-btn--bool .mems-bool-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #cbd5e1;
+}
+
+.mems-tool-btn--bool .mems-bool-sym {
+    margin-left: auto;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #94a3b8;
+    opacity: 0.85;
+}
+
+.mems-mask-studio__body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.mems-mask-studio__layers {
+    width: 260px;
+    flex-shrink: 0;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    background: rgba(10, 14, 24, 0.65);
+    transition:
+        width 0.2s ease,
+        padding 0.2s ease;
+}
+
+.mems-mask-studio__layers--collapsed {
+    width: 48px;
+    min-width: 48px;
+    padding: 10px 6px;
+    overflow: hidden;
+    align-items: stretch;
+}
+
+.mems-panel-expand {
+    flex: 1;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 14px 4px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(165deg, rgba(129, 140, 248, 0.14), rgba(99, 102, 241, 0.06));
+    color: #c7d2fe;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.mems-panel-expand:hover {
+    background: linear-gradient(165deg, rgba(129, 140, 248, 0.22), rgba(99, 102, 241, 0.12));
+    box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.28);
+}
+
+.mems-panel-expand__label {
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #a5b4fc;
+    line-height: 1.15;
+    text-align: center;
+}
+
+.mems-layers-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #a5b4fc;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.mems-layers-head__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mems-layers-head__actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.mems-layer-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mems-layer-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.mems-layer-row.is-active {
+    border-color: rgba(129, 140, 248, 0.35);
+    background: rgba(129, 140, 248, 0.08);
+}
+
+.mems-layer-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    padding: 0;
+}
+
+.mems-layer-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.mems-layer-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.25);
+    color: #e2e8f0;
+}
+
+.mems-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #94a3b8;
+    cursor: pointer;
+}
+
+.mems-icon-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e2e8f0;
+}
+
+.mems-icon-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.mems-icon-btn--danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fecaca;
+}
+
+.mems-die-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.mems-die-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mems-die-fields input[type='number'],
+.mems-die-fields input[type='text'] {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.3);
+    background-color: rgba(0, 0, 0, 0.3);
+    color: #f1f5f9;
+    font-size: 0.78rem;
+}
+
+.mems-hint {
+    margin: 0;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: #64748b;
+}
+
+.mems-canvas-rulers {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    background: #050810;
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    grid-template-rows: 22px 1fr;
+}
+
+.mems-canvas-rulers--norulers {
+    display: block;
+}
+
+.mems-canvas-rulers--norulers .mems-mask-studio__canvas-wrap {
+    height: 100%;
+    min-height: 240px;
+}
+
+.mems-canvas-rulers:not(.mems-canvas-rulers--norulers) .mems-mask-studio__canvas-wrap {
+    grid-column: 2;
+    grid-row: 2;
+    position: relative;
+    min-height: 0;
+}
+
+.mems-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: crosshair;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: repeating-linear-gradient(
+        90deg,
+        rgba(15, 23, 42, 0.9) 0,
+        rgba(15, 23, 42, 0.9) 1px,
+        rgba(10, 14, 24, 0.95) 1px,
+        rgba(10, 14, 24, 0.95) 16px
+    );
+}
+
+/* Default SVG stroke is user-space; block any inherited / UA non-scaling-stroke on mask canvas. */
+.mems-svg :where(path, rect, polygon, polyline, line, circle, ellipse) {
+    vector-effect: none;
+}
+
+.mems-die-outline {
+    fill: rgba(15, 23, 42, 0.85);
+    stroke: rgba(148, 163, 184, 0.35);
+    stroke-width: 2;
+}
+
+.mems-grid-line {
+    stroke: rgba(148, 163, 184, 0.12);
+    stroke-width: 1;
+}
+
+.mems-mask-studio__footer {
+    padding: 6px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.68rem;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.mems-file-input-hidden {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+}
+
+.mems-mask-studio__inspector {
+    width: 280px;
+    flex-shrink: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 12px;
+    overflow-y: auto;
+    background: rgba(10, 14, 24, 0.65);
+    font-size: 0.75rem;
+    transition:
+        width 0.2s ease,
+        padding 0.2s ease;
+}
+
+.mems-mask-studio__inspector--collapsed {
+    width: 48px;
+    min-width: 48px;
+    padding: 10px 6px;
+    overflow: hidden;
+}
+
+.mems-inspector-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #a5b4fc;
+    margin-bottom: 10px;
+}
+
+.mems-inspector--empty {
+    color: #64748b;
+    line-height: 1.45;
+}
+
+.mems-inspector-title {
+    margin: 0 0 6px;
+    font-size: 0.82rem;
+    color: #e2e8f0;
+}
+
+.mems-inspector-meta {
+    margin: 0 0 10px;
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+
+.mems-inspector-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+    color: #94a3b8;
+}
+
+.mems-inspector-field input[type='number'],
+.mems-inspector-field input[type='text'],
+.mems-inspector-field textarea,
+.mems-inspector-field select {
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--mems-input-border);
+    background: var(--mems-input-bg);
+    color: #f1f5f9;
+    font-size: 0.76rem;
+    font-family: ui-monospace, monospace;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.mems-inspector-field select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px;
+    cursor: pointer;
+}
+
+.mems-inspector-field--check {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+
+.mems-inspector-sublabel {
+    margin: 8px 0 4px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #818cf8;
+}
+
+.mems-inspector-open-master {
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(129, 140, 248, 0.35);
+    background: rgba(129, 140, 248, 0.12);
+    color: #e0e7ff;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.mems-inspector-open-master:hover:not(:disabled) {
+    background: rgba(129, 140, 248, 0.2);
+}
+
+.mems-inspector-open-master:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.mems-svg .mems-instance-ghost {
+    opacity: 0.85;
+}
+
+.mems-inspector-field--textarea textarea {
+    resize: vertical;
+    min-height: 120px;
+}
+
+.mems-inspector-hint {
+    font-size: 0.65rem;
+    color: #64748b;
+    margin: 8px 0 0;
+}
+
+.mems-inspector-error {
+    color: #fca5a5;
+    font-size: 0.68rem;
+    margin: 4px 0 0;
+}
+
+.mems-display-units {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mems-unit-toggle {
+    display: flex;
+    gap: 6px;
+}
+
+.mems-unit-toggle button {
+    flex: 1;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.mems-unit-toggle button.is-active {
+    border-color: rgba(129, 140, 248, 0.45);
+    background: rgba(129, 140, 248, 0.15);
+    color: #e0e7ff;
+}
+
+.mems-cell-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.68rem;
+    color: #94a3b8;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mems-cell-strip__label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-weight: 600;
+    color: #818cf8;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.62rem;
+}
+
+.mems-cell-strip__select {
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--mems-input-border);
+    background-color: var(--mems-input-bg);
+    color: #e2e8f0;
+    font-size: 0.72rem;
+    line-height: 1.25;
+}
+
+.mems-ui-select,
+.mems-mask-studio select.mems-ui-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px;
+    cursor: pointer;
+}
+
+.mems-ui-select:disabled,
+.mems-mask-studio select.mems-ui-select:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.mems-mask-studio .mems-workspace-path__input,
+.mems-mask-studio input[type='text'],
+.mems-mask-studio input[type='number'],
+.mems-mask-studio input[type='search'],
+.mems-mask-studio textarea {
+    border-radius: 8px;
+    border: 1px solid var(--mems-input-border);
+    background: var(--mems-input-bg);
+    background-color: var(--mems-input-bg);
+    color: #f1f5f9;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+/* WebKit / Chrome autofill overrides (otherwise inputs flash white or stay white). */
+.mems-mask-studio input:-webkit-autofill,
+.mems-mask-studio input:-webkit-autofill:hover,
+.mems-mask-studio input:-webkit-autofill:focus,
+.mems-mask-studio textarea:-webkit-autofill,
+.mems-mask-studio textarea:-webkit-autofill:hover,
+.mems-mask-studio textarea:-webkit-autofill:focus {
+    -webkit-text-fill-color: #f1f5f9;
+    caret-color: #e2e8f0;
+    box-shadow: inset 0 0 0 1000px rgba(2, 6, 23, 0.92);
+    border: 1px solid var(--mems-input-border);
+}
+
+.mems-mask-studio input:focus-visible,
+.mems-mask-studio textarea:focus-visible,
+.mems-mask-studio select.mems-ui-select:focus-visible,
+.mems-mask-studio .mems-inspector-field select:focus-visible {
+    outline: none;
+    border-color: var(--mems-input-focus);
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.14);
+}
+
+.mems-mask-studio input[type='checkbox'],
+.mems-mask-studio input[type='radio'] {
+    accent-color: #818cf8;
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+}
+
+.mems-mask-studio input[type='range'] {
+    accent-color: #818cf8;
+    height: 6px;
+    border-radius: 999px;
+}
+
+.mems-cell-strip__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.mems-cell-strip__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #cbd5e1;
+    font-size: 0.65rem;
+    cursor: pointer;
+}
+
+.mems-cell-strip__btn:hover {
+    border-color: rgba(129, 140, 248, 0.35);
+    color: #e2e8f0;
+}
+
+.mems-sublabel {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #818cf8;
+    margin-bottom: 8px;
+}
+
+.mems-active-layer-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 10px;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.mems-active-layer-panel label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mems-active-layer-panel input[type='range'] {
+    width: 100%;
+}
+
+.mems-active-layer-panel input[type='text'] {
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--mems-input-border);
+    background: var(--mems-input-bg);
+    background-color: var(--mems-input-bg);
+    color: #f1f5f9;
+    font-size: 0.76rem;
+}
+
+.mems-active-layer-panel input[type='text']::placeholder {
+    color: #64748b;
+}
+
+.mems-checkbox-row {
+    flex-direction: row !important;
+    align-items: center;
+    gap: 8px !important;
+}
+
+.mems-checkbox-row input {
+    width: auto;
+}
+
+.mems-icon-btn--warn {
+    color: #fb923c;
+}
+
+.mems-die-fields textarea {
+    min-height: 48px;
+    resize: vertical;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.3);
+    color: #f1f5f9;
+    font-size: 0.76rem;
+}
+
+/* CAD precision panel + rulers */
+.mems-precision-panel {
+    padding: 10px 0 12px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.68rem;
+    color: #94a3b8;
+}
+
+.mems-precision-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 6px;
+}
+
+.mems-precision-field input {
+    padding: 5px 7px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.28);
+    color: #f1f5f9;
+    font-size: 0.72rem;
+    font-family: ui-monospace, monospace;
+}
+
+.mems-precision-toggle-row {
+    display: flex;
+    gap: 12px;
+    margin: 6px 0 8px;
+    flex-wrap: wrap;
+}
+
+.mems-origin-panel {
+    padding: 10px 0 12px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.68rem;
+    color: #94a3b8;
+}
+
+.mems-origin-hint {
+    margin: 0 0 8px;
+    line-height: 1.45;
+    font-size: 0.66rem;
+    color: #94a3b8;
+}
+
+.mems-origin-frame-row {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.mems-radio-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: #cbd5e1;
+}
+
+.mems-origin-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.mems-align-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.mems-mini-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: #cbd5e1;
+    font-size: 0.62rem;
+    cursor: pointer;
+}
+
+.mems-mini-btn:hover {
+    border-color: rgba(129, 140, 248, 0.35);
+    color: #f1f5f9;
+}
+
+.mems-mini-btn--wide {
+    flex: 1;
+    min-width: 0;
+}
+
+.mems-mini-btn--danger {
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #fecaca;
+}
+
+.mems-guide-add-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.mems-precision-hint {
+    margin: 8px 0 0;
+    font-size: 0.6rem;
+    line-height: 1.35;
+    color: #64748b;
+}
+
+.mems-ruler-corner {
+    grid-column: 1;
+    grid-row: 1;
+    background: rgba(12, 16, 26, 0.92);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mems-ruler-top {
+    grid-column: 2;
+    grid-row: 1;
+    position: relative;
+    background: rgba(12, 16, 26, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+
+.mems-ruler-left {
+    grid-column: 1;
+    grid-row: 2;
+    position: relative;
+    background: rgba(12, 16, 26, 0.92);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+
+.mems-ruler-tick {
+    position: absolute;
+    bottom: 0;
+    width: 1px;
+    height: 100%;
+    transform: translateX(-50%);
+    border-left: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.mems-ruler-tick--y {
+    left: 0;
+    bottom: auto;
+    top: 0;
+    width: 100%;
+    height: 1px;
+    transform: translateY(-50%);
+    border-left: none;
+    border-top: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.mems-ruler-label {
+    position: absolute;
+    font-size: 0.55rem;
+    color: #94a3b8;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.mems-ruler-top .mems-ruler-label {
+    left: 2px;
+    top: 2px;
+    transform: translateX(-50%);
+}
+
+.mems-ruler-left .mems-ruler-label {
+    left: 2px;
+    transform: translateY(-50%);
+}
+
+.mems-guide-line {
+    stroke: rgba(129, 140, 248, 0.55);
+    stroke-dasharray: 5 5;
+    pointer-events: none;
+}
+
+/* DRC panel */
+.mems-drc-panel {
+    padding: 10px 0 12px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.68rem;
+    color: #94a3b8;
+}
+
+.mems-drc-panel__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: #fca5a5;
+    margin-bottom: 8px;
+    font-size: 0.72rem;
+}
+
+.mems-drc-panel__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.mems-drc-realtime {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: #cbd5e1;
+}
+
+.mems-drc-panel__io {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.mems-drc-stats {
+    margin: 0 0 6px;
+    font-size: 0.6rem;
+    color: #64748b;
+}
+
+.mems-drc-summary {
+    margin: 0 0 8px;
+    font-size: 0.7rem;
+    color: #e2e8f0;
+}
+
+.mems-drc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.mems-drc-list__empty {
+    padding: 10px;
+    color: #64748b;
+    font-size: 0.65rem;
+}
+
+.mems-drc-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: transparent;
+    color: #cbd5e1;
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.62rem;
+}
+
+.mems-drc-item:last-child {
+    border-bottom: none;
+}
+
+.mems-drc-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.mems-drc-item.is-active {
+    background: rgba(248, 113, 113, 0.12);
+}
+
+.mems-drc-item--err .mems-drc-item__rule {
+    color: #fca5a5;
+}
+
+.mems-drc-item--warn .mems-drc-item__rule {
+    color: #fcd34d;
+}
+
+.mems-drc-item__rule {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.58rem;
+}
+
+.mems-drc-item__msg {
+    line-height: 1.35;
+}
+
+.mems-drc-item__loc {
+    font-family: ui-monospace, monospace;
+    color: #64748b;
+    font-size: 0.58rem;
+}
+
+.mems-drc-foot {
+    margin: 8px 0 0;
+    font-size: 0.58rem;
+    color: #64748b;
+    line-height: 1.35;
+}
+
+.mems-drc-foot code {
+    font-size: 0.55rem;
+}
+
+.mems-svg .mems-drc-overlay {
+    pointer-events: none;
+}
+
+/* Workspace open-from-sidebar modal */
+.mems-ws-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.mems-ws-modal {
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 10px;
+    max-width: 420px;
+    width: 100%;
+    max-height: min(70vh, 480px);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.mems-ws-modal__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.mems-ws-modal__head h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.mems-ws-modal__close {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 1.35rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 4px;
+}
+
+.mems-ws-modal__close:hover {
+    color: #f1f5f9;
+    background: rgba(148, 163, 184, 0.15);
+}
+
+.mems-ws-modal__hint {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 0.65rem;
+    color: #94a3b8;
+    line-height: 1.45;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.mems-ws-modal__hint code {
+    font-size: 0.6rem;
+    color: #cbd5e1;
+}
+
+.mems-ws-modal__list {
+    margin: 0;
+    padding: 8px 10px 12px;
+    list-style: none;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+.mems-ws-modal__list li {
+    margin: 0;
+}
+
+.mems-ws-modal__file-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    margin: 2px 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: rgba(30, 41, 59, 0.6);
+    color: #e2e8f0;
+    font-size: 0.75rem;
+    cursor: pointer;
+    font-family: ui-monospace, monospace;
+}
+
+.mems-ws-modal__file-btn:hover {
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(30, 58, 95, 0.5);
+}
+
+.mems-new-design-modal.mems-ws-modal {
+    max-height: none;
+}
+
+.mems-new-design__body {
+    padding: 12px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mems-new-design__intro {
+    border-bottom: none;
+    padding: 0 0 4px;
+}
+
+.mems-new-design__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.68rem;
+    color: #cbd5e1;
+}
+
+.mems-new-design__field > span {
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.58rem;
+}
+
+.mems-new-design__input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.9);
+    color: #f1f5f9;
+    font-size: 0.8rem;
+}
+
+.mems-new-design__input:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.65);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
+}
+
+.mems-new-design__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 0.68rem;
+    color: #cbd5e1;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.mems-new-design__check input {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.mems-new-design__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px 14px;
+    border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.mems-new-design__btn {
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(30, 41, 59, 0.8);
+    color: #e2e8f0;
+}
+
+.mems-new-design__btn:hover {
+    background: rgba(51, 65, 85, 0.9);
+}
+
+.mems-new-design__btn--primary {
+    border-color: rgba(56, 189, 248, 0.55);
+    background: rgba(14, 116, 144, 0.45);
+    color: #f0f9ff;
+}
+
+.mems-new-design__btn--primary:hover {
+    background: rgba(8, 145, 178, 0.55);
+}
+
+/* Line chain → polygon (inspector strip) */
+.mems-line-chain-panel {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    background: rgba(15, 23, 42, 0.35);
+}
+
+.mems-line-chain-panel__title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #a5b4fc;
+    margin: 0 0 6px;
+}
+
+.mems-line-chain-panel__list {
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mems-line-chain-panel__seg {
+    width: 100%;
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(30, 41, 59, 0.65);
+    color: #e2e8f0;
+    font-size: 0.65rem;
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+}
+
+.mems-line-chain-panel__seg:hover {
+    border-color: rgba(56, 189, 248, 0.45);
+}
+
+.mems-line-chain-panel__seg--sel {
+    border-color: rgba(56, 189, 248, 0.65);
+    background: rgba(14, 116, 144, 0.35);
+}

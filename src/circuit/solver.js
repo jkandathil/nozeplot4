@@ -25,6 +25,10 @@ import { solveReal, solveComplex, zerosMat, zerosComplexMat } from './linalg.js'
 
 const VT = 0.02585;                 // Thermal voltage at 300 K (V)
 const GMIN = 1e-12;                 // Conductance floor added to every non-linear device
+/** SPICE-style DC leak to reference — each internal node → ground. Keeps MNA non-singular
+ *  when a pin misses the mesh by a pixel (near-floating), without shifting normal circuits
+ *  measurably (1 pS @ 1 V ⇒ 1 pA). */
+const GDC_NODE_TO_GROUND = 1e-12;
 const NEWTON_MAX_ITER = 200;
 const NEWTON_ABSTOL = 1e-9;
 const NEWTON_RELTOL = 1e-4;
@@ -160,8 +164,18 @@ export function buildContext(parsed) {
     const elems = parsed.elements.map((e) => ({ ...e }));
     for (const e of elems) {
         if (e.type === 'V' || e.type === 'L' || e.type === 'E' || e.type === 'O') {
-            e.branchIdx = interior + extra;
-            extra++;
+            // V or L with both terminals on the same node is a zero-length branch:
+            // stamping it would duplicate KCL rows (singular MNA). Skip the branch
+            // unknown entirely — electrically it is a no-op for L and redundant for V.
+            const degenerate =
+                (e.type === 'V' || e.type === 'L') && e.n1 === e.n2;
+            if (degenerate) {
+                e.branchIdx = -1;
+                e.degenerate = true;
+            } else {
+                e.branchIdx = interior + extra;
+                extra++;
+            }
         }
     }
     const size = interior + extra;
@@ -169,7 +183,10 @@ export function buildContext(parsed) {
     // assigned branchIdx above. Consumers (e.g. buildStepResult) use
     // this to produce named I(<ref>) signals without rescanning.
     const branchElems = elems
-        .filter((e) => e.type === 'V' || e.type === 'L' || e.type === 'E' || e.type === 'O')
+        .filter((e) =>
+            (e.type === 'V' || e.type === 'L' || e.type === 'E' || e.type === 'O') &&
+            e.branchIdx >= 0
+        )
         .map((e) => ({ name: e.name, type: e.type }));
     return {
         elems,
@@ -483,6 +500,7 @@ export function solveDC(ctx, opts = {}) {
                     break;
                 }
                 case 'L': {
+                    if (el.branchIdx < 0) break;
                     // DC op-point → inductor is a short (V = 0 across it).
                     // Use the V-source stamp with e = 0 so branch current
                     // stays an unknown.
@@ -490,7 +508,10 @@ export function solveDC(ctx, opts = {}) {
                     break;
                 }
                 case 'V': {
-                    const v = evalSource(el.source, 0);
+                    if (el.branchIdx < 0) break;
+                    let v = evalSource(el.source, 0);
+                    const bump = opts.vdcBumps?.get(el.name.toLowerCase());
+                    if (Number.isFinite(bump)) v += bump;
                     stampVSrc(A, z, el.n1, el.n2, el.branchIdx, v);
                     break;
                 }
@@ -566,6 +587,13 @@ export function solveDC(ctx, opts = {}) {
             }
         }
 
+        /* Weak DC reference for every interior node (Ngspice-style gmin-to-ground on the
+           Jacobian). Without this, a single unresolved pin (~floating net) zeros a matrix
+           column and Gaussian elimination fails at an arbitrary column index. */
+        for (let n = 1; n < ctx.nNodes; n++) {
+            stampG(A, n, 0, GDC_NODE_TO_GROUND);
+        }
+
         let newX;
         try {
             newX = solveReal(A, z);
@@ -590,6 +618,91 @@ export function solveDC(ctx, opts = {}) {
         }
     }
     return { x, iters: maxIter, converged: !hasNonlinear };
+}
+
+/** Node voltage from DC vector `x` (interior nodes only; node id 0 = ground). */
+function dcNodeV(x, nodeId) {
+    if (nodeId <= 0) return 0;
+    return x[nodeId - 1];
+}
+
+/**
+ * DC small-signal transfer function ∂OUT/∂V(src) about the operating point,
+ * using a finite difference on the independent voltage source's DC value
+ * (same small-signal idea as SPICE `.TF`).
+ *
+ * @param {ReturnType<typeof buildContext>} ctx
+ * @param {{ nodeIndex: (name: string) => number, nNodes: number }} parsed
+ * @param {{ outKind: 'v'|'i', nPlus?: string, nMinus?: string, probeVName?: string, srcName: string, rawOut?: string }} tfDir
+ */
+export function solveTransferFunction(ctx, parsed, tfDir) {
+    const srcWant = String(tfDir.srcName || '').trim().toLowerCase();
+    const inputV = ctx.elems.find((e) => e.type === 'V' && e.name.toLowerCase() === srcWant);
+    if (!inputV) {
+        throw new Error(`.TF: no voltage source named "${tfDir.srcName}"`);
+    }
+    if (inputV.branchIdx < 0) {
+        throw new Error(`.TF: voltage source "${inputV.name}" is degenerate (n+ = n−)`);
+    }
+
+    const vst0 = evalSource(inputV.source, 0);
+    const eps = Math.max(1e-9, 1e-6 * Math.max(1, Math.abs(vst0)));
+
+    const bumpKey = inputV.name.toLowerCase();
+    const dc0 = solveDC(ctx);
+    if (!dc0.converged) {
+        return { ok: false, error: 'DC operating point did not converge (.TF skipped).' };
+    }
+
+    let out0;
+    let out1;
+    let outLabel = tfDir.rawOut || '';
+    let unit = '';
+
+    if (tfDir.outKind === 'v') {
+        const nP = parsed.nodeIndex(tfDir.nPlus);
+        const nM = parsed.nodeIndex(tfDir.nMinus);
+        if (nP < 0) throw new Error(`.TF: unknown node "${tfDir.nPlus}"`);
+        if (nM < 0) throw new Error(`.TF: unknown node "${tfDir.nMinus}"`);
+        out0 = dcNodeV(dc0.x, nP) - dcNodeV(dc0.x, nM);
+        const dcP = solveDC(ctx, { vdcBumps: new Map([[bumpKey, eps]]), initial: dc0.x });
+        if (!dcP.converged) {
+            return { ok: false, error: 'DC did not converge for .TF perturbation.' };
+        }
+        out1 = dcNodeV(dcP.x, nP) - dcNodeV(dcP.x, nM);
+        unit = 'V/V';
+        if (!outLabel) outLabel = `V(${tfDir.nPlus}${tfDir.nMinus && tfDir.nMinus !== '0' ? `,${tfDir.nMinus}` : ''})`;
+    } else if (tfDir.outKind === 'i') {
+        const probeWant = String(tfDir.probeVName || '').trim().toLowerCase();
+        const vProbe = ctx.elems.find((e) => e.type === 'V' && e.name.toLowerCase() === probeWant);
+        if (!vProbe) {
+            throw new Error(`.TF: no voltage source "${tfDir.probeVName}" for I(...) output`);
+        }
+        if (vProbe.branchIdx < 0) {
+            throw new Error(`.TF: probe voltage source "${vProbe.name}" is degenerate (n+ = n−)`);
+        }
+        out0 = dc0.x[vProbe.branchIdx];
+        const dcP = solveDC(ctx, { vdcBumps: new Map([[bumpKey, eps]]), initial: dc0.x });
+        if (!dcP.converged) {
+            return { ok: false, error: 'DC did not converge for .TF perturbation.' };
+        }
+        out1 = dcP.x[vProbe.branchIdx];
+        unit = 'A/V';
+        if (!outLabel) outLabel = `I(${vProbe.name})`;
+    } else {
+        throw new Error('.TF: internal parse error (unknown outKind)');
+    }
+
+    const gain = (out1 - out0) / eps;
+    return {
+        ok: true,
+        gain,
+        outDc: out0,
+        eps,
+        outLabel,
+        srcName: inputV.name,
+        unit,
+    };
 }
 
 /**
@@ -660,6 +773,8 @@ export function solveTran(ctx, options) {
         } else if (el.type === 'L') {
             if (options.uic) {
                 iLPrev.set(el.name, el.ic || 0);
+            } else if (el.branchIdx < 0) {
+                iLPrev.set(el.name, 0);
             } else {
                 iLPrev.set(el.name, prev[el.branchIdx] || 0);
             }
@@ -715,6 +830,7 @@ export function solveTran(ctx, options) {
                         break;
                     }
                     case 'L': {
+                        if (el.branchIdx < 0) break;
                         const Req = (2 * el.value) / h;
                         const iPrev = iLPrev.get(el.name) || 0;
                         const vPrev = vLPrev.get(el.name) || 0;
@@ -732,6 +848,7 @@ export function solveTran(ctx, options) {
                         break;
                     }
                     case 'V': {
+                        if (el.branchIdx < 0) break;
                         const v = evalSource(el.source, tNext);
                         stampVSrc(A, z, el.n1, el.n2, el.branchIdx, v);
                         break;
@@ -881,6 +998,7 @@ export function solveTran(ctx, options) {
             if (el.type === 'C') {
                 commitCap(el.name, el.n1, el.n2, el.value);
             } else if (el.type === 'L') {
+                if (el.branchIdx < 0) continue;
                 const a = ri(el.n1), b = ri(el.n2);
                 const vA = a >= 0 ? xIter[a] : 0;
                 const vB = b >= 0 ? xIter[b] : 0;
@@ -984,6 +1102,7 @@ function stampAcMna(ctx, dc, w, Are, Aim, bre, bim, acZero) {
             case 'R': cG(el.n1, el.n2, 1 / el.value, 0); break;
             case 'C': cG(el.n1, el.n2, 0, w * el.value); break;
             case 'L': {
+                if (el.branchIdx < 0) break;
                 const k = el.branchIdx;
                 const ip = ri(el.n1), in_ = ri(el.n2);
                 if (ip >= 0) { Are[ip][k] += 1; Are[k][ip] += 1; }
@@ -992,6 +1111,7 @@ function stampAcMna(ctx, dc, w, Are, Aim, bre, bim, acZero) {
                 break;
             }
             case 'V': {
+                if (el.branchIdx < 0) break;
                 const ac = acZero ? { mag: 0, phase: 0 } : evalSourceAC(el.source);
                 const ph = (ac.phase || 0) * Math.PI / 180;
                 cVSrc(el.n1, el.n2, el.branchIdx, ac.mag * Math.cos(ph), ac.mag * Math.sin(ph));

@@ -9,8 +9,8 @@
  *
  * Categories detected:
  *   • dangling-wire-endpoint  (warn) — a wire endpoint doesn't touch any
- *     pin, other wire, junction, or label. Usually means the user stopped
- *     drawing short of the target.
+ *     pin, other wire, junction, or label. Skipped when
+ *     `doc.meta.labelNetAuthority` is true (imported / tutorial cosmetic wires).
  *   • floating-pin            (warn) — component pin that isn't shared
  *     with any other pin or wire vertex. Sourced from nets.floatingPins.
  *   • orphan-component        (error) — every pin of the component is
@@ -114,52 +114,57 @@ export function validateSchematic(doc, nets) {
     }
 
     /* -------------------------------------------------- dangling wire ends */
-    // An endpoint is "dangling" if no other vertex in the schematic
-    // shares its coordinate. We build a coord-count map that counts:
-    //   • every component pin
-    //   • every wire vertex (including mid-polyline, so a wire that
-    //     T's into another wire isn't flagged at the T)
-    //   • every label
-    // Then a wire endpoint with count == 1 (itself) is dangling.
-    const coordCount = new Map();
-    const bump = (x, y) => {
-        const k = `${x}|${y}`;
-        coordCount.set(k, (coordCount.get(k) || 0) + 1);
-    };
-    for (const comp of doc.components) {
-        for (const pin of componentPins(comp) || []) bump(pin.x, pin.y);
-    }
-    for (const wire of doc.wires || []) {
-        for (const [x, y] of wire.points || []) bump(x, y);
-    }
-    for (const label of doc.labels || []) bump(label.x, label.y);
-
-    // Additional case: wires can cross a pin mid-segment (T-junction).
-    // In that situation the endpoint coord might be shared with nothing
-    // else but still be electrically fine. We err on the side of
-    // reporting because the endpoint visually looks unattached; users
-    // can always draw a short stub to silence it.
-    for (const wire of doc.wires || []) {
-        const pts = wire.points || [];
-        if (pts.length < 2) continue;
-        const endpoints = [
-            { idx: 0, p: pts[0] },
-            { idx: pts.length - 1, p: pts[pts.length - 1] },
-        ];
-        for (const { idx, p } of endpoints) {
-            const [x, y] = p;
+    // Imported / tutorial docs set labelNetAuthority: connectivity comes
+    // from net labels on pins; wires are cosmetic. Endpoint overlap checks
+    // would falsely flag auto-routed decoration — skip dangling detection.
+    if (doc.meta?.labelNetAuthority !== true) {
+        // An endpoint is "dangling" if no other vertex in the schematic
+        // shares its coordinate. We build a coord-count map that counts:
+        //   • every component pin
+        //   • every wire vertex (including mid-polyline, so a wire that
+        //     T's into another wire isn't flagged at the T)
+        //   • every label
+        // Then a wire endpoint with count == 1 (itself) is dangling.
+        const coordCount = new Map();
+        const bump = (x, y) => {
             const k = `${x}|${y}`;
-            if ((coordCount.get(k) || 0) <= 1) {
-                danglingEndpoints.push({ wireId: wire.id, pointIndex: idx, x, y });
-                flaggedWireIds.add(wire.id);
-                issues.push({
-                    id: `dangle-${wire.id}-${idx}`,
-                    severity: 'warn',
-                    kind: 'dangling-wire-endpoint',
-                    message: `Wire endpoint at (${x}, ${y}) doesn't connect to anything. Extend it onto a pin or another wire.`,
-                    wireIds: [wire.id],
-                    endpoints: [{ wireId: wire.id, pointIndex: idx, x, y }],
-                });
+            coordCount.set(k, (coordCount.get(k) || 0) + 1);
+        };
+        for (const comp of doc.components) {
+            for (const pin of componentPins(comp) || []) bump(pin.x, pin.y);
+        }
+        for (const wire of doc.wires || []) {
+            for (const [x, y] of wire.points || []) bump(x, y);
+        }
+        for (const label of doc.labels || []) bump(label.x, label.y);
+
+        // Additional case: wires can cross a pin mid-segment (T-junction).
+        // In that situation the endpoint coord might be shared with nothing
+        // else but still be electrically fine. We err on the side of
+        // reporting because the endpoint visually looks unattached; users
+        // can always draw a short stub to silence it.
+        for (const wire of doc.wires || []) {
+            const pts = wire.points || [];
+            if (pts.length < 2) continue;
+            const endpoints = [
+                { idx: 0, p: pts[0] },
+                { idx: pts.length - 1, p: pts[pts.length - 1] },
+            ];
+            for (const { idx, p } of endpoints) {
+                const [x, y] = p;
+                const k = `${x}|${y}`;
+                if ((coordCount.get(k) || 0) <= 1) {
+                    danglingEndpoints.push({ wireId: wire.id, pointIndex: idx, x, y });
+                    flaggedWireIds.add(wire.id);
+                    issues.push({
+                        id: `dangle-${wire.id}-${idx}`,
+                        severity: 'warn',
+                        kind: 'dangling-wire-endpoint',
+                        message: `Wire endpoint at (${x}, ${y}) doesn't connect to anything. Extend it onto a pin or another wire.`,
+                        wireIds: [wire.id],
+                        endpoints: [{ wireId: wire.id, pointIndex: idx, x, y }],
+                    });
+                }
             }
         }
     }

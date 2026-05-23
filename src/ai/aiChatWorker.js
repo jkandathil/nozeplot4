@@ -10,6 +10,8 @@
  *
  * Protocol (main → worker):
  *   { type: 'load',     modelId, device, dtype }
+ *   { type: 'load-uploaded', device, dtype, files: { "relative/path": ArrayBuffer } }
+ *      ONNX / tokenizer files from a zip (Transformers.js–compatible layout).
  *   { type: 'generate', messages, params }
  *   { type: 'stop' }
  *   { type: 'unload' }
@@ -36,6 +38,52 @@ import {
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+
+/** Synthetic repo id — actual bytes come from `uploadFileBuffers` via `env.fetch`. */
+const UPLOAD_MODEL_ID = 'hf-internal/user-upload';
+
+const defaultEnvFetch = env.fetch.bind(env);
+
+/** Relative path (as in the Hugging Face repo zip) → file bytes */
+const uploadFileBuffers = new Map();
+
+function restoreDefaultUploadFetch() {
+    uploadFileBuffers.clear();
+    env.fetch = defaultEnvFetch;
+}
+
+function uploadAwareFetch(input, init) {
+    let urlStr;
+    if (typeof input === 'string') urlStr = input;
+    else if (typeof Request !== 'undefined' && input instanceof Request) urlStr = input.url;
+    else urlStr = String(input?.url || input || '');
+    try {
+        const u = new URL(urlStr, 'https://huggingface.co');
+        const hostOk = u.hostname === 'huggingface.co' || u.hostname === 'hf.co';
+        const needle = `/${UPLOAD_MODEL_ID}/resolve/`;
+        if (hostOk && u.pathname.includes(needle)) {
+            const m = /\/resolve\/[^/]+\/(.+)$/.exec(u.pathname);
+            if (m) {
+                const rel = decodeURIComponent(m[1]);
+                if (uploadFileBuffers.has(rel)) {
+                    const buf = uploadFileBuffers.get(rel);
+                    return Promise.resolve(
+                        new Response(buf, {
+                            status: 200,
+                            headers: {
+                                'Content-Type': 'application/octet-stream',
+                                'Content-Length': String(buf.byteLength),
+                            },
+                        })
+                    );
+                }
+            }
+        }
+    } catch {
+        /* fall through */
+    }
+    return defaultEnvFetch(input, init);
+}
 
 /**
  * Eager token-by-token streamer.
@@ -146,7 +194,12 @@ async function loadModel(modelId, device, dtype) {
     const wantDevice = device || 'webgpu';
     const wantDtype = dtype || 'q4';
 
+    if (modelId !== UPLOAD_MODEL_ID) {
+        restoreDefaultUploadFetch();
+    }
+
     if (
+        modelId !== UPLOAD_MODEL_ID &&
         generator &&
         currentModelId === modelId &&
         currentDevice === wantDevice &&
@@ -185,6 +238,9 @@ async function loadModel(modelId, device, dtype) {
         logError('Model load failed', err);
         generator = null;
         currentModelId = null;
+        if (modelId === UPLOAD_MODEL_ID) {
+            restoreDefaultUploadFetch();
+        }
         post({
             type: 'error',
             message: String(err?.message || err),
@@ -192,6 +248,31 @@ async function loadModel(modelId, device, dtype) {
         });
         post({ type: 'status', status: 'idle' });
     }
+}
+
+async function loadUploadedModel(files, device, dtype) {
+    if (generator) {
+        try { await generator.dispose?.(); } catch { /* ignore */ }
+        generator = null;
+        currentModelId = null;
+    }
+    uploadFileBuffers.clear();
+    if (files && typeof files === 'object') {
+        for (const [path, buf] of Object.entries(files)) {
+            const key = String(path).replace(/\\/g, '/');
+            if (buf instanceof ArrayBuffer && key) {
+                uploadFileBuffers.set(key, buf);
+            }
+        }
+    }
+    if (uploadFileBuffers.size === 0) {
+        post({ type: 'error', message: 'No model files in upload — expected a Transformers.js ONNX zip.' });
+        post({ type: 'status', status: 'idle' });
+        return;
+    }
+    env.fetch = uploadAwareFetch;
+    logInfo(`Uploaded ONNX bundle: ${uploadFileBuffers.size} file(s) → ${UPLOAD_MODEL_ID}`);
+    await loadModel(UPLOAD_MODEL_ID, device, dtype);
 }
 
 async function generate(messages, params) {
@@ -340,6 +421,9 @@ self.onmessage = async (ev) => {
         case 'load':
             await loadModel(msg.modelId, msg.device, msg.dtype);
             break;
+        case 'load-uploaded':
+            await loadUploadedModel(msg.files, msg.device, msg.dtype);
+            break;
         case 'generate':
             await generate(msg.messages, msg.params);
             break;
@@ -352,6 +436,7 @@ self.onmessage = async (ev) => {
             currentModelId = null;
             currentDevice = null;
             currentDtype = null;
+            restoreDefaultUploadFetch();
             post({ type: 'status', status: 'idle' });
             break;
         default:

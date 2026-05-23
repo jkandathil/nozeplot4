@@ -76,7 +76,16 @@ export function exportResultsCsv(result, selectedSignals, projectName) {
     else if (result.kind === 'ac') { xLabel = 'freq(Hz)'; xs = result.f || []; }
     else if (result.kind === 'dc') { xLabel = 'x';       xs = result.x || []; }
     else if (result.kind === 'op') {
-        // .op has no x axis — just a pair of columns (node, value).
+        const sw = result.opSweep;
+        if (sw?.rows?.length && sw.stepValues?.length) {
+            const head = ['node', ...sw.stepValues.map((v) => `${sw.target}=${v}`)];
+            const rows = [head.map(csvEsc).join(',')];
+            for (const row of sw.rows) {
+                rows.push([row.name, ...row.values].map(csvEsc).join(','));
+            }
+            downloadBlob(rows.join('\n'), `${safeFilename(projectName)}_op.csv`, 'text/csv');
+            return;
+        }
         const rows = ['node,value'];
         for (const nv of result.nodeVals || []) {
             rows.push(`${csvEsc(nv.name)},${nv.value}`);

@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo } from 'react';
+import { createPortal } from 'react-dom';
 import {
     CircuitBoard,
     MousePointer2,
@@ -40,6 +41,8 @@ import {
     SquareDashed,
     Save,
     RefreshCw,
+    PanelLeftClose,
+    PanelLeftOpen,
 } from 'lucide-react';
 import {
     emptyPcbDoc,
@@ -89,7 +92,7 @@ import {
     getCopperViolationsForProposedTrack,
     getCopperViolationsForProposedVia,
 } from '../pcb/pcbDrc.js';
-import { autoRoute } from '../pcb/autoRouter.js';
+import { autoRoute, computeRoutingBoardSizeMm } from '../pcb/autoRouter.js';
 import { buildRatsnestHubsByNet } from '../pcb/pcbRatsnest.js';
 import {
     renderPcbCanvas,
@@ -99,6 +102,7 @@ import {
     PCB_TRACE_LAYER_COLORS,
 } from '../pcb/canvasRenderer.js';
 import { createUndoManager } from '../pcb/undoManager.js';
+import { parseCommittedNumberInput } from '../mems/memsInputParse.js';
 import { generateBomCsv, generatePickAndPlaceCsv, generateIpcD356, downloadTextFile } from '../pcb/bomExport.js';
 import OnlineComponentModal from './OnlineComponentModal.jsx';
 import FootprintImportModal from './FootprintImportModal.jsx';
@@ -265,6 +269,8 @@ function snapToSameNetTrack(doc, mx, my, currentNet, tolMm = 0.6, routeLayer = n
     return best;
 }
 
+const PCB_PROPS_PANEL_COLLAPSED_KEY = 'pcbStudio:propertiesPanelCollapsed';
+
 function PcbStudioPage({ onBackToSchematic }) {
     const [doc, setDoc] = useState(() => emptyPcbDoc());
     const [tool, setTool] = useState('select');
@@ -276,6 +282,42 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [drag, setDrag] = useState(null);
     const [exportBusy, setExportBusy] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    /** Anchor for fixed-position export menu (escapes .pcb-topbar overflow clipping). */
+    const exportMenuAnchorRef = useRef(null);
+    const [exportMenuPortalPos, setExportMenuPortalPos] = useState(null);
+
+    const layoutExportMenuPortal = useCallback(() => {
+        const el = exportMenuAnchorRef.current;
+        if (!el || !exportMenuOpen) {
+            setExportMenuPortalPos(null);
+            return;
+        }
+        const r = el.getBoundingClientRect();
+        const w = Math.max(212, r.width);
+        setExportMenuPortalPos({
+            top: r.bottom + 4,
+            left: r.right - w,
+            width: w,
+        });
+    }, [exportMenuOpen]);
+
+    useLayoutEffect(() => {
+        if (!exportMenuOpen) {
+            setExportMenuPortalPos(null);
+            return;
+        }
+        layoutExportMenuPortal();
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => layoutExportMenuPortal()) : null;
+        const anchor = exportMenuAnchorRef.current;
+        if (ro && anchor) ro.observe(anchor);
+        window.addEventListener('resize', layoutExportMenuPortal);
+        window.addEventListener('scroll', layoutExportMenuPortal, true);
+        return () => {
+            ro?.disconnect();
+            window.removeEventListener('resize', layoutExportMenuPortal);
+            window.removeEventListener('scroll', layoutExportMenuPortal, true);
+        };
+    }, [exportMenuOpen, layoutExportMenuPortal]);
     const [pcbSaveFeedback, setPcbSaveFeedback] = useState(null);
     const pcbSaveFeedbackTimerRef = useRef(null);
     /** Target layer for the optional full-board GND pour (user can override). */
@@ -309,8 +351,24 @@ function PcbStudioPage({ onBackToSchematic }) {
     const [lockedLayers, setLockedLayers] = useState(new Set());
     const [footprintSearchQuery, setFootprintSearchQuery] = useState('');
     const [showNetClassesPanel, setShowNetClassesPanel] = useState(false);
+    /** Hide left properties column to maximize the board (persisted). */
+    const [pcbPropsPanelCollapsed, setPcbPropsPanelCollapsed] = useState(() => {
+        try {
+            return localStorage.getItem(PCB_PROPS_PANEL_COLLAPSED_KEY) === 'true';
+        } catch {
+            return false;
+        }
+    });
     const [boxSelectAnchor, setBoxSelectAnchor] = useState(null); // [x,y] board-mm start corner
     const [boxSelectRect, setBoxSelectRect] = useState(null); // { x1,y1,x2,y2 } board-mm
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(PCB_PROPS_PANEL_COLLAPSED_KEY, String(pcbPropsPanelCollapsed));
+        } catch {
+            /* ignore */
+        }
+    }, [pcbPropsPanelCollapsed]);
 
     const canvasRef = useRef(null);
     const canvasWrapRef = useRef(null);
@@ -743,13 +801,23 @@ function PcbStudioPage({ onBackToSchematic }) {
             return;
         }
         undoMgrRef.current.push(doc);
-        // Clear existing tracks and vias before re-routing to prevent stale connections
         const cleanDoc = { ...doc, tracks: [], vias: [] };
+        const extent = computeRoutingBoardSizeMm(cleanDoc, padCentersByNet);
+        const boardWmm = Math.max(Number(doc.meta?.boardWmm) || 80, Math.ceil(extent.boardWmm * 2) / 2);
+        const boardHmm = Math.max(Number(doc.meta?.boardHmm) || 50, Math.ceil(extent.boardHmm * 2) / 2);
         const result = autoRoute(cleanDoc, padCentersByNet, { routeLayer: activeLayer });
         const newTracks = result.tracks || [];
         const newVias = result.vias || [];
+        const routableNets = [...padCentersByNet.values()].filter((pts) => pts && pts.length >= 2).length;
+        if (newTracks.length === 0 && routableNets > 0) {
+            window.alert(
+                'Auto-route could not place any tracks. Parts may be overlapping with insufficient clearance, '
+                    + 'or try switching the active copper layer (e.g. Top copper). You can also widen the board outline under Board outline.',
+            );
+        }
         setDoc((d) => ({
             ...d,
+            meta: { ...d.meta, boardWmm, boardHmm },
             tracks: newTracks,
             vias: newVias,
         }));
@@ -1118,6 +1186,13 @@ function PcbStudioPage({ onBackToSchematic }) {
                 if (polygonDraft) { commitPolygonDraft(); return; }
                 return;
             }
+            /* Ctrl/Cmd+Shift+P — toggle properties sidebar (maximize board area) */
+            if ((e.key === 'p' || e.key === 'P') && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+                if (isInput()) return;
+                e.preventDefault();
+                setPcbPropsPanelCollapsed((v) => !v);
+                return;
+            }
             /* ── Ctrl+Z / Ctrl+Y ── */
             if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
@@ -1263,7 +1338,7 @@ function PcbStudioPage({ onBackToSchematic }) {
     }, [selected, doc, boardCursorMm, snap, handleCopy, handlePaste, handleUndo, handleRedo,
         routeDraft, polygonDraft, measureStart, measureEnd, tool, activeLayer,
         commitRouteDraft, commitPolygonDraft, insertViaAndSwitchLayer, fitViewport,
-        boxSelectAnchor]);
+        boxSelectAnchor, setPcbPropsPanelCollapsed]);
 
     /* ── Hit testing helper ── */
     const pickAtPoint = useCallback((mx, my) => {
@@ -1926,6 +2001,20 @@ function PcbStudioPage({ onBackToSchematic }) {
                 <div className="pcb-sep" />
                 <button
                     type="button"
+                    className={`pcb-topbtn${pcbPropsPanelCollapsed ? ' is-active' : ''}`}
+                    onClick={() => setPcbPropsPanelCollapsed((v) => !v)}
+                    title={
+                        pcbPropsPanelCollapsed
+                            ? 'Show properties panel (layers, footprints, rules). Shortcut: Ctrl+Shift+P'
+                            : 'Hide properties panel — maximize board. Shortcut: Ctrl+Shift+P'
+                    }
+                >
+                    {pcbPropsPanelCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+                    Panel
+                </button>
+                <div className="pcb-sep" />
+                <button
+                    type="button"
                     className="pcb-topbtn"
                     onClick={() => setShowBoardPreview(true)}
                     title="Preview board appearance"
@@ -1972,7 +2061,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                 >
                     <FileCode2 size={14} /> Gerber ZIP
                 </button>
-                <div className="pcb-export-menu">
+                <div className="pcb-export-menu" ref={exportMenuAnchorRef}>
                     <button
                         type="button"
                         className={`pcb-topbtn${exportMenuOpen ? ' is-active' : ''}`}
@@ -1982,48 +2071,58 @@ function PcbStudioPage({ onBackToSchematic }) {
                     >
                         <Download size={14} /> More exports
                     </button>
-                    {exportMenuOpen ? (
-                        <div
-                            className="pcb-dropdown-popover"
-                            role="menu"
-                            onMouseDown={(e) => e.preventDefault()}
-                        >
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setExportMenuOpen(false);
-                                    void handleExportZip();
+                    {exportMenuOpen && exportMenuPortalPos
+                        ? createPortal(
+                            <div
+                                className="pcb-dropdown-popover pcb-dropdown-popover--portal"
+                                role="menu"
+                                style={{
+                                    position: 'fixed',
+                                    top: exportMenuPortalPos.top,
+                                    left: exportMenuPortalPos.left,
+                                    width: exportMenuPortalPos.width,
+                                    zIndex: 100020,
                                 }}
-                                disabled={exportBusy}
+                                onMouseDown={(e) => e.preventDefault()}
                             >
-                                <FileCode2 size={13} /> Gerber ZIP {exportBusy ? '…' : ''}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { setExportMenuOpen(false); handleExportKicad(); }}
-                            >
-                                <FileJson size={13} /> KiCad .kicad_pcb
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { setExportMenuOpen(false); handleExportBom(); }}
-                            >
-                                <List size={13} /> BOM (CSV)
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { setExportMenuOpen(false); handleExportPickAndPlace(); }}
-                            >
-                                <Package size={13} /> Pick &amp; Place (CSV)
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { setExportMenuOpen(false); handleExportIpcD356(); }}
-                            >
-                                <FileText size={13} /> IPC-D-356 Netlist
-                            </button>
-                        </div>
-                    ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setExportMenuOpen(false);
+                                        void handleExportZip();
+                                    }}
+                                    disabled={exportBusy}
+                                >
+                                    <FileCode2 size={13} /> Gerber ZIP {exportBusy ? '…' : ''}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setExportMenuOpen(false); handleExportKicad(); }}
+                                >
+                                    <FileJson size={13} /> KiCad .kicad_pcb
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setExportMenuOpen(false); handleExportBom(); }}
+                                >
+                                    <List size={13} /> BOM (CSV)
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setExportMenuOpen(false); handleExportPickAndPlace(); }}
+                                >
+                                    <Package size={13} /> Pick &amp; Place (CSV)
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setExportMenuOpen(false); handleExportIpcD356(); }}
+                                >
+                                    <FileText size={13} /> IPC-D-356 Netlist
+                                </button>
+                            </div>,
+                            document.body,
+                        )
+                        : null}
                 </div>
                 <div className="pcb-sep" />
                 <button
@@ -2045,7 +2144,18 @@ function PcbStudioPage({ onBackToSchematic }) {
             </div>
 
             <div className="pcb-workspace">
-                <aside className="pcb-sidebar">
+                {pcbPropsPanelCollapsed ? (
+                    <button
+                        type="button"
+                        className="pcb-sidebar-restore-tab"
+                        onClick={() => setPcbPropsPanelCollapsed(false)}
+                        title="Show properties panel"
+                        aria-label="Show properties panel"
+                    >
+                        <PanelLeftOpen size={18} strokeWidth={2} />
+                    </button>
+                ) : (
+                    <aside className="pcb-sidebar">
                     <div className="pcb-board-outline-section">
                         <h3 className="pcb-subh pcb-subh--sidebar-top">Board outline (mm)</h3>
                         <div className="pcb-board-size-row" role="group" aria-label="Board outline size in millimeters">
@@ -2058,8 +2168,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.5}
                                     value={Number(doc.meta?.boardWmm) || 80}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const w = Math.min(2000, Math.max(5, v));
                                         setDoc((d) => ({ ...d, meta: { ...d.meta, boardWmm: w } }));
                                     }}
@@ -2074,8 +2184,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.5}
                                     value={Number(doc.meta?.boardHmm) || 50}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const h = Math.min(2000, Math.max(5, v));
                                         setDoc((d) => ({ ...d, meta: { ...d.meta, boardHmm: h } }));
                                     }}
@@ -2306,8 +2416,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                             step={0.05}
                             value={doc.meta.designRules?.minCopperClearanceMm ?? 0.2}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (!Number.isFinite(v)) return;
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null) return;
                                 const c = Math.min(2, Math.max(0.05, v));
                                 setDoc((d) => ({
                                     ...d,
@@ -2328,8 +2438,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                             step={0.05}
                             value={doc.meta.designRules?.minTrackWidthMm ?? 0.15}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (!Number.isFinite(v)) return;
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null) return;
                                 const c = Math.min(2, Math.max(0.08, v));
                                 setDoc((d) => ({
                                     ...d,
@@ -2367,14 +2477,14 @@ function PcbStudioPage({ onBackToSchematic }) {
                         <select
                             value={doc.meta.gridMm ?? 0.5}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (!PCB_GRID_PRESETS_MM.includes(v)) return;
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null || !PCB_GRID_PRESETS_MM.includes(v)) return;
                                 setDoc((d) => ({ ...d, meta: { ...d.meta, gridMm: v } }));
                             }}
                         >
                             {PCB_GRID_PRESETS_MM.map((g) => (
                                 <option key={g} value={g}>
-                                    {g}
+                                    {g < 0.1 ? `${g} mm (${Math.round(g * 1000)} µm)` : `${g} mm`}
                                 </option>
                             ))}
                         </select>
@@ -2407,10 +2517,11 @@ function PcbStudioPage({ onBackToSchematic }) {
                             step={0.05}
                             value={doc.meta.defaultTrackMm}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null) return;
                                 setDoc((d) => ({
                                     ...d,
-                                    meta: { ...d.meta, defaultTrackMm: Number.isFinite(v) ? Math.min(3, Math.max(0.1, v)) : d.meta.defaultTrackMm },
+                                    meta: { ...d.meta, defaultTrackMm: Math.min(3, Math.max(0.1, v)) },
                                 }));
                             }}
                         />
@@ -2425,8 +2536,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                             step={0.05}
                             value={doc.meta.defaultViaDiamMm ?? 0.8}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (!Number.isFinite(v)) return;
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null) return;
                                 const diam = Math.min(4, Math.max(0.2, v));
                                 setDoc((d) => ({ ...d, meta: { ...d.meta, defaultViaDiamMm: diam } }));
                             }}
@@ -2441,8 +2552,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                             step={0.05}
                             value={doc.meta.defaultViaDrillMm ?? 0.4}
                             onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (!Number.isFinite(v)) return;
+                                const v = parseCommittedNumberInput(e.target.value);
+                                if (v === null) return;
                                 const drill = Math.min(3, Math.max(0.1, v));
                                 setDoc((d) => ({ ...d, meta: { ...d.meta, defaultViaDrillMm: drill } }));
                             }}
@@ -2543,8 +2654,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.01}
                                     value={inspectorTarget.p.x}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.p.id;
                                         setDoc((d) => {
                                             const g = d.meta?.gridMm ?? 0.5;
@@ -2565,8 +2676,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.01}
                                     value={inspectorTarget.p.y}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.p.id;
                                         setDoc((d) => {
                                             const g = d.meta?.gridMm ?? 0.5;
@@ -2589,8 +2700,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     max={359}
                                     value={Number(inspectorTarget.p.rot) || 0}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.p.id;
                                         let rot = Math.round(v) % 360;
                                         if (rot < 0) rot += 360;
@@ -2621,8 +2732,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.05}
                                     value={inspectorTarget.t.widthMm ?? doc.meta?.defaultTrackMm ?? 0.35}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.t.id;
                                         const w = Math.min(3, Math.max(0.08, v));
                                         setDoc((d) => ({
@@ -2661,8 +2772,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.05}
                                     value={Number(inspectorTarget.v.diamMm) || doc.meta?.defaultViaDiamMm || 0.8}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.v.id;
                                         const diamMm = Math.min(4, Math.max(0.2, v));
                                         setDoc((d) => ({
@@ -2681,8 +2792,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                                     step={0.05}
                                     value={Number(inspectorTarget.v.drillMm) || doc.meta?.defaultViaDrillMm || 0.4}
                                     onChange={(e) => {
-                                        const v = Number(e.target.value);
-                                        if (!Number.isFinite(v)) return;
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
                                         const id = inspectorTarget.v.id;
                                         const drillMm = Math.min(3, Math.max(0.1, v));
                                         setDoc((d) => ({
@@ -2747,7 +2858,8 @@ function PcbStudioPage({ onBackToSchematic }) {
                     >
                         <Upload size={12} /> Import footprint
                     </button>
-                </aside>
+                    </aside>
+                )}
 
                 <div className="pcb-stage">
                     <div
@@ -2769,7 +2881,7 @@ function PcbStudioPage({ onBackToSchematic }) {
                             {tool === 'polygon' && ' · Click=add vertex · Dbl-click/Enter=close · Esc=cancel'}
                             {tool === 'select' && ' · Click=select · Empty-drag / Alt-drag=box · Shift=add to selection · Drag selection=move · R=rotate · D=dupe · Del=delete'}
                             {tool === 'boxselect' && ' · Drag rectangle over anything to select · Shift=add · Click=point pick · Then S + drag to move'}
-                            {' · 1-8=layer · S/B/T/P/M/G=tool · F=fit'}
+                            {' · 1-8=layer · S/B/T/P/M/G=tool · F=fit · Ctrl+Shift+P=panel'}
                         </p>
                     </div>
 

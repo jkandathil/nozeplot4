@@ -78,6 +78,14 @@ export function stripStepSuffix(name) {
     return String(name).replace(/\s+@.+$/, '');
 }
 
+/** SI base unit for plot formatting from SPICE-style trace names (`I(...)` → A, `V(...)` → V). */
+export function plotQuantityUnitFromSignalName(name) {
+    const base = stripStepSuffix(name).trim();
+    if (/^I\s*\(/i.test(base)) return 'A';
+    if (/^V\s*\(/i.test(base)) return 'V';
+    return 'V';
+}
+
 /** If `name` is `V(node)` or `onoise V(node)`, return `node` (after optional step suffix). */
 export function voltageProbeNetFromSignalName(name) {
     const base = stripStepSuffix(name);

@@ -65,4 +65,38 @@ R1 1 0 1k
     assert.equal(r2.padNets['2'], '0');
 }
 
+// Off-grid inductor pins (±38 px from centre): grid-snapped wire endpoints may be
+// within a few pixels of the pin without exact coord equality — must still connect.
+{
+    const d = emptyDoc();
+    const Lc = addComponent(d, 'L', 100, 100, 0);
+    const pr = componentPins(Lc).find((p) => p.id === 'n2');
+    addWirePath(d, [[pr.x + 3, pr.y], [260, pr.y]]);
+    const nets = resolveNets(d);
+    assert.ok(nets.pinNode(Lc, 'n2') != null);
+    const floatingN2 = nets.floatingPins.some((fp) => fp.comp === Lc && fp.pinId === 'n2');
+    assert.equal(floatingN2, false, 'nearby wire vertex connects off-grid L pin');
+}
+
+// Pin on the span of a long Manhattan segment but far from every grid vertex.
+{
+    const d = emptyDoc();
+    const Lc = addComponent(d, 'L', 200, 100, 0);
+    addWirePath(d, [[0, 100], [400, 100]]);
+    const nets = resolveNets(d);
+    assert.ok(nets.pinNode(Lc, 'n2') != null, 'pin on segment span maps to a net');
+    const floatingN2 = nets.floatingPins.some((fp) => fp.comp === Lc && fp.pinId === 'n2');
+    assert.equal(floatingN2, false, 'segment-distance tolerance joins pin mid-span');
+}
+
+// Float wire coords (canvas world) must still resolve like integer grid paths.
+{
+    const d = emptyDoc();
+    const Lc = addComponent(d, 'L', 200, 100, 0);
+    addWirePath(d, [[0.2, 99.7], [400.4, 100.1]]);
+    const nets = resolveNets(d);
+    const floatingN2 = nets.floatingPins.some((fp) => fp.comp === Lc && fp.pinId === 'n2');
+    assert.equal(floatingN2, false, 'rounded float wire geometry connects pins');
+}
+
 console.log('✓ net-resolution authority (hand-built vs import) OK');

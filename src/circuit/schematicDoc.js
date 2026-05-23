@@ -410,7 +410,9 @@ export function cleanupWireGeometry(doc) {
     const next = [];
     for (const w of doc.wires) {
         const before = (w.points || []).length;
-        const raw = (w.points || []).map((p) => [p[0], p[1]]);
+        // Integer pixel coords — canvas math uses floats; rounding keeps net
+        // resolution aligned with component pins and avoids “missing” Phase 2 merges.
+        const raw = (w.points || []).map((p) => [Math.round(p[0]), Math.round(p[1])]);
         let pts = straighten(raw);
         if (pts.length >= 2) {
             rekinkManhattan(pts);
@@ -1063,6 +1065,11 @@ function resolveNetsLabelMode(doc) {
 
 /* ----------------------------- geometric ------------------------- */
 
+/** Quantise schematic coords for connectivity (canvas paths can carry floats). */
+function geomQuant(ps) {
+    return Math.round(Number(ps));
+}
+
 function resolveNetsGeometricMode(doc) {
     const vertices = [];
     function addVertex(v) { vertices.push(v); return vertices.length - 1; }
@@ -1071,7 +1078,7 @@ function resolveNetsGeometricMode(doc) {
         for (const pin of componentPins(comp)) {
             addVertex({
                 kind: 'pin',
-                x: pin.x, y: pin.y,
+                x: geomQuant(pin.x), y: geomQuant(pin.y),
                 comp, pinId: pin.id,
                 isGround: comp.elementType === 'GND',
             });
@@ -1079,14 +1086,14 @@ function resolveNetsGeometricMode(doc) {
     }
     for (const wire of doc.wires) {
         for (const [x, y] of wire.points) {
-            addVertex({ kind: 'wire', x, y, wireId: wire.id });
+            addVertex({ kind: 'wire', x: geomQuant(x), y: geomQuant(y), wireId: wire.id });
         }
     }
     for (const lab of doc.labels || []) {
         addVertex({
             kind: 'label',
-            x: lab.x,
-            y: lab.y,
+            x: geomQuant(lab.x),
+            y: geomQuant(lab.y),
             labelId: lab.id,
             name: String(lab.name),
         });
@@ -1101,7 +1108,7 @@ function resolveNetsGeometricMode(doc) {
     // they share a grid cell mid-path).
     const labelsByCoord = new Map(); // coordKey → Set<name>
     for (const lab of doc.labels || []) {
-        const k = coordKey(lab.x, lab.y);
+        const k = coordKey(geomQuant(lab.x), geomQuant(lab.y));
         const nm = String(lab.name).toLowerCase();
         if (!labelsByCoord.has(k)) labelsByCoord.set(k, new Set());
         labelsByCoord.get(k).add(nm);
@@ -1155,18 +1162,35 @@ function resolveNetsGeometricMode(doc) {
     // A segment passing through a pin without stopping is treated
     // as connected. Same label guard applies: skip if merging would
     // bridge two distinct net labels.
+    const GEOM_EPS = 1e-3;
     const pinCoords = vertices.filter((v) => v.kind === 'pin');
+    /** True if this pin shares (x,y) with a vertex of a wire other than `wireId`. */
+    function pinHasWireVertexOnOtherWire(pin, wireId) {
+        const k = coordKey(pin.x, pin.y);
+        for (let i = 0; i < vertices.length; i++) {
+            const v = vertices[i];
+            if (v.kind !== 'wire' || v.wireId === wireId) continue;
+            if (coordKey(v.x, v.y) === k) return true;
+        }
+        return false;
+    }
     for (const wire of doc.wires) {
         const pts = wire.points;
         for (let s = 1; s < pts.length; s++) {
-            const [x1, y1] = pts[s - 1];
-            const [x2, y2] = pts[s];
-            const horizontal = y1 === y2;
-            const vertical = x1 === x2;
+            const x1 = geomQuant(pts[s - 1][0]);
+            const y1 = geomQuant(pts[s - 1][1]);
+            const x2 = geomQuant(pts[s][0]);
+            const y2 = geomQuant(pts[s][1]);
+            const horizontal = Math.abs(y2 - y1) <= GEOM_EPS && Math.abs(x2 - x1) > GEOM_EPS;
+            const vertical = Math.abs(x2 - x1) <= GEOM_EPS && Math.abs(y2 - y1) > GEOM_EPS;
             if (!horizontal && !vertical) continue;
             for (const pin of pinCoords) {
-                const onSeg = (horizontal && pin.y === y1 && pin.x > Math.min(x1, x2) && pin.x < Math.max(x1, x2))
-                           || (vertical && pin.x === x1 && pin.y > Math.min(y1, y2) && pin.y < Math.max(y1, y2));
+                // If this pin already meets another wire at this coord (e.g. V− endpoint of
+                // the return path), do not also tap it onto this segment — avoids shorting
+                // supply to return when both lie on the same geometric row.
+                if (pinHasWireVertexOnOtherWire(pin, wire.id)) continue;
+                const onSeg = (horizontal && Math.abs(pin.y - y1) <= GEOM_EPS && pin.x > Math.min(x1, x2) && pin.x < Math.max(x1, x2))
+                           || (vertical && Math.abs(pin.x - x1) <= GEOM_EPS && pin.y > Math.min(y1, y2) && pin.y < Math.max(y1, y2));
                 if (!onSeg) continue;
                 // Find any wire vertex we could tie to.
                 let wireIdx = -1;
@@ -1180,6 +1204,114 @@ function resolveNetsGeometricMode(doc) {
                 if (coordsCompatible(kPin, kWire)) ufUnion(p, wireIdx, pinIdx);
             }
         }
+    }
+
+    // ---- Phase 4b: pin ↔ wire via vertex OR Manhattan segment proximity --------
+    // Symbol pins (e.g. inductor ±38 px) are not on the 20 px wire grid; users
+    // often draw grid-snapped wires that miss exact (x,y) equality (Phase 2) or
+    // strict T-junction math (Phase 4). A pin may sit *along* a long horizontal or
+    // vertical segment but far from both endpoints — still electrically on that net.
+    // Merge only to the *closest* attachment point; if multiple candidates tie
+    // at the minimum distance but belong to different nets, skip (ambiguous).
+    const PIN_SNAP_PX = GRID / 2;
+    const pinIndices = [];
+    const wireIndices = [];
+    for (let i = 0; i < vertices.length; i++) {
+        const k = vertices[i].kind;
+        if (k === 'pin') pinIndices.push(i);
+        else if (k === 'wire') wireIndices.push(i);
+    }
+    function distPinToManhattanSeg(px, py, x1, y1, x2, y2) {
+        px = geomQuant(px); py = geomQuant(py);
+        x1 = geomQuant(x1); y1 = geomQuant(y1);
+        x2 = geomQuant(x2); y2 = geomQuant(y2);
+        if (Math.abs(y2 - y1) <= GEOM_EPS && Math.abs(x2 - x1) > GEOM_EPS) {
+            const lo = Math.min(x1, x2);
+            const hi = Math.max(x1, x2);
+            if (px >= lo && px <= hi) return Math.abs(py - y1);
+            return Math.min(
+                Math.abs(px - x1) + Math.abs(py - y1),
+                Math.abs(px - x2) + Math.abs(py - y2),
+            );
+        }
+        if (Math.abs(x2 - x1) <= GEOM_EPS && Math.abs(y2 - y1) > GEOM_EPS) {
+            const lo = Math.min(y1, y2);
+            const hi = Math.max(y1, y2);
+            if (py >= lo && py <= hi) return Math.abs(px - x1);
+            return Math.min(
+                Math.abs(px - x1) + Math.abs(py - y1),
+                Math.abs(px - x2) + Math.abs(py - y2),
+            );
+        }
+        return Infinity;
+    }
+    function pinStrictInteriorManhattanSegment(px, py, x1, y1, x2, y2) {
+        px = geomQuant(px); py = geomQuant(py);
+        x1 = geomQuant(x1); y1 = geomQuant(y1);
+        x2 = geomQuant(x2); y2 = geomQuant(y2);
+        const horizontal = Math.abs(y2 - y1) <= GEOM_EPS && Math.abs(x2 - x1) > GEOM_EPS;
+        const vertical = Math.abs(x2 - x1) <= GEOM_EPS && Math.abs(y2 - y1) > GEOM_EPS;
+        if (horizontal) {
+            return Math.abs(py - y1) <= GEOM_EPS
+                && px > Math.min(x1, x2) && px < Math.max(x1, x2);
+        }
+        if (vertical) {
+            return Math.abs(px - x1) <= GEOM_EPS
+                && py > Math.min(y1, y2) && py < Math.max(y1, y2);
+        }
+        return false;
+    }
+    function firstWireVertexIndex(wireId) {
+        for (let i = 0; i < vertices.length; i++) {
+            const v = vertices[i];
+            if (v.kind === 'wire' && v.wireId === wireId) return i;
+        }
+        return -1;
+    }
+    for (const pi of pinIndices) {
+        const pv = vertices[pi];
+        const candidates = [];
+        for (const wi of wireIndices) {
+            const wv = vertices[wi];
+            const dx = Math.abs(pv.x - wv.x);
+            const dy = Math.abs(pv.y - wv.y);
+            if (dx > PIN_SNAP_PX || dy > PIN_SNAP_PX) continue;
+            if (dx === 0 && dy === 0) continue;
+            const d = dx + dy;
+            const kPin = coordKey(pv.x, pv.y);
+            const kWire = coordKey(wv.x, wv.y);
+            if (!coordsCompatible(kPin, kWire)) continue;
+            candidates.push({ wi, d, root: ufFind(p, wi) });
+        }
+        for (const wire of doc.wires) {
+            const rep = firstWireVertexIndex(wire.id);
+            if (rep < 0) continue;
+            const pts = wire.points;
+            for (let s = 1; s < pts.length; s++) {
+                const [x1, y1] = pts[s - 1];
+                const [x2, y2] = pts[s];
+                const dSeg = distPinToManhattanSeg(pv.x, pv.y, x1, y1, x2, y2);
+                if (dSeg > PIN_SNAP_PX) continue;
+                // Same rule as Phase 4 for collinear interior taps only — blocks V− from
+                // re-connecting to the series bus via proximity here while allowing small
+                // perpendicular misses (off-grid L pins) that are not "on" the segment.
+                if (pinStrictInteriorManhattanSegment(pv.x, pv.y, x1, y1, x2, y2)
+                    && pinHasWireVertexOnOtherWire(pv, wire.id)) {
+                    continue;
+                }
+                const kPin = coordKey(pv.x, pv.y);
+                const wv = vertices[rep];
+                const kWire = coordKey(wv.x, wv.y);
+                if (!coordsCompatible(kPin, kWire)) continue;
+                candidates.push({ wi: rep, d: dSeg, root: ufFind(p, rep) });
+            }
+        }
+        if (!candidates.length) continue;
+        const minD = Math.min(...candidates.map((c) => c.d));
+        const atMin = candidates.filter((c) => c.d === minD);
+        const roots = new Set(atMin.map((c) => c.root));
+        if (roots.size !== 1) continue;
+        ufUnion(p, pi, atMin[0].wi);
     }
 
     // ---- Phase 5: labels with the same name are the same net ---
@@ -1219,7 +1351,7 @@ function resolveNetsGeometricMode(doc) {
         coordToRoot.set(k, ufFind(p, i));
     }
     function nodeIdAt(x, y) {
-        const r = coordToRoot.get(coordKey(x, y));
+        const r = coordToRoot.get(coordKey(geomQuant(x), geomQuant(y)));
         return r != null ? rootToNode.get(r) : null;
     }
 

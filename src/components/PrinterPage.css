@@ -1,0 +1,709 @@
+/**
+ * Printer Page — modern dark control panel for the Kloehn / Cavro syringe pump.
+ * Sized to feel at home alongside Flow Lab / MEMS Studio / Thermal Studio.
+ */
+
+.pr-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background: radial-gradient(circle at 30% 0%, rgba(56, 189, 248, 0.05), transparent 60%),
+        radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.05), transparent 60%),
+        var(--bg-primary, #0b1220);
+    color: var(--text-primary, #e2e8f0);
+    overflow: hidden;
+}
+
+/* ───────── Toolbar ───────── */
+.pr-toolbar {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, rgba(148, 163, 184, 0.2));
+    background: var(--bg-secondary, #0f172a);
+    flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+.pr-tg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.pr-tg-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    font-weight: 600;
+}
+.pr-tg-body {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.pr-sep {
+    width: 1px;
+    align-self: stretch;
+    min-height: 32px;
+    background: rgba(148, 163, 184, 0.2);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+.pr-spacer { flex: 1; }
+.pr-help { color: #94a3b8; cursor: help; display: inline-flex; align-items: center; }
+
+.pr-toolbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 9px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.12s ease;
+}
+.pr-toolbtn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: #f8fafc;
+    border-color: rgba(148, 163, 184, 0.25);
+}
+.pr-toolbtn.is-active {
+    background: rgba(56, 189, 248, 0.16);
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.45);
+}
+.pr-toolbtn--primary {
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(99, 102, 241, 0.22));
+    color: #c7d2fe;
+    border-color: rgba(56, 189, 248, 0.4);
+}
+.pr-toolbtn--accent {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.22), rgba(236, 72, 153, 0.18));
+    color: #f5d0fe;
+    border-color: rgba(168, 85, 247, 0.45);
+}
+.pr-toolbtn--warn {
+    background: rgba(251, 146, 60, 0.16);
+    color: #fdba74;
+    border-color: rgba(251, 146, 60, 0.45);
+}
+.pr-toolbtn--danger {
+    background: rgba(248, 113, 113, 0.16);
+    color: #fda4af;
+    border-color: rgba(248, 113, 113, 0.55);
+}
+.pr-toolbtn--xs {
+    padding: 3px 7px;
+    font-size: 0.72rem;
+}
+.pr-toolbtn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.pr-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #c7d2fe;
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, rgba(56,189,248,0.18), rgba(168,85,247,0.18));
+    border: 1px solid rgba(168, 85, 247, 0.45);
+}
+
+.pr-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: #94a3b8;
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+.pr-status-pill[data-state='ok'] { color: #6ee7b7; border-color: rgba(110, 231, 183, 0.5); }
+.pr-status-pill[data-state='busy'] { color: #fbbf24; border-color: rgba(251, 191, 36, 0.5); }
+.pr-status-pill[data-state='idle'] { color: #94a3b8; }
+.pr-status-pill--warn { color: #fda4af; border-color: rgba(248, 113, 113, 0.5); }
+.pr-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+}
+
+.pr-select {
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.78rem;
+}
+.pr-select--block {
+    width: 100%;
+}
+.pr-inline-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.74rem;
+    color: #94a3b8;
+}
+.pr-inline-label input {
+    width: 44px;
+    background: rgba(15,23,42,0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 5px;
+    padding: 2px 5px;
+    font-size: 0.74rem;
+}
+
+/* Banners */
+.pr-banner {
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.pr-banner--warn {
+    background: rgba(251, 146, 60, 0.1);
+    color: #fdba74;
+    border-bottom: 1px solid rgba(251, 146, 60, 0.4);
+}
+
+/* ───────── Main grid ───────── */
+.pr-main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 290px 1fr 360px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+/* `min-height: 0` is required on grid children so their internal overflow-y
+   actually scrolls instead of expanding the row beyond the page height —
+   without it, long palettes push themselves down on top of the console. */
+.pr-side {
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.55);
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+    max-height: 100%;
+}
+.pr-side--right {
+    border-right: none;
+    border-left: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.pr-section {
+    background: rgba(30, 41, 59, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.pr-section-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #cbd5e1;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+.pr-section-title--row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.pr-program-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.pr-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    font-size: 0.74rem;
+}
+.pr-info-grid div {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.pr-info-grid span {
+    color: #64748b;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.pr-info-grid strong {
+    color: #f1f5f9;
+    font-weight: 600;
+}
+
+.pr-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 60px;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.76rem;
+    color: #cbd5e1;
+}
+.pr-row--col {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    grid-template-columns: none;
+}
+.pr-row input[type='number'],
+.pr-row input[type='text'] {
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 6px;
+    padding: 4px 7px;
+    font-size: 0.76rem;
+    width: 100%;
+}
+.pr-unit {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    text-align: right;
+}
+.pr-faint { color: #94a3b8; font-size: 0.72rem; }
+
+/* Precision audit panel inside Drop preview */
+.pr-precision {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(56, 189, 248, 0.05);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.7rem;
+}
+.pr-precision-title {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 4px;
+}
+.pr-precision-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+}
+.pr-precision-row strong {
+    color: #cbd5e1;
+    font-weight: 600;
+}
+.pr-precision-row--ok strong {
+    color: #6ee7b7;
+}
+
+/* Drop slider */
+.pr-slider {
+    width: 100%;
+    accent-color: #38bdf8;
+    height: 28px;
+}
+.pr-slider-ticks {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.66rem;
+    color: #64748b;
+    margin-top: -4px;
+}
+.pr-drop-num {
+    color: #7dd3fc;
+}
+.pr-jog-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+/* ───────── Center (gauge) ───────── */
+.pr-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 14px 16px 18px;
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+}
+/* Slender syringe — keep the height bounded so the rod / thumb never clip
+   behind the toolbar even on short laptop screens. Width tracks the aspect
+   ratio of the viewBox (220 × 420 ≈ 0.524). */
+.pr-gauge {
+    /* Pick the larger constraint dynamically: never wider than the column,
+       never taller than the available vertical space. */
+    max-height: min(420px, calc(100vh - 320px));
+    max-width: 220px;
+    width: auto;
+    height: auto;
+    flex-shrink: 1;
+    filter: drop-shadow(0 8px 24px rgba(56, 189, 248, 0.22))
+        drop-shadow(0 2px 6px rgba(15, 23, 42, 0.6));
+}
+
+/* Plunger assembly: animate translation when the seal position changes.
+   We tune the transition just slightly longer than the position poll
+   interval (250 ms in waitUntilReady) and use a linear timing function so
+   consecutive polls splice into one continuous-looking motion instead of
+   visibly easing in/out between updates. */
+.pr-gauge-plunger {
+    transition: transform 0.28s linear;
+    transform-box: fill-box;
+    will-change: transform;
+}
+.pr-gauge-plunger.is-running {
+    animation: pr-piston-pulse 1.05s ease-in-out infinite;
+}
+@keyframes pr-piston-pulse {
+    0%, 100% { filter: none; }
+    50% { filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.55)); }
+}
+
+/* Ink fill: animate the height / y when the seal moves. Modern browsers
+   (Chrome 78+, Safari 14+, Firefox 71+) transition SVG geometry attrs.
+   Match the plunger transition timing so the fluid level and the seal
+   travel together. */
+.pr-gauge-fill {
+    transition: y 0.28s linear, height 0.28s linear;
+}
+.pr-gauge-info {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+    max-width: 540px;
+}
+.pr-gauge-tile {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    padding: 10px 12px;
+    text-align: center;
+}
+.pr-gauge-tile-label {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 4px;
+}
+.pr-gauge-tile-value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 2px;
+}
+.pr-gauge-tile-sub {
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+
+/* ───────── Program ───────── */
+.pr-add-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.pr-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 460px;
+    overflow-y: auto;
+}
+.pr-step {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease;
+}
+.pr-step:hover {
+    border-color: rgba(56, 189, 248, 0.4);
+}
+.pr-step.is-selected {
+    border-color: rgba(56, 189, 248, 0.7);
+    background: rgba(56, 189, 248, 0.06);
+}
+.pr-step.is-disabled {
+    opacity: 0.45;
+}
+.pr-step.is-running {
+    border-color: rgba(248, 113, 113, 0.7);
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18) inset;
+}
+.pr-step--drop { border-left: 3px solid #38bdf8; }
+.pr-step--aspirate { border-left: 3px solid #6ee7b7; }
+.pr-step--dispenseAll { border-left: 3px solid #f87171; }
+.pr-step--valve { border-left: 3px solid #fbbf24; }
+.pr-step--initialize { border-left: 3px solid #a5b4fc; }
+.pr-step--wait { border-left: 3px solid #94a3b8; }
+.pr-step--speed { border-left: 3px solid #f472b6; }
+.pr-step--prime {
+    border-left: 3px solid #22d3ee;
+    background: rgba(34, 211, 238, 0.06);
+}
+.pr-step--prime .pr-step-kind { color: #67e8f9; }
+.pr-step--clean {
+    border-left: 3px solid #34d399;
+    background: rgba(52, 211, 153, 0.06);
+}
+.pr-step--clean .pr-step-kind { color: #6ee7b7; }
+.pr-step--prompt {
+    border-left: 3px solid #fbbf24;
+    background: rgba(251, 191, 36, 0.05);
+}
+.pr-step--prompt .pr-step-kind { color: #fde68a; }
+
+/* User-confirm modal shown when a clean / prompt step pauses execution. */
+.pr-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+}
+.pr-modal {
+    width: min(520px, 92%);
+    background: linear-gradient(180deg, #0f172a 0%, #0b1220 100%);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 12px;
+    padding: 22px 26px;
+    color: #e2e8f0;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.pr-modal-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #7dd3fc;
+    margin-bottom: 10px;
+    letter-spacing: 0.01em;
+}
+.pr-modal-body {
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+}
+.pr-modal-actions {
+    margin-top: 18px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.pr-textarea {
+    background: rgba(15, 23, 42, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 0.74rem;
+    width: 100%;
+    resize: vertical;
+    min-height: 56px;
+    font-family: inherit;
+}
+/* Loop primitives — bracketed look so they read as one block in the list. */
+.pr-step--loopStart,
+.pr-step--loopEnd {
+    border-left: 3px solid #c084fc;
+    background: rgba(168, 85, 247, 0.08);
+}
+.pr-step--loopStart .pr-step-kind,
+.pr-step--loopEnd .pr-step-kind {
+    color: #c084fc;
+}
+
+.pr-step-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: #e2e8f0;
+}
+.pr-step-idx {
+    background: rgba(56, 189, 248, 0.2);
+    color: #7dd3fc;
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-weight: 700;
+    font-size: 0.7rem;
+}
+.pr-step-kind {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #94a3b8;
+    letter-spacing: 0.04em;
+    min-width: 80px;
+}
+.pr-step-grow {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #cbd5e1;
+}
+.pr-icon-btn {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    color: #94a3b8;
+    border-radius: 5px;
+    padding: 2px 5px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    display: inline-flex;
+    align-items: center;
+}
+.pr-icon-btn:hover {
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #7dd3fc;
+}
+.pr-icon-btn--danger:hover {
+    border-color: rgba(248, 113, 113, 0.5);
+    color: #fda4af;
+}
+.pr-step-edit {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(148, 163, 184, 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.pr-step-edit-row {
+    display: flex;
+    gap: 6px;
+}
+
+.pr-progress {
+    margin-bottom: 4px;
+}
+.pr-progress-bar {
+    height: 6px;
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.pr-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, #a855f7);
+    transition: width 0.18s ease;
+}
+.pr-progress-text {
+    margin-top: 4px;
+    font-size: 0.72rem;
+    color: #cbd5e1;
+}
+
+/* ───────── Console ───────── */
+.pr-console {
+    flex-shrink: 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    max-height: 160px;
+    min-height: 100px;
+    z-index: 1;
+}
+.pr-console-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 10px;
+    background: rgba(15, 23, 42, 0.7);
+    font-size: 0.7rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.pr-console-body {
+    overflow-y: auto;
+    padding: 6px 10px;
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+.pr-log {
+    display: flex;
+    gap: 8px;
+}
+.pr-log-ts {
+    color: #475569;
+    flex-shrink: 0;
+}
+.pr-log--info .pr-log-text { color: #cbd5e1; }
+.pr-log--warn .pr-log-text { color: #fbbf24; }
+.pr-log--error .pr-log-text { color: #f87171; }
+
+/* Responsive */
+@media (max-width: 1100px) {
+    .pr-main {
+        grid-template-columns: 240px 1fr 320px;
+    }
+}
+@media (max-width: 900px) {
+    .pr-main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto 1fr;
+    }
+    .pr-side, .pr-side--right {
+        border: none;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        max-height: 280px;
+    }
+}

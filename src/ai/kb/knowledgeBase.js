@@ -636,6 +636,9 @@ When the user asks anything about NozePlot — features, where something lives, 
  *                      skipped. Kept low (0.6) because the primer
  *                      already handles generic app questions; retrieval
  *                      is now a *supplement*, not the primary path.
+ *   - `ragStyle`     : `'local'` (default) vs `'cloud'`. Cloud-capable
+ *                      models get instructions that favour reasoning
+ *                      and tight synthesis over dumping help text.
  *
  * Returns `{ prompt, sources, augmented }`.
  */
@@ -663,7 +666,9 @@ export function buildAugmentedSystemPrompt({
        model has a fighting chance to at least paraphrase the docs
        correctly. Tier order: experimental < basic < good < great. */
     modelTier = 'good',
+    ragStyle = 'local',
 } = {}) {
+    const isCloudStyle = ragStyle === 'cloud';
     const isTinyModel = modelTier === 'experimental';
     const effectiveK = isTinyModel ? 2 : k;
     const effectiveBudget = isTinyModel ? 900 : budgetChars;
@@ -694,13 +699,14 @@ export function buildAugmentedSystemPrompt({
             // APIs. Just answer from its own capacity.
             return { prompt: basePrompt, sources: [], augmented: false };
         }
+        const noHitsPolicy = isCloudStyle ? RAG_POLICY_NO_HITS_CLOUD : RAG_POLICY_NO_HITS;
         const prompt = [
             basePrompt,
             '',
             '— What you know about NozePlot (the app the user is in) —',
             APP_PRIMER,
             '',
-            RAG_POLICY_NO_HITS,
+            noHitsPolicy,
         ].join('\n');
         return { prompt, sources: [], augmented: true };
     }
@@ -758,6 +764,7 @@ export function buildAugmentedSystemPrompt({
         )
         .join('\n\n');
 
+    const withHitsPolicy = isCloudStyle ? RAG_POLICY_WITH_HITS_CLOUD : RAG_POLICY_WITH_HITS;
     const prompt = [
         basePrompt,
         '',
@@ -765,7 +772,7 @@ export function buildAugmentedSystemPrompt({
         APP_PRIMER,
         '',
         '— Relevant passages from the in-app Help guide —',
-        RAG_POLICY_WITH_HITS,
+        withHitsPolicy,
         '',
         contextBlock,
     ].join('\n');
@@ -806,6 +813,19 @@ const RAG_POLICY_WITH_HITS = [
     '• Keep TIGHT: 3–7 bullets or 3–6 steps total. Stop as soon as the question is answered. No filler, no apologies, no recap.',
 ].join('\n');
 
+/** Stricter synthesis brief for large cloud models: passages are evidence, not a transcript. */
+const RAG_POLICY_WITH_HITS_CLOUD = [
+    'The passages below are **fact-checked excerpts** from NozePlot\'s Help guide and references. Treat them as ground truth about the product — not as wording you should echo.',
+    'How to answer:',
+    '• **Reason first**: identify exactly what the user asked (including follow-up context). Ignore passages that do not bear on that question.',
+    '• **Synthesize**: explain in your own words. Do not copy multi-sentence stretches from the passages. Short `inline code` or **bold** UI labels from the docs are fine when precision matters.',
+    '• **Accuracy**: every concrete claim about NozePlot (menus, names, steps) must be supported by a passage or the primer. If something is unclear, say what is known and what is not — do not invent UI.',
+    '• **Enough, not more**: give every detail needed to accomplish the user\'s goal and stop. No tour of unrelated features, no recap, no "according to the documentation", no passage numbers or source titles in prose.',
+    '• If two passages overlap, merge them mentally and state the unified answer once.',
+    '',
+    'FORMAT (Markdown): one short lead sentence with the direct answer, then only the structure the question needs (`###` headings, bullets, or numbered steps). Skip sections the question does not require.',
+].join('\n');
+
 const RAG_POLICY_NO_HITS = [
     'No specific Help-guide passage strongly matched this question.',
     'If it\'s about NozePlot, answer from the primer above. If it\'s a general question, answer normally from your own knowledge.',
@@ -815,6 +835,14 @@ const RAG_POLICY_NO_HITS = [
     '• Use `### Heading` sections only when the answer naturally has 2+ groupings.',
     '• Use `- ` bullets for lists, `1.` for ordered steps, **bold** for key terms, and `inline code` for technical identifiers.',
     '• Keep it concise — depth over length.',
+].join('\n');
+
+const RAG_POLICY_NO_HITS_CLOUD = [
+    'No strong Help-guide passage matched this query.',
+    'Answer from the primer above plus careful reasoning. Stay faithful to what the primer states; do not invent screens, menu paths, or feature names.',
+    'Be only as long as the question requires — no filler, no unrelated product overview.',
+    '',
+    'FORMAT (Markdown): lead with the direct answer; add structure only when it genuinely helps.',
 ].join('\n');
 
 /**

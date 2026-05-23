@@ -16,8 +16,9 @@
  */
 
 import React, {
-    useCallback, useEffect, useMemo, useRef, useState,
+    useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
     ResponsiveContainer, Legend, ReferenceLine,
@@ -27,16 +28,19 @@ import {
     BookOpen, Copy, Plus, FileText, Activity, Monitor,
     SlidersHorizontal, LayoutGrid, Terminal, Undo, Redo,
     Save, FolderOpen, FilePlus, Download, Image as ImageIcon, FileJson, Trash2,
-    Maximize2, Minimize2, Layers, CircuitBoard,
+    Maximize2, Minimize2, Layers, CircuitBoard, HelpCircle,
 } from 'lucide-react';
 import { parseNetlist } from '../circuit/netlist.js';
-import { buildContext, solveDC, runWithStep } from '../circuit/solver.js';
+import {
+    buildContext, solveDC, solveTransferFunction, runWithStep, setElementValue,
+} from '../circuit/solver.js';
 import {
     buildMonteAcResult, runMonteAcSamples, buildMonteMetaFromRuns,
 } from '../circuit/monteCarlo.js';
 import { goalSeekAcStabilityTarget } from '../circuit/goalSeek.js';
 import {
     mergeDerivedSignals, voltageProbeNetFromSignalName, findVoltageSignalForNet,
+    plotQuantityUnitFromSignalName,
 } from '../circuit/signalMath.js';
 import { DEMOS } from '../circuit/demos.js';
 import {
@@ -149,6 +153,47 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     const [projectManagerOpen, setProjectManagerOpen] = useState(false);
     // File-menu dropdown visibility.
     const [fileMenuOpen, setFileMenuOpen] = useState(false);
+    /** Anchor + fixed coords — menu is portaled to body (escapes .cs-topbar-dense overflow). */
+    const fileMenuAnchorRef = useRef(null);
+    const [fileMenuPortalPos, setFileMenuPortalPos] = useState(null);
+
+    const layoutFileMenuPortal = useCallback(() => {
+        const el = fileMenuAnchorRef.current;
+        if (!el || !fileMenuOpen) {
+            setFileMenuPortalPos(null);
+            return;
+        }
+        const r = el.getBoundingClientRect();
+        const minW = 260;
+        const width = Math.max(minW, r.width);
+        let left = r.left;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : left + width;
+        if (left + width > vw - 8) left = Math.max(8, vw - width - 8);
+        setFileMenuPortalPos({
+            top: r.bottom + 4,
+            left,
+            width,
+        });
+    }, [fileMenuOpen]);
+
+    useLayoutEffect(() => {
+        if (!fileMenuOpen) {
+            setFileMenuPortalPos(null);
+            return;
+        }
+        layoutFileMenuPortal();
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => layoutFileMenuPortal()) : null;
+        const anchor = fileMenuAnchorRef.current;
+        if (ro && anchor) ro.observe(anchor);
+        window.addEventListener('resize', layoutFileMenuPortal);
+        window.addEventListener('scroll', layoutFileMenuPortal, true);
+        return () => {
+            ro?.disconnect();
+            window.removeEventListener('resize', layoutFileMenuPortal);
+            window.removeEventListener('scroll', layoutFileMenuPortal, true);
+        };
+    }, [fileMenuOpen, layoutFileMenuPortal]);
+
     /** Short-lived message after explicit Save (toolbar / File → Save now). */
     const [saveFeedback, setSaveFeedback] = useState(null);
     const saveFeedbackTimerRef = useRef(null);
@@ -208,7 +253,7 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
         return () => document.removeEventListener('keydown', onKey);
     }, []);
 
-    const [showNetlistDrawer, setShowNetlistDrawer] = useState(false);
+
     const [showResults, setShowResults] = useState(true);
     /** Expand the Results plot strip to use most of the centre column (schematic shrinks). */
     const [resultsPlotMaximized, setResultsPlotMaximized] = useState(false);
@@ -252,6 +297,19 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     }, []);
     const [view, setView] = useState(() => (bootProject ? 'workspace' : 'home'));
     const [analysis, setAnalysis] = useState('tran');
+    /** AC-only: which extra panel is open (Monte / noise / goal) — keeps the run strip to one line. */
+    const [acExtraPanel, setAcExtraPanel] = useState(null);
+    useEffect(() => {
+        if (analysis !== 'ac') setAcExtraPanel(null);
+    }, [analysis]);
+    useEffect(() => {
+        if (!acExtraPanel) return undefined;
+        const onKey = (e) => {
+            if (e.key === 'Escape') setAcExtraPanel(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [acExtraPanel]);
     // User-editable transient settings — when non-null, these override
     // the parsed .tran directive from the netlist at run time. Stored
     // as strings (with SI prefixes allowed) so the input fields stay
@@ -351,6 +409,55 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     const [activeCursor, setActiveCursor] = useState(null); // 'A' | 'B' | null
     const [showMeasure, setShowMeasure] = useState(true);
 
+    /** Run-settings row: scroll metrics for custom nudge buttons (native scrollbar hidden). */
+    const runStripTrackRef = useRef(null);
+    const runStripInnerRef = useRef(null);
+    const [runStripH, setRunStripH] = useState({
+        overflowing: false,
+        canPrev: false,
+        canNext: false,
+    });
+    const refreshRunStripH = useCallback(() => {
+        const track = runStripTrackRef.current;
+        if (!track) return;
+        const { scrollLeft, scrollWidth, clientWidth } = track;
+        const max = scrollWidth - clientWidth;
+        const overflowing = max > 2;
+        setRunStripH({
+            overflowing,
+            canPrev: overflowing && scrollLeft > 2,
+            canNext: overflowing && scrollLeft < max - 2,
+        });
+    }, []);
+    const nudgeRunStrip = useCallback((dir) => {
+        const track = runStripTrackRef.current;
+        if (!track) return;
+        const w = track.clientWidth;
+        track.scrollBy({ left: dir * Math.max(120, w * 0.55), behavior: 'smooth' });
+    }, []);
+
+    useLayoutEffect(() => {
+        if (view !== 'workspace') return undefined;
+        const track = runStripTrackRef.current;
+        if (!track) return undefined;
+        const inner = runStripInnerRef.current;
+        const tick = () => refreshRunStripH();
+        const onScroll = () => refreshRunStripH();
+        track.addEventListener('scroll', onScroll, { passive: true });
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(tick) : null;
+        if (ro) {
+            ro.observe(track);
+            if (inner) ro.observe(inner);
+        }
+        window.addEventListener('resize', tick);
+        requestAnimationFrame(() => requestAnimationFrame(tick));
+        return () => {
+            track.removeEventListener('scroll', onScroll);
+            if (ro) ro.disconnect();
+            window.removeEventListener('resize', tick);
+        };
+    }, [view, analysis, refreshRunStripH, doc?.components?.length, sweep.enabled, ampCoachDismissed]);
+
     // Autosave into the active project slot whenever the doc, name,
     // or run-time knobs change. We intentionally skip the empty doc
     // to avoid clobbering a good slot with a blank sheet that may
@@ -413,10 +520,10 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     }, [doc]);
     const netlistText = typeof emitResult?.text === 'string' ? emitResult.text : '';
 
-    // Sync netlist draft when drawer is shown (or doc changes).
+    // Sync netlist draft when the netlist tab is shown (or doc changes).
     useEffect(() => {
-        if (showNetlistDrawer) setNetlistDraft(netlistText);
-    }, [showNetlistDrawer, netlistText]);
+        if (drawerTab === 'netlist' && showResults) setNetlistDraft(netlistText);
+    }, [drawerTab, showResults, netlistText]);
 
     const spiceIncludeFileMap = useMemo(() => {
         const m = {};
@@ -428,7 +535,8 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
     }, [spiceLibs]);
 
     const handleQueueIncludeFromModelLib = useCallback((filename) => {
-        setShowNetlistDrawer(true);
+        setShowResults(true);
+        setDrawerTab('netlist');
         setTimeout(() => {
             setNetlistDraft((d) => {
                 const base = (typeof d === 'string' && d.trim()) ? d : netlistText;
@@ -1017,24 +1125,54 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                 const pinSignalMap = buildPinSignalMap(doc, resolvedNets);
 
                 if (analysis === 'op') {
-                    // .step doesn't really make sense for a DC op-point
-                    // "plot", so treat op as single-run regardless.
-                    const dc = solveDC(ctx);
-                    const nodeVals = [];
-                    for (let i = 1; i < parsed.nNodes; i++) {
-                        nodeVals.push({
-                            name: parsed.nodeNames[i] || `n${i}`,
-                            value: dc.x[i - 1],
+                    const tfDir = parsed.directives.find((d) => d.kind === 'tf') || null;
+                    if (stepDir) {
+                        const runs = runWithStep(ctx, stepDir, { op: true });
+                        let tfByStep = null;
+                        if (tfDir) {
+                            tfByStep = runs.map((run) => {
+                                const c2 = buildContext(parsed);
+                                if (run.stepValue != null) {
+                                    setElementValue(c2, stepDir.target, run.stepValue);
+                                }
+                                try {
+                                    return solveTransferFunction(c2, parsed, tfDir);
+                                } catch (e) {
+                                    return { ok: false, error: e?.message || String(e) };
+                                }
+                            });
+                        }
+                        const opResult = buildStepResult('op', runs, parsed, stepDir, ctx);
+                        if (tfByStep) opResult.tfByStep = tfByStep;
+                        opResult.pinSignalMap = pinSignalMap;
+                        setRunResult(opResult);
+                    } else {
+                        const dc = solveDC(ctx);
+                        const nodeVals = [];
+                        for (let i = 1; i < parsed.nNodes; i++) {
+                            nodeVals.push({
+                                name: parsed.nodeNames[i] || `n${i}`,
+                                value: dc.x[i - 1],
+                            });
+                        }
+                        let tf = null;
+                        if (tfDir) {
+                            try {
+                                tf = solveTransferFunction(ctx, parsed, tfDir);
+                            } catch (e) {
+                                tf = { ok: false, error: e?.message || String(e) };
+                            }
+                        }
+                        setRunResult({
+                            kind: 'op',
+                            nodeVals,
+                            iters: dc.iters,
+                            converged: dc.converged,
+                            signals: nodeVals.map((n) => ({ name: `V(${n.name})`, kind: 'op', value: n.value })),
+                            pinSignalMap,
+                            tf,
                         });
                     }
-                    setRunResult({
-                        kind: 'op',
-                        nodeVals,
-                        iters: dc.iters,
-                        converged: dc.converged,
-                        signals: nodeVals.map((n) => ({ name: `V(${n.name})`, kind: 'op', value: n.value })),
-                        pinSignalMap,
-                    });
                 } else if (analysis === 'tran') {
                     const parsedDir = parsed.directives.find((d) => d.kind === 'tran');
                     const userTstop = parseSiTime(tranOverride?.tstop);
@@ -1335,14 +1473,15 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
 
     return (
         <div className="cs-root" onDragOver={onRootDragOver} onDrop={onRootDrop}>
-            <div className="cs-topbar">
+            <header className="cs-workspace-chrome">
+            <div className="cs-topbar cs-topbar-dense">
                 <button className="cs-topbtn" onClick={goHome} title="Back to Circuit Studio home">
                     <Home size={14} /> Home
                 </button>
                 <div className="cs-topbar-sep" />
 
                 {/* ------------ File menu ------------ */}
-                <div className="cs-file-menu-wrap">
+                <div className="cs-file-menu-wrap" ref={fileMenuAnchorRef}>
                     <button
                         className={`cs-topbtn${fileMenuOpen ? ' is-active' : ''}`}
                         onClick={() => setFileMenuOpen((v) => !v)}
@@ -1352,99 +1491,113 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                         <FolderOpen size={14} /> File
                         <ChevronDown size={12} style={{ marginLeft: 2 }} />
                     </button>
-                    {fileMenuOpen && (
-                        <div className="cs-file-menu" onMouseDown={(e) => e.preventDefault()}>
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); loadBlank(); }}>
-                                <FilePlus size={14} /> New project
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); setProjectManagerOpen(true); }}>
-                                <FolderOpen size={14} /> Open project…
-                            </button>
-                            <div className="cs-file-menu-sep" />
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); handleRename(); }}>
-                                Rename…
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); handleSaveNow(); }}>
-                                <Save size={14} /> Save now
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); handleSaveAs(); }}>
-                                <Save size={14} /> Save as copy…
-                            </button>
-                            <div className="cs-file-menu-sep" />
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); exportProjectJson({
-                                    name: projectName,
-                                    doc,
-                                    analysis,
-                                    tranOverride,
-                                    acOverride,
-                                    sweep,
-                                    monte,
-                                    acNoise,
-                                    goalSeek,
-                                    traceMath,
-                                    spiceLibs,
-                                    selectedSignals,
-                                }); }}>
-                                <FileJson size={14} /> Export project (.noze.json)
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => { setFileMenuOpen(false); exportSpiceNetlist(netlistText, projectName); }}>
-                                <FileText size={14} /> Export SPICE netlist (.cir)
-                            </button>
-                            <button className="cs-file-menu-item"
-                                disabled={!plotResult}
-                                onClick={() => { setFileMenuOpen(false); exportResultsCsv(plotResult, selectedSignals, projectName); }}>
-                                <Download size={14} /> Export results (.csv)
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => {
-                                    setFileMenuOpen(false);
-                                    try { exportCanvasSvg(projectName); }
-                                    catch (e) { setRunError(e?.message || String(e)); }
-                                }}>
-                                <ImageIcon size={14} /> Export canvas (.svg)
-                            </button>
-                            <button className="cs-file-menu-item"
-                                onClick={() => {
-                                    setFileMenuOpen(false);
-                                    Promise.resolve(exportCanvasPng(projectName))
-                                        .catch((e) => setRunError(e?.message || String(e)));
-                                }}>
-                                <ImageIcon size={14} /> Export canvas (.png)
-                            </button>
-                            <button
-                                type="button"
-                                className="cs-file-menu-item"
-                                onClick={() => {
-                                    setFileMenuOpen(false);
-                                    handleSendToPcbLayout();
+                    {fileMenuOpen && fileMenuPortalPos
+                        ? createPortal(
+                            <div
+                                className="cs-file-menu cs-file-menu--portal"
+                                role="menu"
+                                style={{
+                                    position: 'fixed',
+                                    top: fileMenuPortalPos.top,
+                                    left: fileMenuPortalPos.left,
+                                    width: fileMenuPortalPos.width,
+                                    zIndex: 100020,
                                 }}
+                                onMouseDown={(e) => e.preventDefault()}
                             >
-                                <Layers size={14} /> Send to PCB Studio…
-                            </button>
-                            <div className="cs-file-menu-sep" />
-                            <label className="cs-file-menu-item">
-                                <Plus size={14} /> Import project…
-                                <input
-                                    type="file"
-                                    accept=".json,.noze,application/json"
-                                    style={{ display: 'none' }}
-                                    onChange={(ev) => {
-                                        const f = ev.target.files?.[0];
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); loadBlank(); }}>
+                                    <FilePlus size={14} /> New project
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); setProjectManagerOpen(true); }}>
+                                    <FolderOpen size={14} /> Open project…
+                                </button>
+                                <div className="cs-file-menu-sep" />
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); handleRename(); }}>
+                                    Rename…
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); handleSaveNow(); }}>
+                                    <Save size={14} /> Save now
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); handleSaveAs(); }}>
+                                    <Save size={14} /> Save as copy…
+                                </button>
+                                <div className="cs-file-menu-sep" />
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); exportProjectJson({
+                                        name: projectName,
+                                        doc,
+                                        analysis,
+                                        tranOverride,
+                                        acOverride,
+                                        sweep,
+                                        monte,
+                                        acNoise,
+                                        goalSeek,
+                                        traceMath,
+                                        spiceLibs,
+                                        selectedSignals,
+                                    }); }}>
+                                    <FileJson size={14} /> Export project (.noze.json)
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => { setFileMenuOpen(false); exportSpiceNetlist(netlistText, projectName); }}>
+                                    <FileText size={14} /> Export SPICE netlist (.cir)
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    disabled={!plotResult}
+                                    onClick={() => { setFileMenuOpen(false); exportResultsCsv(plotResult, selectedSignals, projectName); }}>
+                                    <Download size={14} /> Export results (.csv)
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => {
                                         setFileMenuOpen(false);
-                                        if (f) importProjectFile(f);
-                                        ev.target.value = '';
+                                        try { exportCanvasSvg(projectName); }
+                                        catch (e) { setRunError(e?.message || String(e)); }
+                                    }}>
+                                    <ImageIcon size={14} /> Export canvas (.svg)
+                                </button>
+                                <button className="cs-file-menu-item"
+                                    onClick={() => {
+                                        setFileMenuOpen(false);
+                                        Promise.resolve(exportCanvasPng(projectName))
+                                            .catch((e) => setRunError(e?.message || String(e)));
+                                    }}>
+                                    <ImageIcon size={14} /> Export canvas (.png)
+                                </button>
+                                <button
+                                    type="button"
+                                    className="cs-file-menu-item"
+                                    onClick={() => {
+                                        setFileMenuOpen(false);
+                                        handleSendToPcbLayout();
                                     }}
-                                />
-                            </label>
-                        </div>
-                    )}
+                                >
+                                    <Layers size={14} /> Send to PCB Studio…
+                                </button>
+                                <div className="cs-file-menu-sep" />
+                                <label className="cs-file-menu-item">
+                                    <Plus size={14} /> Import project…
+                                    <input
+                                        type="file"
+                                        accept=".json,.noze,application/json"
+                                        style={{ display: 'none' }}
+                                        onChange={(ev) => {
+                                            const f = ev.target.files?.[0];
+                                            setFileMenuOpen(false);
+                                            if (f) importProjectFile(f);
+                                            ev.target.value = '';
+                                        }}
+                                    />
+                                </label>
+                            </div>,
+                            document.body,
+                        )
+                        : null}
                 </div>
 
                 <div className="cs-save-toolbar-group">
@@ -1478,17 +1631,16 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                     <button
                         type="button"
                         className="cs-view-switch-btn"
-                        onClick={() => (typeof onOpenPcbLayout === 'function' ? onOpenPcbLayout() : undefined)}
-                        title="Open PCB layout (same session — selection cross-highlights)"
+                        onClick={handleSendToPcbLayout}
+                        title="Send schematic to PCB Studio — sync nets, refs, and footprints, then open the board (same session — cross-highlight preserved)"
                     >
                         <CircuitBoard size={13} /> Board
                     </button>
                 </div>
 
                 <div className="cs-topbar-sep" />
-                <div className="cs-analysis-group">
-                    <SlidersHorizontal size={14} />
-                    <span className="cs-analysis-label">Analysis</span>
+                <div className="cs-analysis-group" title="Analysis mode">
+                    <SlidersHorizontal size={14} aria-hidden />
                     {ANALYSIS_TYPES.map((t) => (
                         <button
                             key={t.id}
@@ -1529,8 +1681,13 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                 >
                     <Redo size={14} />
                 </button>
-                <button className="cs-topbtn" onClick={copyNetlist} title="Copy netlist to clipboard">
-                    <Copy size={14} /> Copy
+                <button
+                    className="cs-topbtn cs-topbtn-icon"
+                    onClick={copyNetlist}
+                    title="Copy netlist to clipboard"
+                    aria-label="Copy netlist to clipboard"
+                >
+                    <Copy size={14} />
                 </button>
                 {activeTour && (
                     <button
@@ -1543,393 +1700,509 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                 )}
             </div>
 
-            <div className="cs-workspace-scroll-chrome" role="region" aria-label="Run settings">
-            {analysis === 'tran' && (
-                <div className="cs-subbar cs-tran-bar">
-                    <span className="cs-tran-label">Transient</span>
-                    <label className="cs-tran-field">
-                        <span>Duration</span>
-                        <input
-                            type="text"
-                            value={tranOverride.tstop}
-                            onChange={(e) => setTranOverride((s) => ({ ...s, tstop: e.target.value }))}
-                            spellCheck={false}
-                            placeholder="1m"
-                        />
-                        <span className="cs-tran-unit">s</span>
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Step</span>
-                        <input
-                            type="text"
-                            value={tranOverride.tstep}
-                            onChange={(e) => setTranOverride((s) => ({ ...s, tstep: e.target.value }))}
-                            spellCheck={false}
-                            placeholder="1u"
-                        />
-                        <span className="cs-tran-unit">s</span>
-                    </label>
-                    <label className={`cs-tran-live${liveMode ? ' is-on' : ''}`}>
-                        <input
-                            type="checkbox"
-                            checked={liveMode}
-                            onChange={(e) => setLiveMode(e.target.checked)}
-                        />
-                        <Activity size={12} /> Live stream
-                    </label>
-                    <span className="cs-tran-hint">SI prefixes ok: <code>1m</code>, <code>500u</code>, <code>2n</code></span>
-                </div>
-            )}
-
-            {analysis === 'ac' && (
-                <div className="cs-subbar cs-tran-bar">
-                    <span className="cs-tran-label">AC sweep</span>
-                    <label className="cs-tran-field">
-                        <span>Scale</span>
-                        <select
-                            className="cs-sweep-target"
-                            value={acOverride.mode}
-                            onChange={(e) => setAcOverride((s) => ({ ...s, mode: e.target.value }))}
+            <div
+                className="cs-run-settings"
+                role="region"
+                aria-label="Run settings"
+            >
+                <div className={`cs-hscroll${runStripH.overflowing ? ' is-overflowing' : ''}`}>
+                    {runStripH.overflowing ? (
+                        <button
+                            type="button"
+                            className="cs-hscroll-nudge"
+                            disabled={!runStripH.canPrev}
+                            onClick={() => nudgeRunStrip(-1)}
+                            aria-label="Scroll run settings left"
+                            title="Scroll left"
                         >
-                            <option value="">(from netlist)</option>
-                            <option value="dec">dec (per decade)</option>
-                            <option value="oct">oct (per octave)</option>
-                            <option value="lin">lin (evenly spaced)</option>
-                        </select>
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Points</span>
-                        <input
-                            type="text"
-                            value={acOverride.n}
-                            onChange={(e) => setAcOverride((s) => ({ ...s, n: e.target.value }))}
-                            spellCheck={false}
-                            placeholder="20"
-                        />
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Start f</span>
-                        <input
-                            type="text"
-                            value={acOverride.fStart}
-                            onChange={(e) => setAcOverride((s) => ({ ...s, fStart: e.target.value }))}
-                            spellCheck={false}
-                            placeholder="10"
-                        />
-                        <span className="cs-tran-unit">Hz</span>
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Stop f</span>
-                        <input
-                            type="text"
-                            value={acOverride.fStop}
-                            onChange={(e) => setAcOverride((s) => ({ ...s, fStop: e.target.value }))}
-                            spellCheck={false}
-                            placeholder="1Meg"
-                        />
-                        <span className="cs-tran-unit">Hz</span>
-                    </label>
-                    <span className="cs-tran-hint">
-                        Leave fields blank to use the netlist <code>.ac</code> line (or 1 Hz–1 MHz dec 20 if none). Filled fields override for this Run. Use <code>k</code>/<code>Meg</code> for Hz. At least one <code>V</code>/<code>I</code> needs an <code>AC</code> spec — palette sine/DC/pulse now include <code>AC 1</code> by default.
-                    </span>
-                </div>
-            )}
-
-            {analysis === 'ac' && !ampCoachDismissed && (
-                <AcAmplifierCoach
-                    onDismiss={dismissAmpCoach}
-                    onLoadStabilityDemo={() => {
-                        const d = DEMOS.find((x) => x.id === 'amp-stability');
-                        if (d) loadDemo(d);
-                    }}
-                />
-            )}
-
-            {/* ---- Parametric sweep subbar (always visible) ---- */}
-            {analysis !== 'op' && (
-                <div className={`cs-subbar cs-sweep-bar${sweep.enabled ? ' is-on' : ''}`}>
-                    <label className={`cs-tran-live${sweep.enabled ? ' is-on' : ''}`}>
-                        <input
-                            type="checkbox"
-                            checked={sweep.enabled}
-                            onChange={(e) => {
-                                const on = e.target.checked;
-                                setSweep((s) => ({ ...s, enabled: on }));
-                                if (on) setMonte((m) => ({ ...m, enabled: false }));
-                            }}
-                        />
-                        <SlidersHorizontal size={12} /> Parametric sweep
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Target</span>
-                        <select
-                            className="cs-sweep-target"
-                            value={sweep.target}
-                            onChange={(e) => setSweep((s) => ({ ...s, target: e.target.value }))}
-                            disabled={!sweep.enabled}
+                            <ChevronLeft size={17} strokeWidth={2.2} />
+                        </button>
+                    ) : null}
+                    <div className="cs-hscroll-track-wrap">
+                        {runStripH.overflowing && runStripH.canPrev ? (
+                            <div className="cs-hscroll-edge cs-hscroll-edge--left" aria-hidden />
+                        ) : null}
+                        <div
+                            ref={runStripTrackRef}
+                            className="cs-hscroll-track"
+                            onScroll={refreshRunStripH}
                         >
-                            <option value="">(first R/C/L/V/I)</option>
-                            {(doc?.components || [])
-                                .filter((c) => isSweepableType(c.elementType))
-                                .map((c) => (
-                                    <option key={c.id} value={c.ref}>
-                                        {c.ref}{c.value != null ? ` = ${formatSi(c.value)}` : ''}
-                                    </option>
-                                ))}
-                        </select>
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>From</span>
-                        <input
-                            type="text"
-                            value={sweep.start}
-                            onChange={(e) => setSweep((s) => ({ ...s, start: e.target.value }))}
-                            disabled={!sweep.enabled}
-                            spellCheck={false}
-                            placeholder="100"
-                        />
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>To</span>
-                        <input
-                            type="text"
-                            value={sweep.stop}
-                            onChange={(e) => setSweep((s) => ({ ...s, stop: e.target.value }))}
-                            disabled={!sweep.enabled}
-                            spellCheck={false}
-                            placeholder="1k"
-                        />
-                    </label>
-                    <label className="cs-tran-field">
-                        <span>Step</span>
-                        <input
-                            type="text"
-                            value={sweep.step}
-                            onChange={(e) => setSweep((s) => ({ ...s, step: e.target.value }))}
-                            disabled={!sweep.enabled}
-                            spellCheck={false}
-                            placeholder="100"
-                        />
-                    </label>
-                    {sweep.enabled && (() => {
-                        const start = parseSiValue(sweep.start);
-                        const stop  = parseSiValue(sweep.stop);
-                        const step  = parseSiValue(sweep.step);
-                        const vals  = linspaceByStep(start, stop, step);
-                        if (vals.length === 0) {
-                            return <span className="cs-tran-hint cs-sweep-err">invalid range</span>;
-                        }
-                        const tooMany = vals.length > 200;
-                        return (
-                            <span className={`cs-tran-hint${tooMany ? ' cs-sweep-err' : ''}`}>
-                                {vals.length} runs{tooMany ? ' (> 200 cap)' : ''}
-                                {!tooMany && vals.length <= 6
-                                    ? `: ${vals.map((v) => formatSi(v)).join(', ')}`
-                                    : !tooMany
-                                    ? `: ${formatSi(vals[0])} … ${formatSi(vals[vals.length - 1])}`
-                                    : ''}
-                            </span>
-                        );
-                    })()}
-                    {!sweep.enabled && (
-                        <span className="cs-tran-hint">
-                            Sweep <code>R</code>/<code>C</code>/<code>L</code> value, or <code>V</code>/<code>I</code>{' '}
-                            <strong>DC bias</strong> (same as the DC field in the property editor). Example:{' '}
-                            <code>Vin</code> from <code>0</code> to <code>3.3</code> by <code>0.33</code>.
-                        </span>
-                    )}
-                </div>
-            )}
-
-            {analysis === 'ac' && (
-                <>
-                    <div className={`cs-subbar cs-monte-bar${monte.enabled ? ' is-on' : ''}`}>
-                        <label className={`cs-tran-live${monte.enabled ? ' is-on' : ''}`}>
-                            <input
-                                type="checkbox"
-                                checked={monte.enabled}
-                                onChange={(e) => {
-                                    const on = e.target.checked;
-                                    setMonte((m) => ({ ...m, enabled: on }));
-                                    if (on) {
-                                        setSweep((s) => ({ ...s, enabled: false }));
-                                        setAcNoise((n) => ({ ...n, enabled: false }));
-                                    }
-                                }}
-                            />
-                            Monte Carlo
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Runs</span>
-                            <input
-                                type="text"
-                                value={monte.runs}
-                                onChange={(e) => setMonte((m) => ({ ...m, runs: e.target.value }))}
-                                disabled={!monte.enabled}
-                                spellCheck={false}
-                                title="Number of random samples (max 200)"
-                            />
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>R/C/L ±%</span>
-                            <input
-                                type="text"
-                                value={monte.tolPercent}
-                                onChange={(e) => setMonte((m) => ({ ...m, tolPercent: e.target.value }))}
-                                disabled={!monte.enabled}
-                                spellCheck={false}
-                                title="Uniform tolerance band per sample (each R, C, L scaled independently)"
-                            />
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>PM node</span>
-                            <input
-                                type="text"
-                                className="cs-sweep-target"
-                                value={monte.pmNode}
-                                onChange={(e) => setMonte((m) => ({ ...m, pmNode: e.target.value }))}
-                                disabled={!monte.enabled}
-                                spellCheck={false}
-                                placeholder="vout"
-                            />
-                        </label>
-                        <span className="cs-tran-hint">
-                            Each run perturbs every <code>R</code>/<code>C</code>/<code>L</code> within ±%. Not compatible with sweep or <code>.step</code>. Plot = <strong>mean</strong> Bode; table lists PM per run.
-                        </span>
-                    </div>
-                    <div className={`cs-subbar cs-noise-bar${acNoise.enabled ? ' is-on' : ''}`}>
-                        <label className={`cs-tran-live${acNoise.enabled ? ' is-on' : ''}`}>
-                            <input
-                                type="checkbox"
-                                checked={acNoise.enabled}
-                                onChange={(e) => {
-                                    const on = e.target.checked;
-                                    setAcNoise((n) => ({ ...n, enabled: on }));
-                                    if (on) setMonte((m) => ({ ...m, enabled: false }));
-                                }}
-                            />
-                            Thermal noise
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Output node</span>
-                            <input
-                                type="text"
-                                className="cs-sweep-target"
-                                value={acNoise.outputNode}
-                                onChange={(e) => setAcNoise((n) => ({ ...n, outputNode: e.target.value }))}
-                                disabled={!acNoise.enabled}
-                                spellCheck={false}
-                                placeholder="vout"
-                                title="Small-signal output noise PSD at this node"
-                            />
-                        </label>
-                        <span className="cs-tran-hint">
-                            Johnson–Nyquist noise from linearised <code>R</code> only (4kT/R), 300 K, as trace <code>onoise V(node)</code> — stored as V²/Hz; magnitude plot is 10·log₁₀ (dB re 1 V²/Hz). Excludes shot/flicker. Not with Monte Carlo yet.
-                        </span>
-                    </div>
-                    <div className="cs-subbar cs-goal-bar">
-                        <span className="cs-tran-label">Goal seek</span>
-                        <label className="cs-tran-field">
-                            <span>Metric</span>
-                            <select
-                                className="cs-sweep-target"
-                                value={goalSeek.metric}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, metric: e.target.value }))}
-                                title="Stability metric to match"
+                            <div ref={runStripInnerRef} className="cs-run-strip">
+                    {analysis === 'tran' && (
+                        <>
+                            <span className="cs-tran-label">TRAN</span>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>Stop</span>
+                                <input
+                                    type="text"
+                                    value={tranOverride.tstop}
+                                    onChange={(e) => setTranOverride((s) => ({ ...s, tstop: e.target.value }))}
+                                    spellCheck={false}
+                                    placeholder="1m"
+                                />
+                                <span className="cs-tran-unit">s</span>
+                            </label>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>Step</span>
+                                <input
+                                    type="text"
+                                    value={tranOverride.tstep}
+                                    onChange={(e) => setTranOverride((s) => ({ ...s, tstep: e.target.value }))}
+                                    spellCheck={false}
+                                    placeholder="1u"
+                                />
+                                <span className="cs-tran-unit">s</span>
+                            </label>
+                            <label className={`cs-tran-live${liveMode ? ' is-on' : ''}`}>
+                                <input
+                                    type="checkbox"
+                                    checked={liveMode}
+                                    onChange={(e) => setLiveMode(e.target.checked)}
+                                />
+                                <Activity size={12} /> Live
+                            </label>
+                            <button
+                                type="button"
+                                className="cs-run-hint-icon"
+                                title="SI time prefixes: 1m, 500u, 2n, … Overrides the netlist .tran for this Run."
                             >
-                                <option value="pm">Phase margin</option>
-                                <option value="gm">Gain margin</option>
-                            </select>
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Part</span>
-                            <input
-                                type="text"
-                                className="cs-sweep-target"
-                                value={goalSeek.element}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, element: e.target.value }))}
-                                spellCheck={false}
-                                placeholder="Cf"
-                            />
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Lo</span>
-                            <input
-                                type="text"
-                                value={goalSeek.lo}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, lo: e.target.value }))}
-                                spellCheck={false}
-                                placeholder="1p"
-                            />
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Hi</span>
-                            <input
-                                type="text"
-                                value={goalSeek.hi}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, hi: e.target.value }))}
-                                spellCheck={false}
-                                placeholder="50p"
-                            />
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Target</span>
-                            <input
-                                type="text"
-                                value={goalSeek.target}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, target: e.target.value }))}
-                                spellCheck={false}
-                                title={goalSeek.metric === 'gm' ? 'Target gain margin (dB)' : 'Target phase margin (°)'}
-                                placeholder={goalSeek.metric === 'gm' ? '10' : '45'}
-                            />
-                            <span className="cs-tran-unit">{goalSeek.metric === 'gm' ? 'dB' : '°'}</span>
-                        </label>
-                        <label className="cs-tran-field">
-                            <span>Observe</span>
-                            <input
-                                type="text"
-                                className="cs-sweep-target"
-                                value={goalSeek.observeNode}
-                                onChange={(e) => setGoalSeek((g) => ({ ...g, observeNode: e.target.value }))}
-                                spellCheck={false}
-                                placeholder="vout"
-                                title="Node name inside V(...)"
-                            />
-                        </label>
-                        <button
-                            type="button"
-                            className="cs-topbtn cs-topbtn-primary"
-                            onClick={handleGoalSeek}
-                            disabled={running}
-                        >
-                            Seek
-                        </button>
-                        <button
-                            type="button"
-                            className="cs-topbtn"
-                            onClick={handleApplyGoalSeekValue}
-                            disabled={!goalSeekLast || running}
-                            title="Write the solved value to the matching schematic part (R/C/L/V/I)"
-                        >
-                            Apply
-                        </button>
-                        <button
-                            type="button"
-                            className="cs-topbtn"
-                            onClick={handleCopyGoalSeekValue}
-                            disabled={!goalSeekLast || running}
-                            title="Copy solved SI value to clipboard"
-                        >
-                            <Copy size={12} /> Copy
-                        </button>
-                        <span className="cs-tran-hint">
-                            Bisection on <code>V(observe)</code>: bracket <code>Lo</code>…<code>Hi</code> so metric−target changes sign.
-                            Click a <strong>net name</strong> on the canvas to add its <code>V(net)</code> trace.
-                        </span>
+                                <HelpCircle size={15} strokeWidth={2} aria-hidden />
+                                <span className="cs-sr-only">Transient time help</span>
+                            </button>
+                        </>
+                    )}
+
+                    {analysis === 'ac' && (
+                        <>
+                            <span className="cs-tran-label">AC</span>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>Scale</span>
+                                <select
+                                    className="cs-sweep-target cs-sweep-target--compact"
+                                    value={acOverride.mode}
+                                    onChange={(e) => setAcOverride((s) => ({ ...s, mode: e.target.value }))}
+                                >
+                                    <option value="">(netlist)</option>
+                                    <option value="dec">dec</option>
+                                    <option value="oct">oct</option>
+                                    <option value="lin">lin</option>
+                                </select>
+                            </label>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>N</span>
+                                <input
+                                    type="text"
+                                    value={acOverride.n}
+                                    onChange={(e) => setAcOverride((s) => ({ ...s, n: e.target.value }))}
+                                    spellCheck={false}
+                                    placeholder="20"
+                                />
+                            </label>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>f₁</span>
+                                <input
+                                    type="text"
+                                    value={acOverride.fStart}
+                                    onChange={(e) => setAcOverride((s) => ({ ...s, fStart: e.target.value }))}
+                                    spellCheck={false}
+                                    placeholder="10"
+                                />
+                                <span className="cs-tran-unit">Hz</span>
+                            </label>
+                            <label className="cs-tran-field cs-tran-field--compact">
+                                <span>f₂</span>
+                                <input
+                                    type="text"
+                                    value={acOverride.fStop}
+                                    onChange={(e) => setAcOverride((s) => ({ ...s, fStop: e.target.value }))}
+                                    spellCheck={false}
+                                    placeholder="1Meg"
+                                />
+                                <span className="cs-tran-unit">Hz</span>
+                            </label>
+                            <button
+                                type="button"
+                                className="cs-run-hint-icon"
+                                title="Blank = use netlist .ac (or 1 Hz–1 MHz dec 20). Overrides apply for this Run. Use k/Meg for Hz. Sources need an AC magnitude (palette defaults include AC 1)."
+                            >
+                                <HelpCircle size={15} strokeWidth={2} aria-hidden />
+                                <span className="cs-sr-only">AC sweep help</span>
+                            </button>
+
+                            {!ampCoachDismissed && (
+                                <div className="cs-run-coach-inline" role="status">
+                                    <BookOpen size={12} aria-hidden />
+                                    <span className="cs-run-coach-inline-msg">AC tips</span>
+                                    <button
+                                        type="button"
+                                        className="cs-topbtn cs-topbtn-tiny"
+                                        onClick={() => {
+                                            const d = DEMOS.find((x) => x.id === 'amp-stability');
+                                            if (d) loadDemo(d);
+                                        }}
+                                    >
+                                        Stability demo
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="cs-run-coach-dismiss"
+                                        onClick={dismissAmpCoach}
+                                        aria-label="Dismiss tips"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+                            )}
+
+                            <div className="cs-run-vsep" aria-hidden />
+
+                            <div className="cs-run-popover-wrap">
+                                <button
+                                    type="button"
+                                    className={`cs-run-panel-toggle${monte.enabled ? ' has-badge' : ''}${acExtraPanel === 'monte' ? ' is-open' : ''}`}
+                                    onClick={() => setAcExtraPanel((p) => (p === 'monte' ? null : 'monte'))}
+                                >
+                                    Monte
+                                </button>
+                                {acExtraPanel === 'monte' && (
+                                    <div className="cs-run-popover" onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Monte Carlo">
+                                        <div className={`cs-subbar cs-monte-bar${monte.enabled ? ' is-on' : ''}`}>
+                                            <label className={`cs-tran-live${monte.enabled ? ' is-on' : ''}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={monte.enabled}
+                                                    onChange={(e) => {
+                                                        const on = e.target.checked;
+                                                        setMonte((m) => ({ ...m, enabled: on }));
+                                                        if (on) {
+                                                            setSweep((s) => ({ ...s, enabled: false }));
+                                                            setAcNoise((n) => ({ ...n, enabled: false }));
+                                                        }
+                                                    }}
+                                                />
+                                                Enable
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Runs</span>
+                                                <input
+                                                    type="text"
+                                                    value={monte.runs}
+                                                    onChange={(e) => setMonte((m) => ({ ...m, runs: e.target.value }))}
+                                                    disabled={!monte.enabled}
+                                                    spellCheck={false}
+                                                    title="Number of random samples (max 200)"
+                                                />
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>±%</span>
+                                                <input
+                                                    type="text"
+                                                    value={monte.tolPercent}
+                                                    onChange={(e) => setMonte((m) => ({ ...m, tolPercent: e.target.value }))}
+                                                    disabled={!monte.enabled}
+                                                    spellCheck={false}
+                                                    title="Uniform tolerance on each R, C, L"
+                                                />
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>PM node</span>
+                                                <input
+                                                    type="text"
+                                                    className="cs-sweep-target"
+                                                    value={monte.pmNode}
+                                                    onChange={(e) => setMonte((m) => ({ ...m, pmNode: e.target.value }))}
+                                                    disabled={!monte.enabled}
+                                                    spellCheck={false}
+                                                    placeholder="vout"
+                                                />
+                                            </label>
+                                        </div>
+                                        <p className="cs-run-popover-hint">
+                                            Perturbs all R/C/L within ±%. Incompatible with parametric sweep. Plot shows mean Bode.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="cs-run-popover-wrap">
+                                <button
+                                    type="button"
+                                    className={`cs-run-panel-toggle${acNoise.enabled ? ' has-badge' : ''}${acExtraPanel === 'noise' ? ' is-open' : ''}`}
+                                    onClick={() => setAcExtraPanel((p) => (p === 'noise' ? null : 'noise'))}
+                                >
+                                    Noise
+                                </button>
+                                {acExtraPanel === 'noise' && (
+                                    <div className="cs-run-popover" onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Thermal noise">
+                                        <div className={`cs-subbar cs-noise-bar${acNoise.enabled ? ' is-on' : ''}`}>
+                                            <label className={`cs-tran-live${acNoise.enabled ? ' is-on' : ''}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={acNoise.enabled}
+                                                    onChange={(e) => {
+                                                        const on = e.target.checked;
+                                                        setAcNoise((n) => ({ ...n, enabled: on }));
+                                                        if (on) setMonte((m) => ({ ...m, enabled: false }));
+                                                    }}
+                                                />
+                                                Thermal noise
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Node</span>
+                                                <input
+                                                    type="text"
+                                                    className="cs-sweep-target"
+                                                    value={acNoise.outputNode}
+                                                    onChange={(e) => setAcNoise((n) => ({ ...n, outputNode: e.target.value }))}
+                                                    disabled={!acNoise.enabled}
+                                                    spellCheck={false}
+                                                    placeholder="vout"
+                                                    title="Output noise PSD at this node"
+                                                />
+                                            </label>
+                                        </div>
+                                        <p className="cs-run-popover-hint">
+                                            Johnson noise from linearised R (4kT/R), 300 K → trace <code>onoise V(node)</code>. Not with Monte Carlo yet.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="cs-run-popover-wrap">
+                                <button
+                                    type="button"
+                                    className={`cs-run-panel-toggle${acExtraPanel === 'goal' ? ' is-open' : ''}`}
+                                    onClick={() => setAcExtraPanel((p) => (p === 'goal' ? null : 'goal'))}
+                                >
+                                    Goal seek
+                                </button>
+                                {acExtraPanel === 'goal' && (
+                                    <div className="cs-run-popover cs-run-popover--wide" onMouseDown={(e) => e.preventDefault()} role="dialog" aria-label="Goal seek">
+                                        <div className="cs-subbar cs-goal-bar">
+                                            <label className="cs-tran-field">
+                                                <span>Metric</span>
+                                                <select
+                                                    className="cs-sweep-target"
+                                                    value={goalSeek.metric}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, metric: e.target.value }))}
+                                                    title="Stability metric"
+                                                >
+                                                    <option value="pm">Phase margin</option>
+                                                    <option value="gm">Gain margin</option>
+                                                </select>
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Part</span>
+                                                <input
+                                                    type="text"
+                                                    className="cs-sweep-target"
+                                                    value={goalSeek.element}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, element: e.target.value }))}
+                                                    spellCheck={false}
+                                                    placeholder="Cf"
+                                                />
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Lo</span>
+                                                <input
+                                                    type="text"
+                                                    value={goalSeek.lo}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, lo: e.target.value }))}
+                                                    spellCheck={false}
+                                                    placeholder="1p"
+                                                />
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Hi</span>
+                                                <input
+                                                    type="text"
+                                                    value={goalSeek.hi}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, hi: e.target.value }))}
+                                                    spellCheck={false}
+                                                    placeholder="50p"
+                                                />
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Target</span>
+                                                <input
+                                                    type="text"
+                                                    value={goalSeek.target}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, target: e.target.value }))}
+                                                    spellCheck={false}
+                                                    title={goalSeek.metric === 'gm' ? 'Target gain margin (dB)' : 'Target phase margin (°)'}
+                                                    placeholder={goalSeek.metric === 'gm' ? '10' : '45'}
+                                                />
+                                                <span className="cs-tran-unit">{goalSeek.metric === 'gm' ? 'dB' : '°'}</span>
+                                            </label>
+                                            <label className="cs-tran-field">
+                                                <span>Observe</span>
+                                                <input
+                                                    type="text"
+                                                    className="cs-sweep-target"
+                                                    value={goalSeek.observeNode}
+                                                    onChange={(e) => setGoalSeek((g) => ({ ...g, observeNode: e.target.value }))}
+                                                    spellCheck={false}
+                                                    placeholder="vout"
+                                                    title="Node inside V(...)"
+                                                />
+                                            </label>
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn cs-topbtn-primary"
+                                                onClick={handleGoalSeek}
+                                                disabled={running}
+                                            >
+                                                Seek
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn"
+                                                onClick={handleApplyGoalSeekValue}
+                                                disabled={!goalSeekLast || running}
+                                                title="Write solved value to schematic"
+                                            >
+                                                Apply
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="cs-topbtn"
+                                                onClick={handleCopyGoalSeekValue}
+                                                disabled={!goalSeekLast || running}
+                                                title="Copy solved value"
+                                            >
+                                                <Copy size={12} />
+                                            </button>
+                                        </div>
+                                        <p className="cs-run-popover-hint">
+                                            Bisection on V(observe): bracket Lo…Hi so (metric − target) changes sign. Click a net label on the canvas to probe V(net).
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                    <>
+                            {(analysis === 'tran' || analysis === 'ac' || analysis === 'op') && (
+                                <div className="cs-run-vsep" aria-hidden />
+                            )}
+                            <div className={`cs-sweep-inline${sweep.enabled ? ' is-on' : ''}`}>
+                                <label className={`cs-tran-live${sweep.enabled ? ' is-on' : ''}`}>
+                                    <input
+                                        type="checkbox"
+                                        checked={sweep.enabled}
+                                        onChange={(e) => {
+                                            const on = e.target.checked;
+                                            setSweep((s) => ({ ...s, enabled: on }));
+                                            if (on) setMonte((m) => ({ ...m, enabled: false }));
+                                        }}
+                                    />
+                                    <SlidersHorizontal size={12} /> Sweep
+                                </label>
+                                <label className="cs-tran-field cs-tran-field--compact">
+                                    <span>Target</span>
+                                    <select
+                                        className="cs-sweep-target cs-sweep-target--compact"
+                                        value={sweep.target}
+                                        onChange={(e) => setSweep((s) => ({ ...s, target: e.target.value }))}
+                                        disabled={!sweep.enabled}
+                                    >
+                                        <option value="">(auto)</option>
+                                        {(doc?.components || [])
+                                            .filter((c) => isSweepableType(c.elementType))
+                                            .map((c) => (
+                                                <option key={c.id} value={c.ref}>
+                                                    {c.ref}{c.value != null ? ` = ${formatSi(c.value)}` : ''}
+                                                </option>
+                                            ))}
+                                    </select>
+                                </label>
+                                <label className="cs-tran-field cs-tran-field--compact">
+                                    <span>From</span>
+                                    <input
+                                        type="text"
+                                        value={sweep.start}
+                                        onChange={(e) => setSweep((s) => ({ ...s, start: e.target.value }))}
+                                        disabled={!sweep.enabled}
+                                        spellCheck={false}
+                                        placeholder="100"
+                                    />
+                                </label>
+                                <label className="cs-tran-field cs-tran-field--compact">
+                                    <span>To</span>
+                                    <input
+                                        type="text"
+                                        value={sweep.stop}
+                                        onChange={(e) => setSweep((s) => ({ ...s, stop: e.target.value }))}
+                                        disabled={!sweep.enabled}
+                                        spellCheck={false}
+                                        placeholder="1k"
+                                    />
+                                </label>
+                                <label className="cs-tran-field cs-tran-field--compact">
+                                    <span>Step</span>
+                                    <input
+                                        type="text"
+                                        value={sweep.step}
+                                        onChange={(e) => setSweep((s) => ({ ...s, step: e.target.value }))}
+                                        disabled={!sweep.enabled}
+                                        spellCheck={false}
+                                        placeholder="100"
+                                    />
+                                </label>
+                                {sweep.enabled && (() => {
+                                    const start = parseSiValue(sweep.start);
+                                    const stop = parseSiValue(sweep.stop);
+                                    const step = parseSiValue(sweep.step);
+                                    const vals = linspaceByStep(start, stop, step);
+                                    if (vals.length === 0) {
+                                        return <span className="cs-sweep-summary cs-sweep-err">bad range</span>;
+                                    }
+                                    const tooMany = vals.length > 200;
+                                    return (
+                                        <span className={`cs-sweep-summary${tooMany ? ' cs-sweep-err' : ''}`}>
+                                            {vals.length}×
+                                            {!tooMany && vals.length <= 4
+                                                ? ` (${vals.map((v) => formatSi(v)).join(', ')})`
+                                                : !tooMany
+                                                    ? ` (${formatSi(vals[0])}…${formatSi(vals[vals.length - 1])})`
+                                                    : ''}
+                                        </span>
+                                    );
+                                })()}
+                                {!sweep.enabled && (
+                                    <button
+                                        type="button"
+                                        className="cs-run-hint-icon"
+                                        title="Sweep R/C/L value or V/I DC bias (same as property editor). Example: Vin from 0 to 3.3 step 0.33."
+                                    >
+                                        <HelpCircle size={15} strokeWidth={2} aria-hidden />
+                                        <span className="cs-sr-only">Parametric sweep help</span>
+                                    </button>
+                                )}
+                            </div>
+                    </>
+                            </div>
+                        </div>
+                        {runStripH.overflowing && runStripH.canNext ? (
+                            <div className="cs-hscroll-edge cs-hscroll-edge--right" aria-hidden />
+                        ) : null}
                     </div>
-                </>
-            )}
+                    {runStripH.overflowing ? (
+                        <button
+                            type="button"
+                            className="cs-hscroll-nudge"
+                            disabled={!runStripH.canNext}
+                            onClick={() => nudgeRunStrip(1)}
+                            aria-label="Scroll run settings right"
+                            title="Scroll right"
+                        >
+                            <ChevronRight size={17} strokeWidth={2.2} />
+                        </button>
+                    ) : null}
+                </div>
             </div>
+            </header>
 
             <div className={`cs-body cs-body-phase3${paletteCollapsed ? ' is-palette-collapsed' : ''}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
                 <div className={`cs-pane cs-pane-palette${paletteCollapsed ? ' is-collapsed' : ''}`}>
@@ -2117,8 +2390,14 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                             </button>
                             <button
                                 type="button"
-                                className={`cs-drawer-tab${showNetlistDrawer ? ' is-on' : ''}`}
-                                onClick={() => setShowNetlistDrawer((s) => !s)}
+                                className={`cs-drawer-tab${showResults && drawerTab === 'netlist' ? ' is-active' : ''}`}
+                                onClick={() => {
+                                    if (showResults && drawerTab === 'netlist') setShowResults(false);
+                                    else {
+                                        setShowResults(true);
+                                        setDrawerTab('netlist');
+                                    }
+                                }}
                                 title="View / edit the raw SPICE netlist"
                             >
                                 <Terminal size={12} /> Netlist source
@@ -2240,7 +2519,7 @@ function CircuitStudioPage({ onOpenPcbLayout }) {
                                 </div>
                             );
                         })()}
-                        {showNetlistDrawer && (
+                        {showResults && drawerTab === 'netlist' && (
                             <div className="cs-source-drawer">
                                 <div className="cs-source-drawer-top">
                                     <span>SPICE netlist (editable — hit Apply to re-import)</span>
@@ -2884,14 +3163,16 @@ function renderShape(s, key) {
 /** Recharts `ResponsiveContainer` needs numeric heights; scale with viewport when maximized. */
 function useResultChartHeights(expanded) {
     const [dims, setDims] = useState(() => ({
-        main: 260,
-        mag: 160,
-        ph: 130,
+        main: 320,
+        mag: 180,
+        ph: 140,
     }));
     useEffect(() => {
         if (!expanded) {
             const id = requestAnimationFrame(() => {
-                setDims({ main: 260, mag: 160, ph: 130 });
+                const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+                const main = Math.min(480, Math.max(300, Math.floor(vh * 0.32)));
+                setDims({ main, mag: 180, ph: 140 });
             });
             return () => cancelAnimationFrame(id);
         }
@@ -3041,32 +3322,137 @@ function ResultsPanel({
     };
 
     if (result.kind === 'op') {
+        const sweep = result.opSweep;
+        const multi = sweep && sweep.stepValues?.length > 1;
+        const tfList = result.tfByStep;
         return (
             <div className="cs-op-results">
                 <div className="cs-op-meta cs-op-meta-row">
                     <span>
-                        Converged in {result.iters} iteration{result.iters > 1 ? 's' : ''}.
+                        {multi
+                            ? (
+                                <>
+                                    Sweep <code className="cs-mono">{sweep.target}</code>
+                                    {' '}— {sweep.stepValues.length} points (up to{' '}
+                                    {result.iters} NR iteration{result.iters > 1 ? 's' : ''}).
+                                    {' '}
+                                    {result.converged
+                                        ? 'All converged.'
+                                        : 'Some points did not converge.'}
+                                </>
+                            )
+                            : (
+                                <>
+                                    Converged in {result.iters} iteration{result.iters > 1 ? 's' : ''}.
+                                </>
+                            )}
                     </span>
                     <button
                         type="button"
                         className="cs-topbtn"
                         onClick={onExportCsv}
-                        title="Download node voltages as CSV (node, value)"
+                        title={multi
+                            ? 'Download CSV: node voltages vs sweep column'
+                            : 'Download node voltages as CSV (node, value)'}
                     >
                         <Download size={12} /> Save CSV
                     </button>
                 </div>
-                <table className="cs-op-table">
-                    <thead><tr><th>Node</th><th>Voltage</th></tr></thead>
-                    <tbody>
-                        {result.nodeVals.map((n) => (
-                            <tr key={n.name}>
-                                <td>{n.name}</td>
-                                <td className="cs-mono">{formatSIValue(n.value, 'V')}</td>
+                {multi ? (
+                    <table className="cs-op-table cs-op-table--sweep">
+                        <thead>
+                            <tr>
+                                <th>Node</th>
+                                {sweep.stepValues.map((sv, j) => (
+                                    <th key={j} title={`${sweep.target}=${sv}`}>
+                                        {sweep.target}={formatStepValue(sv)}
+                                    </th>
+                                ))}
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {sweep.rows.map((row) => (
+                                <tr key={row.name}>
+                                    <td>{row.name}</td>
+                                    {row.values.map((v, j) => (
+                                        <td key={j} className="cs-mono">{formatSIValue(v, 'V')}</td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                ) : (
+                    <table className="cs-op-table">
+                        <thead><tr><th>Node</th><th>Voltage</th></tr></thead>
+                        <tbody>
+                            {result.nodeVals.map((n) => (
+                                <tr key={n.name}>
+                                    <td>{n.name}</td>
+                                    <td className="cs-mono">{formatSIValue(n.value, 'V')}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+                {result.tf && (
+                    <div className="cs-tf-block">
+                        <div className="cs-tf-title">.TF (small-signal @ DC)</div>
+                        {result.tf.ok ? (
+                            <table className="cs-op-table">
+                                <tbody>
+                                    <tr>
+                                        <td>d({result.tf.outLabel}) / dV({result.tf.srcName})</td>
+                                        <td className="cs-mono">
+                                            {formatSIValue(result.tf.gain, result.tf.unit === 'A/V' ? 'A/V' : 'V/V')}
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>OUT @ OP</td>
+                                        <td className="cs-mono">
+                                            {formatSIValue(
+                                                result.tf.outDc,
+                                                result.tf.unit === 'A/V' ? 'A' : 'V',
+                                            )}
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        ) : (
+                            <p className="cs-tf-err">{result.tf.error}</p>
+                        )}
+                    </div>
+                )}
+                {tfList && sweep && (
+                    <div className="cs-tf-block">
+                        <div className="cs-tf-title">.TF (small-signal @ DC) — per sweep step</div>
+                        <table className="cs-op-table">
+                            <thead>
+                                <tr>
+                                    <th>{sweep.target}</th>
+                                    <th>Gain</th>
+                                    <th>OUT @ OP</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {tfList.map((tf, i) => (
+                                    <tr key={i}>
+                                        <td className="cs-mono">{formatStepValue(sweep.stepValues[i])}</td>
+                                        <td className="cs-mono">
+                                            {tf.ok
+                                                ? formatSIValue(tf.gain, tf.unit === 'A/V' ? 'A/V' : 'V/V')
+                                                : '—'}
+                                        </td>
+                                        <td className="cs-mono">
+                                            {tf.ok
+                                                ? formatSIValue(tf.outDc, tf.unit === 'A/V' ? 'A' : 'V')
+                                                : <span className="cs-tf-err">{tf.error}</span>}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         );
     }
@@ -3106,6 +3492,20 @@ function ResultsPanel({
             for (const s of result.signals) row[s.name] = s.y[i];
             data[i] = row;
         }
+        const yUnits = new Set(
+            selectedSignals
+                .map((n) => result.signals.find((s) => s.name === n))
+                .filter(Boolean)
+                .map((s) => plotQuantityUnitFromSignalName(s.name)),
+        );
+        const yTickUnit = yUnits.size === 0 || yUnits.size > 1 ? (yUnits.size > 1 ? '' : 'V') : [...yUnits][0];
+        const yAxisLabel = yUnits.size === 0 ? 'V(node)'
+            : yUnits.size > 1 ? 'value'
+                : [...yUnits][0] === 'A' ? 'I(branch)' : 'V(node)';
+        const dcYTickFmt = yUnits.size > 1 ? (v) => formatSIValue(v, '') : (v) => formatSIValue(v, yTickUnit);
+        const dcTooltipFmt = yUnits.size > 1
+            ? (v, name) => [formatSIValue(v, plotQuantityUnitFromSignalName(name)), name]
+            : (v) => formatSIValue(v, yTickUnit);
         return (
             <div className="cs-plot-wrap">
                 <div className="cs-plot-header">
@@ -3156,11 +3556,11 @@ function ResultsPanel({
                                 label={{ value: result.xSource, position: 'insideBottom', dy: 12, fontSize: 11 }}
                             />
                             <YAxis
-                                tickFormatter={(v) => formatSIValue(v, 'V')}
-                                label={{ value: 'V(node)', angle: -90, position: 'insideLeft', fontSize: 11 }}
+                                tickFormatter={dcYTickFmt}
+                                label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fontSize: 11 }}
                             />
                             <Tooltip
-                                formatter={(v) => formatSIValue(v, 'V')}
+                                formatter={dcTooltipFmt}
                                 labelFormatter={(v) => `${result.xSource} = ${formatSIValue(v, 'V')}`}
                             />
                             <Legend />
@@ -3206,6 +3606,20 @@ function ResultsPanel({
             for (const s of result.signals) row[s.name] = s.y[i];
             data[i] = row;
         }
+        const yUnits = new Set(
+            selectedSignals
+                .map((n) => result.signals.find((s) => s.name === n))
+                .filter(Boolean)
+                .map((s) => plotQuantityUnitFromSignalName(s.name)),
+        );
+        const yTickUnit = yUnits.size === 0 || yUnits.size > 1 ? (yUnits.size > 1 ? '' : 'V') : [...yUnits][0];
+        const yAxisLabel = yUnits.size === 0 ? 'V(node)'
+            : yUnits.size > 1 ? 'value'
+                : [...yUnits][0] === 'A' ? 'I(branch)' : 'V(node)';
+        const tranYTickFmt = yUnits.size > 1 ? (v) => formatSIValue(v, '') : (v) => formatSIValue(v, yTickUnit);
+        const tranTooltipFmt = yUnits.size > 1
+            ? (v, name) => [formatSIValue(v, plotQuantityUnitFromSignalName(name)), name]
+            : (v) => formatSIValue(v, yTickUnit);
         return (
             <div className="cs-plot-wrap">
                 <div className="cs-plot-header">
@@ -3256,11 +3670,11 @@ function ResultsPanel({
                                 label={{ value: 'time', position: 'insideBottom', dy: 12, fontSize: 11 }}
                             />
                             <YAxis
-                                tickFormatter={(v) => formatSIValue(v, 'V')}
-                                label={{ value: 'V(node)', angle: -90, position: 'insideLeft', fontSize: 11 }}
+                                tickFormatter={tranYTickFmt}
+                                label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fontSize: 11 }}
                             />
                             <Tooltip
-                                formatter={(v) => formatSIValue(v, 'V')}
+                                formatter={tranTooltipFmt}
                                 labelFormatter={(v) => `t = ${formatSIValue(v, 's')}`}
                             />
                             <Legend />
@@ -3467,7 +3881,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
     const xUnit = isAC ? 'Hz' : 's';
     const xOf = (sig) => (isAC ? sig.f : sig.t);
     const yOf = (sig) => (isAC ? sig.mag : sig.y);
-    const yUnit = isAC ? '' : 'V';
+    const yUnitFor = (sig) => (isAC ? '' : plotQuantityUnitFromSignalName(sig.name));
 
     const sigs = result.signals.filter((s) => selectedSignals.includes(s.name));
 
@@ -3497,7 +3911,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{aRow ? formatSIValue(cursorA, xUnit) : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {aRow ? formatYAtX(xOf(s), yOf(s), cursorA, yUnit, isAC, s.yMode) : '—'}
+                                    {aRow ? formatYAtX(xOf(s), yOf(s), cursorA, yUnitFor(s), isAC, s.yMode) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -3506,7 +3920,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{bRow ? formatSIValue(cursorB, xUnit) : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {bRow ? formatYAtX(xOf(s), yOf(s), cursorB, yUnit, isAC, s.yMode) : '—'}
+                                    {bRow ? formatYAtX(xOf(s), yOf(s), cursorB, yUnitFor(s), isAC, s.yMode) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -3522,7 +3936,7 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                                     <td key={s.name} className="cs-mono">
                                         {isAC && s.yMode === 'noiseV2'
                                             ? formatDbDelta(Math.sqrt(Math.max(yA, 0)), Math.sqrt(Math.max(yB, 0)))
-                                            : (isAC ? formatDbDelta(yA, yB) : formatSIValue(dy, yUnit))}
+                                            : (isAC ? formatDbDelta(yA, yB) : formatSIValue(dy, yUnitFor(s)))}
                                     </td>
                                 );
                             })}
@@ -3561,12 +3975,12 @@ function MeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                         )}
                     </thead>
                     <tbody>
-                        {sigs.map((s, i) => (
+                            {sigs.map((s, i) => (
                             <tr key={s.name}>
                                 <td style={{ color: SIGNAL_COLORS[i % SIGNAL_COLORS.length] }}>{s.name}</td>
                                 {isAC
                                     ? (s.yMode === 'noiseV2' ? <NoiseAcMeasureCells /> : <AcMeasureCells sig={s} />)
-                                    : <TranMeasureCells sig={s} />}
+                                    : <TranMeasureCells sig={s} yUnit={plotQuantityUnitFromSignalName(s.name)} />}
                             </tr>
                         ))}
                         {sigs.length === 0 && (
@@ -3609,7 +4023,7 @@ function DcMeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{aRow ? formatSIValue(cursorA, 'V') : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {aRow ? formatSIValue(sampleAt(s.x, s.y, cursorA), 'V') : '—'}
+                                    {aRow ? formatSIValue(sampleAt(s.x, s.y, cursorA), plotQuantityUnitFromSignalName(s.name)) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -3618,7 +4032,7 @@ function DcMeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                             <td className="cs-mono">{bRow ? formatSIValue(cursorB, 'V') : '—'}</td>
                             {sigs.map((s) => (
                                 <td key={s.name} className="cs-mono">
-                                    {bRow ? formatSIValue(sampleAt(s.x, s.y, cursorB), 'V') : '—'}
+                                    {bRow ? formatSIValue(sampleAt(s.x, s.y, cursorB), plotQuantityUnitFromSignalName(s.name)) : '—'}
                                 </td>
                             ))}
                         </tr>
@@ -3631,9 +4045,10 @@ function DcMeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
                                 const yB = sampleAt(s.x, s.y, cursorB);
                                 const dy = yB - yA;
                                 const gain = dx ? dy / dx : null;
+                                const u = plotQuantityUnitFromSignalName(s.name);
                                 return (
-                                    <td key={s.name} className="cs-mono" title={gain != null ? `slope = ${gain.toFixed(3)} V/V` : ''}>
-                                        {formatSIValue(dy, 'V')}{gain != null ? ` (${gain.toPrecision(3)} V/V)` : ''}
+                                    <td key={s.name} className="cs-mono" title={gain != null ? `slope = ${gain.toFixed(3)} ${u}/V` : ''}>
+                                        {formatSIValue(dy, u)}{gain != null ? ` (${gain.toPrecision(3)} ${u}/V)` : ''}
                                     </td>
                                 );
                             })}
@@ -3645,7 +4060,7 @@ function DcMeasurePanel({ result, selectedSignals, cursorA, cursorB }) {
     );
 }
 
-function TranMeasureCells({ sig }) {
+function TranMeasureCells({ sig, yUnit }) {
     const ss = steadyStateEst(sig.y);
     const pp = peakToPeak(sig.y);
     const rt = riseTime(sig.t, sig.y);
@@ -3654,8 +4069,8 @@ function TranMeasureCells({ sig }) {
     const os = overshoot(sig.y);
     return (
         <>
-            <td className="cs-mono">{Number.isFinite(ss) ? formatSIValue(ss, 'V') : '—'}</td>
-            <td className="cs-mono">{Number.isFinite(pp) ? formatSIValue(pp, 'V') : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(ss) ? formatSIValue(ss, yUnit) : '—'}</td>
+            <td className="cs-mono">{Number.isFinite(pp) ? formatSIValue(pp, yUnit) : '—'}</td>
             <td className="cs-mono">
                 {Number.isFinite(rt) ? formatSIValue(rt, 's')
                     : Number.isFinite(ft) ? `↓ ${formatSIValue(ft, 's')}` : '—'}
@@ -3686,29 +4101,6 @@ function AcMeasureCells({ sig }) {
 function NoiseAcMeasureCells() {
     const dash = <td className="cs-mono">—</td>;
     return <>{dash}{dash}{dash}{dash}{dash}</>;
-}
-
-/** Short coach strip when AC analysis is selected — links to the stability demo. */
-function AcAmplifierCoach({ onDismiss, onLoadStabilityDemo }) {
-    return (
-        <div className="cs-ac-amp-coach" role="region" aria-label="Amplifier AC design tips">
-            <div className="cs-ac-amp-coach-text">
-                <strong>Amplifier design</strong>
-                {' — '}
-                Use the Bode plot (magnitude + phase) to judge bandwidth and stability. With <strong>Measure</strong> enabled,
-                Auto-measure lists peak gain, −3 dB corner, unity-gain frequency, <strong>phase margin (PM)</strong>, and{' '}
-                <strong>gain margin (GM)</strong>. For compensation trades, enable <strong>Parametric sweep</strong> on a capacitor
-                (e.g. Cf) and compare overlaid curves after each Run.
-            </div>
-            <div className="cs-ac-amp-coach-actions">
-                <button type="button" className="cs-topbtn cs-topbtn-primary" onClick={onLoadStabilityDemo}>
-                    Load stability demo
-                </button>
-                <button type="button" className="cs-topbtn" onClick={onDismiss}>Dismiss tips</button>
-            </div>
-            <button type="button" className="cs-ac-amp-coach-x" onClick={onDismiss} aria-label="Dismiss">×</button>
-        </div>
-    );
 }
 
 function formatYAtX(xArr, yArr, x, unit, isAC, yMode) {
@@ -3885,6 +4277,58 @@ function buildStepResult(kind, runs, parsed, stepDir, ctx) {
         return {
             kind: 'ac',
             f: fRef,
+            signals,
+            step: isMulti ? { target: stepDir.target, values: runs.map((r) => r.stepValue) } : null,
+        };
+    }
+
+    if (kind === 'op') {
+        for (let r = 0; r < runs.length; r++) {
+            const res = runs[r].op;
+            if (!res) throw new Error(`buildStepResult: missing DC op in run ${r}`);
+            const suffix = isMulti
+                ? ` @${stepDir.target}=${formatStepValue(runs[r].stepValue)}`
+                : '';
+            for (let i = 1; i < parsed.nNodes; i++) {
+                signals.push({
+                    name: `V(${parsed.nodeNames[i] || 'n' + i})${suffix}`,
+                    kind: 'op',
+                    value: res.x[i - 1],
+                    stepValue: runs[r].stepValue,
+                    baseNode: parsed.nodeNames[i] || `n${i}`,
+                });
+            }
+        }
+        const last = runs[runs.length - 1].op;
+        const nodeVals = [];
+        for (let i = 1; i < parsed.nNodes; i++) {
+            nodeVals.push({
+                name: parsed.nodeNames[i] || `n${i}`,
+                value: last.x[i - 1],
+            });
+        }
+        let opSweep = null;
+        if (isMulti) {
+            opSweep = {
+                target: stepDir.target,
+                stepValues: runs.map((r) => r.stepValue),
+                rows: [],
+            };
+            for (let i = 1; i < parsed.nNodes; i++) {
+                opSweep.rows.push({
+                    name: parsed.nodeNames[i] || `n${i}`,
+                    values: runs.map((r) => r.op.x[i - 1]),
+                });
+            }
+        }
+        return {
+            kind: 'op',
+            nodeVals,
+            opSweep,
+            iters: isMulti ? Math.max(...runs.map((r) => r.op.iters)) : runs[0].op.iters,
+            itersByStep: isMulti ? runs.map((r) => r.op.iters) : null,
+            converged: runs.every((r) => r.op.converged),
+            convergedByStep: isMulti ? runs.map((r) => r.op.converged) : null,
             signals,
             step: isMulti ? { target: stepDir.target, values: runs.map((r) => r.stepValue) } : null,
         };

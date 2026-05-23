@@ -15,6 +15,15 @@ dist-ssr
 .env.*
 !.env.example
 
+# Private keys (e.g. Lambda SSH .pem) — never commit
+*.pem
+
+# Lambda Cloud Mac-side env (instance IP; optional HF_TOKEN)
+lambda.env
+
+# Artifacts rsync'd from Lambda training
+lambda-out/
+
 # FeNOse weights / preprocessing — kept locally or in browser workspace only (not shipped on GitHub Pages)
 public/fenose_model/v1/
 public/fenose_model/v2/

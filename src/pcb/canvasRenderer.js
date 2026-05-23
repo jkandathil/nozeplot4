@@ -102,7 +102,8 @@ function paletteForBoardPreview(boardPreview = {}) {
   return {
     cad,
     voidFill: cad ? '#070a0f' : '#06090e',
-    gridMinSpacing: cad ? 5 : 4,
+    /* Slightly tighter than before so fine snap grids (e.g. 0.05 mm) show real lines sooner when zoomed in. */
+    gridMinSpacing: cad ? 4 : 3,
     selStroke: cad ? '#38bdf8' : '#f472b6',
     selGlow: cad ? 'rgba(56, 189, 248, 0.4)' : 'rgba(244,114,182,0.42)',
     selTrack: cad ? '#22d3ee' : '#f472b6',

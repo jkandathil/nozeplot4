@@ -29,6 +29,7 @@
  *   .dc    <src> <start> <stop> <step>
  *   .ac    {DEC|OCT|LIN} <N> <f_start> <f_stop>
  *   .tran  <tstep> <tstop> [tstart] [UIC]
+ *   .tf    <OUTVAR> <SRC>   — DC small-signal transfer (OUTVAR = V(n) | V(n1,n2) | I(Vname); SRC = V source)
  *   .step  <elementName> <start> <stop> <step>             — parameter sweep for design exploration
  *   .include "file" / .lib "file" [section]                — merged from caller `includeFiles` map
  *   .subckt NAME n1 n2 … / .ends  plus  Xref … SUBNAME      — subcircuits flattened to primitives (v1)
@@ -288,6 +289,41 @@ export function parseNetlist(text, options = {}) {
                         stop:  parseSpiceValue(toks[3]),
                         step:  parseSpiceValue(toks[4]),
                     });
+                    continue;
+                }
+                if (d === 'tf') {
+                    /* .TF OUTVAR SRCNAM — small-signal transfer about the DC op.
+                       OUTVAR: V(node), V(n1,n2), or I(Vname). SRC must be a
+                       voltage source instance name. */
+                    const outTok = (toks[1] || '').trim();
+                    const srcTok = (toks[2] || '').trim();
+                    if (!outTok || !srcTok) {
+                        errors.push(`Line ${li + 1}: .TF needs <OUTVAR> <Vsrc>, e.g. .TF V(vout) Vin`);
+                        continue;
+                    }
+                    const outCompact = outTok.replace(/\s+/g, '');
+                    const mV = /^V\s*\(\s*([^),]+)\s*(?:,\s*([^)]+))?\s*\)$/i.exec(outCompact);
+                    const mI = /^I\s*\(\s*([A-Za-z_][\w]*)\s*\)$/i.exec(outCompact);
+                    if (mV) {
+                        directives.push({
+                            kind: 'tf',
+                            outKind: 'v',
+                            nPlus: mV[1].trim(),
+                            nMinus: (mV[2] || '0').trim().replace(/^gnd$/i, '0'),
+                            srcName: srcTok,
+                            rawOut: outTok,
+                        });
+                    } else if (mI) {
+                        directives.push({
+                            kind: 'tf',
+                            outKind: 'i',
+                            probeVName: mI[1].trim(),
+                            srcName: srcTok,
+                            rawOut: outTok,
+                        });
+                    } else {
+                        errors.push(`Line ${li + 1}: .TF OUTVAR must be V(node), V(n1,n2), or I(Vname) — got "${outTok}"`);
+                    }
                     continue;
                 }
                 if (d === 'model') {

@@ -14,6 +14,28 @@ export const SPREADSHEETS_WORKSPACE_FOLDER_NAME = 'spreadsheets';
 /** Workspace folder for Monaco Code Studio (Python and other text). */
 export const CODES_WORKSPACE_FOLDER_NAME = 'Codes';
 
+/** Workspace folder for MEMS mask layout JSON (IndexedDB workspace). */
+export const MEMS_MASKS_WORKSPACE_FOLDER_NAME = 'mems_masks';
+
+/** Workspace folder for Thermal Studio designs (electrothermal + heat-equation). */
+export const THERMAL_STUDIO_WORKSPACE_FOLDER_NAME = 'Thermal Studio';
+export const THERMAL_STUDIO_FILE_SUFFIX = '.thermal.json';
+
+/** True if `data` looks like a Thermal Studio document (workspace JSON row). */
+export function isThermalStudioWorkspaceDocJson(data) {
+    if (!data || typeof data !== 'object') return false;
+    return data.schema === 'thermallab.v1' && Array.isArray(data.entities);
+}
+
+/** True if `data` looks like a MEMS mask document (workspace JSON row). */
+export function isMemsMaskWorkspaceDocJson(data) {
+    if (!data || typeof data !== 'object') return false;
+    if (!Array.isArray(data.cells)) return false;
+    if (!data.project || typeof data.project !== 'object') return false;
+    const v = Number(data.version);
+    return Number.isFinite(v) && v >= 5;
+}
+
 /** CSV-only in-app spreadsheet editor (not .xlsx). */
 export function isSpreadsheetEditableWorkspaceFile(fileName) {
     return /\.csv$/i.test(fileBasename(fileName));

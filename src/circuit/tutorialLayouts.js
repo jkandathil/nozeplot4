@@ -220,8 +220,26 @@ function bestRoutedPath(x1, y1, x2, y2, records) {
 
     /** @type {number[][][]} */
     const candidates = [];
+    // Endpoints (label / pin coordinates) must stay EXACT — BJT
+    // collector pins live at x±14, capacitor pins at ±30, inductor
+    // pins at ±38, none of which align to the 20-px grid.  Snapping
+    // those would leave a several-pixel dangle and the canvas
+    // dangling-wire validator would flag it.  Intermediate bend
+    // points (which are router-chosen, not pin-anchored) DO get
+    // snapped so the trace runs cleanly along grid lines.  A bend
+    // coordinate that already equals an endpoint coordinate stays
+    // off-grid too, because changing it would break orthogonality.
     const push = (p) => {
-        const q = collapseOrthogonalPath(p.map(([x, y]) => [snap(x), snap(y)]));
+        if (p.length < 2) return;
+        const sx = p[0][0], sy = p[0][1];
+        const ex = p[p.length - 1][0], ey = p[p.length - 1][1];
+        const fixedX = new Set([sx, ex]);
+        const fixedY = new Set([sy, ey]);
+        const out = p.map(([x, y]) => [
+            fixedX.has(x) ? Math.round(x) : snap(x),
+            fixedY.has(y) ? Math.round(y) : snap(y),
+        ]);
+        const q = collapseOrthogonalPath(out);
         if (q.length >= 2) candidates.push(q);
     };
 
@@ -324,6 +342,57 @@ function obstacleRecords(doc) {
         .filter(Boolean);
 }
 
+/** Merge labels that landed on the same pixel (same electrical node). */
+function dedupePinPoints(pts) {
+    const seen = new Map();
+    const out = [];
+    for (const p of pts) {
+        const k = `${p.x}|${p.y}`;
+        if (seen.has(k)) continue;
+        seen.set(k, true);
+        out.push(p);
+    }
+    return out;
+}
+
+/**
+ * Supply / return nets: horizontal spine + vertical stubs (clear of passives).
+ * @param {'top'|'bottom'} kind
+ */
+function addSupplyReturnRail(doc, uniq, kind) {
+    if (uniq.length < 2) return;
+    const ys = uniq.map((p) => p.y);
+    const xs = uniq.map((p) => p.x);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    let yRail;
+    if (kind === 'top') {
+        yRail = snap(minY - 52);
+        if (yRail < 24) yRail = 24;
+    } else {
+        yRail = snap(maxY + 48);
+    }
+    const x1 = snap(minX);
+    const x2 = snap(maxX);
+    if (x1 !== x2) {
+        addWirePath(doc, [
+            [x1, yRail],
+            [x2, yRail],
+        ]);
+    }
+    for (const p of uniq) {
+        const px = snap(p.x);
+        const py = snap(p.y);
+        if (py === yRail) continue;
+        addWirePath(doc, [
+            [px, py],
+            [px, yRail],
+        ]);
+    }
+}
+
 function rebuildCosmeticWiresFromLabels(doc) {
     clearCosmeticWires(doc);
     const records = obstacleRecords(doc);
@@ -337,10 +406,21 @@ function rebuildCosmeticWiresFromLabels(doc) {
         byNet.get(k).push({ x: lab.x, y: lab.y });
     }
 
-    for (const [, pts] of byNet) {
+    for (const [netKey, pts] of byNet) {
         if (pts.length < 2) continue;
         const uniq = dedupePinPoints(pts);
         if (uniq.length < 2) continue;
+
+        const nk = netKey.toLowerCase();
+        if (nk === 'vcc') {
+            addSupplyReturnRail(doc, uniq, 'top');
+            continue;
+        }
+        if (nk === 'gnd' || nk === '0') {
+            addSupplyReturnRail(doc, uniq, 'bottom');
+            continue;
+        }
+
         const edges = mstEdges(uniq);
         for (const [ia, ib] of edges) {
             const a = uniq[ia];
@@ -349,19 +429,6 @@ function rebuildCosmeticWiresFromLabels(doc) {
             addWirePath(doc, path);
         }
     }
-}
-
-/** Merge labels that landed on the same pixel (same electrical node). */
-function dedupePinPoints(pts) {
-    const seen = new Map();
-    const out = [];
-    for (const p of pts) {
-        const k = `${p.x}|${p.y}`;
-        if (seen.has(k)) continue;
-        seen.set(k, true);
-        out.push(p);
-    }
-    return out;
 }
 
 /**

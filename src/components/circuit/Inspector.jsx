@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { RotateCw, Trash2 } from 'lucide-react';
+import { parseCommittedNumberInput } from '../../mems/memsInputParse.js';
 import { SYMBOLS } from '../../circuit/symbols.js';
 import { SymbolGlyph } from './SymbolGlyph.jsx';
 import { getPart, modelChoicesForElement } from '../../circuit/library.js';
@@ -308,18 +309,30 @@ function SourceEditor({ kind, sources, onChange }) {
                     {s.kind === 'dc' && (
                         <Field label={`Level (${suffix})`}>
                             <input type="number" step="any" value={s.v}
-                                onChange={(e) => patchSpec('dc', { v: +e.target.value })} />
+                                onChange={(e) => {
+                                    const v = parseCommittedNumberInput(e.target.value);
+                                    if (v === null) return;
+                                    patchSpec('dc', { v });
+                                }} />
                         </Field>
                     )}
                     {s.kind === 'ac' && (
                         <>
                             <Field label={`Magnitude (${suffix})`}>
                                 <input type="number" step="any" value={s.mag}
-                                    onChange={(e) => patchSpec('ac', { mag: +e.target.value })} />
+                                    onChange={(e) => {
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
+                                        patchSpec('ac', { mag: v });
+                                    }} />
                             </Field>
                             <Field label="Phase (°)">
                                 <input type="number" step="any" value={s.phase ?? 0}
-                                    onChange={(e) => patchSpec('ac', { phase: +e.target.value })} />
+                                    onChange={(e) => {
+                                        const v = parseCommittedNumberInput(e.target.value);
+                                        if (v === null) return;
+                                        patchSpec('ac', { phase: v });
+                                    }} />
                             </Field>
                         </>
                     )}
@@ -328,7 +341,11 @@ function SourceEditor({ kind, sources, onChange }) {
                             {sinFields(suffix).map(([key, label, step]) => (
                                 <Field key={key} label={label}>
                                     <input type="number" step={step} value={s[key] ?? 0}
-                                        onChange={(e) => patchSpec('sin', { [key]: +e.target.value })} />
+                                        onChange={(e) => {
+                                            const v = parseCommittedNumberInput(e.target.value);
+                                            if (v === null) return;
+                                            patchSpec('sin', { [key]: v });
+                                        }} />
                                 </Field>
                             ))}
                         </div>
@@ -338,7 +355,11 @@ function SourceEditor({ kind, sources, onChange }) {
                             {pulseFields(suffix).map(([key, label, step]) => (
                                 <Field key={key} label={label}>
                                     <input type="number" step={step} value={s[key] ?? 0}
-                                        onChange={(e) => patchSpec('pulse', { [key]: +e.target.value })} />
+                                        onChange={(e) => {
+                                            const v = parseCommittedNumberInput(e.target.value);
+                                            if (v === null) return;
+                                            patchSpec('pulse', { [key]: v });
+                                        }} />
                                 </Field>
                             ))}
                         </div>

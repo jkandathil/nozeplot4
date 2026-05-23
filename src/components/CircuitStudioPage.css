@@ -273,6 +273,337 @@
 }
 
 /* -------------------- Workspace view -------------------- */
+/* ---- Workspace chrome: two rows (toolbar + run settings), max CAD area ---- */
+.cs-workspace-chrome {
+    flex: 0 0 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    background: rgba(10, 16, 28, 0.55);
+}
+
+.cs-workspace-chrome > .cs-topbar {
+    border-bottom: none;
+    background: transparent;
+}
+
+.cs-topbar-dense .cs-project-name {
+    max-width: min(140px, 28vw);
+}
+
+.cs-topbar-dense {
+    flex-wrap: nowrap;
+    gap: 6px;
+    row-gap: 4px;
+    padding: 5px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.cs-topbar-dense::-webkit-scrollbar {
+    display: none;
+    height: 0;
+}
+
+.cs-topbtn-icon {
+    padding: 6px 9px;
+    min-width: 34px;
+    justify-content: center;
+}
+
+.cs-run-settings {
+    padding: 4px 10px 6px;
+    background: rgba(15, 23, 42, 0.35);
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+    min-width: 0;
+}
+
+/* Horizontal scroll: hidden native bar; glass nudge buttons + edge fades */
+.cs-hscroll {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 0;
+}
+.cs-hscroll.is-overflowing {
+    gap: 6px;
+}
+.cs-hscroll-track-wrap {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    display: block;
+}
+.cs-hscroll-track {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    min-width: 0;
+    min-height: 34px;
+    /* iOS / WebKit */
+    -webkit-overflow-scrolling: touch;
+}
+.cs-hscroll-track::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+.cs-hscroll-nudge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    margin: auto 0;
+    padding: 0;
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    border-radius: 10px;
+    background: linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.75));
+    color: #7dd3fc;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+    transition: border-color 120ms ease, color 120ms ease, opacity 120ms ease, transform 100ms ease;
+}
+.cs-hscroll-nudge:hover:not(:disabled) {
+    border-color: rgba(56, 189, 248, 0.6);
+    color: #e0f2fe;
+    transform: scale(1.04);
+}
+.cs-hscroll-nudge:disabled {
+    opacity: 0.22;
+    cursor: default;
+    border-color: rgba(148, 163, 184, 0.12);
+    color: #64748b;
+    box-shadow: none;
+}
+.cs-hscroll-edge {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 32px;
+    z-index: 2;
+    pointer-events: none;
+}
+.cs-hscroll-edge--left {
+    left: 0;
+    background: linear-gradient(90deg, rgba(12, 18, 32, 0.97) 0%, rgba(12, 18, 32, 0) 100%);
+}
+.cs-hscroll-edge--right {
+    right: 0;
+    background: linear-gradient(270deg, rgba(12, 18, 32, 0.97) 0%, rgba(12, 18, 32, 0) 100%);
+}
+
+html[data-theme="light"] .cs-hscroll-nudge {
+    background: linear-gradient(160deg, #ffffff, #f1f5f9);
+    border-color: #bae6fd;
+    color: #0284c7;
+    box-shadow: 0 1px 8px rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .cs-hscroll-nudge:disabled {
+    color: #94a3b8;
+    border-color: #e2e8f0;
+}
+html[data-theme="light"] .cs-hscroll-edge--left {
+    background: linear-gradient(90deg, rgba(248, 250, 252, 0.98) 0%, rgba(248, 250, 252, 0) 100%);
+}
+html[data-theme="light"] .cs-hscroll-edge--right {
+    background: linear-gradient(270deg, rgba(248, 250, 252, 0.98) 0%, rgba(248, 250, 252, 0) 100%);
+}
+
+.cs-run-strip {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    width: max-content;
+    min-width: 100%;
+}
+
+.cs-run-vsep {
+    width: 1px;
+    height: 22px;
+    background: rgba(148, 163, 184, 0.22);
+    flex-shrink: 0;
+}
+
+.cs-run-hint-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    cursor: help;
+    flex-shrink: 0;
+}
+.cs-run-hint-icon:hover {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+}
+
+.cs-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.cs-tran-field--compact > span:first-child {
+    font-size: 0.72rem;
+}
+.cs-tran-field--compact > input {
+    width: 58px;
+    padding: 2px 5px;
+    font-size: 0.78rem;
+}
+
+.cs-sweep-target--compact {
+    min-width: 88px !important;
+    max-width: 140px;
+    font-size: 0.78rem;
+    padding: 2px 5px;
+}
+
+.cs-sweep-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+}
+.cs-sweep-inline.is-on {
+    padding-right: 4px;
+}
+
+.cs-sweep-summary {
+    font-size: 0.72rem;
+    color: #64748b;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.cs-run-coach-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    color: #bae6fd;
+    font-size: 0.74rem;
+    flex-shrink: 0;
+}
+.cs-run-coach-inline-msg {
+    font-weight: 600;
+    color: #e0f2fe;
+}
+.cs-topbtn-tiny {
+    padding: 3px 8px !important;
+    font-size: 0.72rem !important;
+}
+.cs-run-coach-dismiss {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 4px;
+    border-radius: 4px;
+}
+.cs-run-coach-dismiss:hover {
+    color: #f1f5f9;
+    background: rgba(148, 163, 184, 0.15);
+}
+
+.cs-run-popover-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.cs-run-panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(15, 23, 42, 0.5);
+    color: #cbd5e1;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+.cs-run-panel-toggle:hover {
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #e2e8f0;
+}
+.cs-run-panel-toggle.is-open {
+    border-color: rgba(56, 189, 248, 0.65);
+    background: rgba(56, 189, 248, 0.12);
+    color: #7dd3fc;
+}
+.cs-run-panel-toggle.has-badge::after {
+    content: '';
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+    margin-left: 2px;
+}
+
+.cs-run-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 80;
+    min-width: 280px;
+    max-width: min(96vw, 420px);
+    padding: 10px 12px;
+    background: var(--cs-panel, #0f172a);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+.cs-run-popover--wide {
+    min-width: min(96vw, 520px);
+    max-width: min(96vw, 640px);
+}
+.cs-run-popover .cs-subbar {
+    flex-wrap: wrap;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    gap: 10px;
+}
+.cs-run-popover-hint {
+    margin: 8px 0 0;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.45;
+}
+.cs-run-popover-hint code {
+    background: rgba(148, 163, 184, 0.12);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .cs-topbar {
     display: flex;
     align-items: center;
@@ -369,16 +700,12 @@
 
 .cs-topbar-spacer { flex: 1 1 auto; }
 
-/* Scrollable strip under the top bar so AC coach + sweep + Monte + goal seek
-   do not consume the whole viewport — schematic / results stay visible. */
+/* Legacy class name: scroll region replaced by fixed two-row chrome (.cs-workspace-chrome). */
 .cs-workspace-scroll-chrome {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
-    max-height: min(42vh, 520px);
-    overflow-x: hidden;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-gutter: stable;
+    max-height: none;
+    overflow: visible;
     border-bottom: 1px solid rgba(148, 163, 184, 0.12);
 }
 
@@ -948,6 +1275,38 @@ html[data-theme="light"] .cs-studio-msg {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+}
+
+.cs-op-table--sweep {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.cs-op-table--sweep thead th {
+    white-space: nowrap;
+    font-size: 0.68rem;
+}
+
+.cs-tf-block {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.cs-tf-title {
+    color: #94a3b8;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+}
+
+.cs-tf-err {
+    color: #f87171;
+    font-size: 0.85rem;
+    margin: 0;
 }
 
 .cs-mono {
@@ -1760,7 +2119,8 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
     background: rgba(15, 23, 42, 0.7);
     display: flex;
     flex-direction: column;
-    max-height: 55%;
+    /* Taller default so plots / netlist are usable without stacking under schematic */
+    max-height: min(78vh, 82%);
     min-height: 36px;
     transition: max-height 0.2s;
 }
@@ -1863,9 +2223,9 @@ html[data-theme="light"] .cs-pane-expand-label { color: #64748b; }
 .cs-source-drawer {
     display: flex;
     flex-direction: column;
-    flex: 1 1 38%;
-    min-height: 220px;
-    max-height: 55vh;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     border-top: 1px dashed var(--cs-panel-border);
 }
 .cs-spice-lib-panel {
@@ -2988,6 +3348,14 @@ html[data-theme="light"] .cs-sweep-target {
     flex-direction: column;
     gap: 1px;
     animation: cs-prop-pop-in 90ms ease-out;
+}
+
+/* Portaled to document.body — escapes .cs-topbar-dense overflow-y:hidden + run-settings row paint order */
+.cs-file-menu--portal {
+    position: fixed;
+    top: auto;
+    left: auto;
+    margin: 0;
 }
 .cs-file-menu-item {
     display: flex;

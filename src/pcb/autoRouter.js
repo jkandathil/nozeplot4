@@ -18,6 +18,33 @@ import { newId, activeCopperLayerIds } from './pcbDoc.js';
 import { getFootprint } from './footprintLib.js';
 import { NOZE_GND_PLANE_ID } from './gndPlane.js';
 
+/**
+ * Routing grid must cover every pad center; A* returns null if the start
+ * cell is outside the grid. Placements from "Send to PCB" often sit in a
+ * tight grid that extends past the last saved board outline (mm).
+ */
+export function computeRoutingBoardSizeMm(doc, padCentersByNet, marginMm = 5) {
+  let w = Math.max(5, Number(doc.meta?.boardWmm) || 80);
+  let h = Math.max(5, Number(doc.meta?.boardHmm) || 50);
+  for (const pts of padCentersByNet.values()) {
+    for (const p of pts) {
+      const [x, y] = p;
+      if (Number.isFinite(x)) w = Math.max(w, x + marginMm);
+      if (Number.isFinite(y)) h = Math.max(h, y + marginMm);
+    }
+  }
+  for (const pl of doc.placements || []) {
+    const fp = getFootprint(pl.footprintId);
+    if (!fp?.pads) continue;
+    for (const pad of fp.pads) {
+      const [px, py] = padWorld(pl, pad);
+      w = Math.max(w, px + marginMm);
+      h = Math.max(h, py + marginMm);
+    }
+  }
+  return { boardWmm: w, boardHmm: h };
+}
+
 /* ─── Obstacle grid construction ─── */
 
 function rotLocal(x, y, deg) {
@@ -320,8 +347,9 @@ export function autoRoute(doc, padCentersByNet, options = {}) {
     routeLayer: routeLayerOpt = null,
   } = options;
 
-  const boardW = Number(doc.meta?.boardWmm) || 80;
-  const boardH = Number(doc.meta?.boardHmm) || 50;
+  const { boardWmm: rw, boardHmm: rh } = computeRoutingBoardSizeMm(doc, padCentersByNet);
+  const boardW = rw;
+  const boardH = rh;
   const clearanceMm = doc.meta?.designRules?.minCopperClearanceMm || 0.2;
   const trackWidth = doc.meta?.defaultTrackMm || 0.35;
   const trackHalfW = trackWidth / 2;
