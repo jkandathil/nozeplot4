@@ -14,6 +14,7 @@
 #    VITE_FIREBASE_PROJECT_ID
 #    VITE_FIREBASE_APP_ID
 #    Optional: VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_AUTH_PUBLIC_URL
+#    Optional: VITE_GEMINI_API_KEY (AI Agents → Gemini Flash; restrict key to your Pages URL in Google Cloud)
 #
 # 2) Firebase → Authentication → Settings → Authorized domains:
 #    add  YOUR_USERNAME.github.io
@@ -61,6 +62,7 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || '467315626009' }}
           VITE_ALLOWED_EMAIL_DOMAIN: noze.ca
           VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL || 'https://jkandathil.github.io/nozeplot4' }}
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
         run: |
           npm ci
           node scripts/checkFirebaseBuildEnv.mjs

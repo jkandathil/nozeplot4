@@ -19,18 +19,55 @@ import {
     Loader2,
     Sparkles,
     BookOpen,
+    Upload,
+    FileJson,
 } from 'lucide-react';
 import './AIChatPage.css';
 import {
     buildAugmentedSystemPrompt,
     buildGroundedAppAnswer,
-    KNOWLEDGE_SIZE,
+    setUploadedKnowledgeChunks,
+    clearUploadedKnowledgeBase,
+    getEffectiveKnowledgeSize,
 } from '../ai/kb/knowledgeBase.js';
 import {
     packHistory,
     buildRetrievalQuery,
     computeHistoryBudget,
 } from '../ai/chatContext.js';
+import {
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODEL_OPTIONS,
+    resolveGeminiApiKey,
+    streamGeminiChat,
+} from '../ai/geminiChat.js';
+
+/** Must match `UPLOAD_MODEL_ID` in `src/ai/aiChatWorker.js` (synthetic HF repo for zip uploads). */
+const UPLOADED_ONNX_MODEL_ID = 'hf-internal/user-upload';
+
+/**
+ * If every entry shares the same path prefix (single root folder in the zip),
+ * strip it so paths match Transformers.js hub layouts (`config.json` at root).
+ */
+function stripZipCommonRoot(files) {
+    const keys = Object.keys(files).filter((k) => !k.endsWith('/'));
+    if (keys.length <= 1) return files;
+    const segments = keys.map((k) => k.split('/').filter(Boolean));
+    let depth = 0;
+    while (true) {
+        const s0 = segments[0][depth];
+        if (s0 == null) break;
+        if (!segments.every((segs) => segs[depth] === s0)) break;
+        depth += 1;
+    }
+    if (depth === 0) return files;
+    const prefix = `${segments[0].slice(0, depth).join('/')}/`;
+    const out = {};
+    for (const k of keys) {
+        out[k.slice(prefix.length)] = files[k];
+    }
+    return out;
+}
 
 /* ------------------------------------------------------------------ */
 /* Curated models — all hosted on the HF hub as ONNX, known to work   */
@@ -187,6 +224,13 @@ const LS_SYSTEM = 'ai-chat:system-prompt:v3';
 const LS_CHATS = 'ai-chat:conversations:v1';
 const LS_ACTIVE_CHAT = 'ai-chat:active-conversation';
 const LS_KB_ENABLED = 'ai-chat:kb-enabled';
+const LS_BACKEND = 'ai-chat:backend';
+const LS_GEMINI_KEY = 'ai-chat:gemini-api-key';
+const LS_GEMINI_MODEL = 'ai-chat:gemini-model';
+
+/** `local` = on-device HF ONNX; `gemini` = Google Gemini Flash API */
+const BACKEND_LOCAL = 'local';
+const BACKEND_GEMINI = 'gemini';
 
 function loadLS(key, fallback) {
     try {
@@ -318,6 +362,26 @@ export default function AIChatPage() {
         () => loadLS(LS_KB_ENABLED, 'true') !== 'false'
     );
 
+    const [backend, setBackend] = useState(() => loadLS(LS_BACKEND, BACKEND_LOCAL));
+    const [geminiApiKeyInput, setGeminiApiKeyInput] = useState(() => loadLS(LS_GEMINI_KEY, ''));
+    const [geminiModel, setGeminiModel] = useState(
+        () => loadLS(LS_GEMINI_MODEL, DEFAULT_GEMINI_MODEL)
+    );
+    const geminiAbortRef = useRef(null);
+
+    const effectiveGeminiKey = useMemo(
+        () => resolveGeminiApiKey(geminiApiKeyInput),
+        [geminiApiKeyInput]
+    );
+    const isGeminiBackend = backend === BACKEND_GEMINI;
+
+    const uploadedOnnxFilesRef = useRef(null);
+    const onnxZipInputRef = useRef(null);
+    const ragJsonInputRef = useRef(null);
+    const [onnxZipName, setOnnxZipName] = useState('');
+    const [ragBundleName, setRagBundleName] = useState('');
+    const [kbChunkCount, setKbChunkCount] = useState(() => getEffectiveKnowledgeSize());
+
     /* -------- Conversations -------- */
     const [conversations, setConversations] = useState(() => {
         const stored = loadLS(LS_CHATS, null);
@@ -348,51 +412,45 @@ export default function AIChatPage() {
         activeChatIdRef.current = activeChat?.id || activeChatId || null;
     }, [activeChat, activeChatId]);
 
+    /* Writes assistant reply into the active chat (ref-based id). */
+    const finalizeAssistantMessageByRef = useCallback((finalText, stats, wasStopped) => {
+        setStreamingText('');
+        setLastStats(stats || null);
+        const targetId = activeChatIdRef.current;
+        setConversations((prev) =>
+            prev.map((c) => {
+                if (c.id !== targetId) return c;
+                const msgs = [...c.messages];
+                const lastIdx = msgs.length - 1;
+                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant' && msgs[lastIdx].streaming) {
+                    msgs[lastIdx] = {
+                        ...msgs[lastIdx],
+                        content:
+                            finalText ||
+                            msgs[lastIdx].content ||
+                            (wasStopped ? '⏹ stopped' : ''),
+                        streaming: false,
+                        stats: stats || null,
+                        stopped: !!wasStopped,
+                    };
+                } else if (finalText) {
+                    msgs.push({
+                        role: 'assistant',
+                        content: finalText,
+                        streaming: false,
+                        stats: stats || null,
+                        ts: Date.now(),
+                    });
+                }
+                return { ...c, messages: msgs, updatedAt: Date.now() };
+            })
+        );
+    }, []);
+
     /* ============ Worker wiring ============ */
     useEffect(() => {
         const w = new Worker(new URL('../ai/aiChatWorker.js', import.meta.url), { type: 'module' });
         workerRef.current = w;
-
-        /* Closure-free finalize: reads the CURRENT active chat id from
-           the ref at call time (not the one captured when the worker
-           was wired). This is what actually writes the assistant reply
-           into the visible conversation, so it MUST see fresh state. */
-        const finalizeAssistantMessageByRef = (finalText, stats, wasStopped) => {
-            setStreamingText('');
-            setLastStats(stats || null);
-            const targetId = activeChatIdRef.current;
-            setConversations((prev) =>
-                prev.map((c) => {
-                    if (c.id !== targetId) return c;
-                    const msgs = [...c.messages];
-                    const lastIdx = msgs.length - 1;
-                    if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant' && msgs[lastIdx].streaming) {
-                        msgs[lastIdx] = {
-                            ...msgs[lastIdx],
-                            content:
-                                finalText ||
-                                msgs[lastIdx].content ||
-                                (wasStopped ? '⏹ stopped' : ''),
-                            streaming: false,
-                            stats: stats || null,
-                            stopped: !!wasStopped,
-                        };
-                    } else if (finalText) {
-                        // Defensive: placeholder was lost (chat switch /
-                        // clear race) — still surface the reply instead
-                        // of dropping it silently.
-                        msgs.push({
-                            role: 'assistant',
-                            content: finalText,
-                            streaming: false,
-                            stats: stats || null,
-                            ts: Date.now(),
-                        });
-                    }
-                    return { ...c, messages: msgs, updatedAt: Date.now() };
-                })
-            );
-        };
 
         w.onmessage = (ev) => {
             const msg = ev.data;
@@ -459,8 +517,30 @@ export default function AIChatPage() {
             try { w.terminate(); } catch { /* ignore */ }
             workerRef.current = null;
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [finalizeAssistantMessageByRef]);
+
+    /* Gemini backend: ready when API key is set (no model download). */
+    useEffect(() => {
+        if (!isGeminiBackend) return;
+        if (isGenerating) return;
+        if (effectiveGeminiKey) {
+            setStatus('ready');
+            setLoadedModelId(`gemini/${geminiModel}`);
+            setErrorMsg('');
+        } else {
+            setStatus('idle');
+            setLoadedModelId('');
+        }
+    }, [isGeminiBackend, effectiveGeminiKey, geminiModel, isGenerating]);
+
+    /* Leaving Gemini: clear cloud "ready" state until a local model loads. */
+    useEffect(() => {
+        if (isGeminiBackend || isLocalLoaded) return;
+        if (loadedModelId.startsWith('gemini/')) {
+            setLoadedModelId('');
+            setStatus('idle');
+        }
+    }, [isGeminiBackend, isLocalLoaded, loadedModelId]);
 
     /* ============ WebGPU probe ============ */
     useEffect(() => {
@@ -507,6 +587,9 @@ export default function AIChatPage() {
     useEffect(() => { saveLS(LS_PARAMS, params); }, [params]);
     useEffect(() => { saveLS(LS_SYSTEM, systemPrompt); }, [systemPrompt]);
     useEffect(() => { saveLS(LS_KB_ENABLED, useKnowledgeBase ? 'true' : 'false'); }, [useKnowledgeBase]);
+    useEffect(() => { saveLS(LS_BACKEND, backend); }, [backend]);
+    useEffect(() => { saveLS(LS_GEMINI_KEY, geminiApiKeyInput); }, [geminiApiKeyInput]);
+    useEffect(() => { saveLS(LS_GEMINI_MODEL, geminiModel); }, [geminiModel]);
     useEffect(() => { saveLS(LS_CHATS, conversations); }, [conversations]);
     useEffect(() => { saveLS(LS_ACTIVE_CHAT, activeChatId); }, [activeChatId]);
 
@@ -545,17 +628,37 @@ export default function AIChatPage() {
         return selectedModel;
     }, [customModel, selectedModel]);
 
+    const effectiveModelId = onnxZipName ? UPLOADED_ONNX_MODEL_ID : currentModelId;
+
     const currentModelMeta = useMemo(
         () => CURATED_MODELS.find((m) => m.id === currentModelId) || null,
         [currentModelId]
     );
 
-    const isLoaded = !!loadedModelId && loadedModelId === currentModelId && status !== 'loading';
-    const isLoading = status === 'loading';
+    const isLocalLoaded =
+        !!loadedModelId &&
+        loadedModelId === effectiveModelId &&
+        status !== 'loading';
+    const isLoaded = isGeminiBackend
+        ? !!effectiveGeminiKey
+        : isLocalLoaded;
+    const isLoading = !isGeminiBackend && status === 'loading';
     const isGenerating = status === 'generating';
 
     /* ============ Actions ============ */
     const handleLoadModel = useCallback(() => {
+        const uploaded = uploadedOnnxFilesRef.current;
+        if (uploaded && Object.keys(uploaded).length > 0) {
+            setErrorMsg('');
+            setDownloadProgress({});
+            workerRef.current?.postMessage({
+                type: 'load-uploaded',
+                files: uploaded,
+                device,
+                dtype,
+            });
+            return;
+        }
         if (!currentModelId) return;
         setErrorMsg('');
         setDownloadProgress({});
@@ -566,6 +669,67 @@ export default function AIChatPage() {
             dtype,
         });
     }, [currentModelId, device, dtype]);
+
+    const handleOnnxZipChange = useCallback(async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        if (!f.name.toLowerCase().endsWith('.zip')) {
+            setErrorMsg('Choose a .zip containing ONNX + tokenizer files (Transformers.js layout).');
+            return;
+        }
+        try {
+            const { default: JSZip } = await import('jszip');
+            const zip = await JSZip.loadAsync(f);
+            const raw = {};
+            for (const [path, entry] of Object.entries(zip.files)) {
+                if (entry.dir) continue;
+                if (path.includes('__MACOSX') || path.endsWith('.DS_Store')) continue;
+                const norm = path.replace(/\\/g, '/');
+                raw[norm] = await entry.async('arraybuffer');
+            }
+            const cleaned = stripZipCommonRoot(raw);
+            uploadedOnnxFilesRef.current = cleaned;
+            setOnnxZipName(f.name);
+            setErrorMsg('');
+        } catch (err) {
+            setErrorMsg(`Could not read model zip: ${err?.message || err}`);
+        }
+    }, []);
+
+    const handleClearOnnxUpload = useCallback(() => {
+        uploadedOnnxFilesRef.current = null;
+        setOnnxZipName('');
+        workerRef.current?.postMessage({ type: 'unload' });
+        setLoadedModelId('');
+        setStatus('idle');
+    }, []);
+
+    const handleRagJsonChange = useCallback(async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        try {
+            const text = await f.text();
+            const data = JSON.parse(text);
+            const chunks = Array.isArray(data.chunks) ? data.chunks : Array.isArray(data) ? data : null;
+            if (!chunks) {
+                throw new Error('Expected an array or { "chunks": [ ... ] }');
+            }
+            setUploadedKnowledgeChunks(chunks);
+            setRagBundleName(f.name);
+            setKbChunkCount(getEffectiveKnowledgeSize());
+            setErrorMsg('');
+        } catch (err) {
+            setErrorMsg(`RAG bundle parse error: ${err?.message || err}`);
+        }
+    }, []);
+
+    const handleClearRagUpload = useCallback(() => {
+        clearUploadedKnowledgeBase();
+        setRagBundleName('');
+        setKbChunkCount(getEffectiveKnowledgeSize());
+    }, []);
 
     /* Finalize is now defined inside the worker-wiring effect as
        `finalizeAssistantMessageByRef` so it ALWAYS reads the current
@@ -599,7 +763,11 @@ export default function AIChatPage() {
         const text = input.trim();
         if (!text) return;
         if (!isLoaded) {
-            setErrorMsg('Load a model first.');
+            setErrorMsg(
+                isGeminiBackend
+                    ? 'Add your Gemini API key in the sidebar (or set VITE_GEMINI_API_KEY at build time).'
+                    : 'Load a model first.'
+            );
             return;
         }
         if (isGenerating) return;
@@ -681,7 +849,13 @@ export default function AIChatPage() {
                             c.title === 'New chat' || !c.title
                                 ? text.slice(0, 40)
                                 : c.title;
-                        return { ...c, messages: msgs, title, modelId: currentModelId, updatedAt: Date.now() };
+                        return {
+                            ...c,
+                            messages: msgs,
+                            title,
+                            modelId: isGeminiBackend ? `gemini/${geminiModel}` : currentModelId,
+                            updatedAt: Date.now(),
+                        };
                     })
                 );
                 setContextInfo({
@@ -721,7 +895,13 @@ export default function AIChatPage() {
                         c.title === 'New chat' || !c.title
                             ? text.slice(0, 40)
                             : c.title;
-                    return { ...c, messages: msgs, title, modelId: currentModelId, updatedAt: Date.now() };
+                    return {
+                        ...c,
+                        messages: msgs,
+                        title,
+                        modelId: isGeminiBackend ? `gemini/${geminiModel}` : currentModelId,
+                        updatedAt: Date.now(),
+                    };
                 })
             );
             setContextInfo({
@@ -757,7 +937,7 @@ export default function AIChatPage() {
         const budget = computeHistoryBudget({
             systemPromptChars: effectiveSystem.length,
             maxNewTokens: params.max_new_tokens || 512,
-            targetPromptTokens: 3200,
+            targetPromptTokens: isGeminiBackend ? 120000 : 3200,
         });
         const packed = packHistory(history, { budgetChars: budget, minKeepTurns: 2 });
 
@@ -778,7 +958,13 @@ export default function AIChatPage() {
                     c.title === 'New chat' || !c.title
                         ? text.slice(0, 40)
                         : c.title;
-                return { ...c, messages: msgs, title, modelId: currentModelId, updatedAt: Date.now() };
+                return {
+                    ...c,
+                    messages: msgs,
+                    title,
+                    modelId: isGeminiBackend ? `gemini/${geminiModel}` : currentModelId,
+                    updatedAt: Date.now(),
+                };
             })
         );
 
@@ -895,6 +1081,49 @@ export default function AIChatPage() {
             };
         }
 
+        if (isGeminiBackend) {
+            const genStarted = Date.now();
+            setStatus('generating');
+            setGenStartedAt(genStarted);
+            setFirstTokenMs(null);
+            const ac = new AbortController();
+            geminiAbortRef.current = ac;
+            (async () => {
+                try {
+                    const geminiParams = isAppFeatureQuestion
+                        ? { temperature: 0, top_p: 1, max_new_tokens: 512 }
+                        : {
+                              temperature: params.temperature,
+                              top_p: params.top_p,
+                              max_new_tokens: Math.min(params.max_new_tokens || 2048, 8192),
+                          };
+                    const result = await streamGeminiChat({
+                        apiKey: effectiveGeminiKey,
+                        model: geminiModel,
+                        messages: payload,
+                        params: geminiParams,
+                        signal: ac.signal,
+                        onFirstChunk: () => setFirstTokenMs(Date.now() - genStarted),
+                        onChunk: (chunk) => setStreamingText((prev) => prev + chunk),
+                    });
+                    finalizeAssistantMessageByRef(result.text, result.stats, false);
+                } catch (err) {
+                    if (err?.name === 'AbortError') {
+                        finalizeAssistantMessageByRef('', null, true);
+                    } else {
+                        const msg = err?.message || String(err);
+                        setErrorMsg(msg);
+                        finalizeAssistantMessageByRef(`**Gemini error:** ${msg}`, null, false);
+                    }
+                } finally {
+                    geminiAbortRef.current = null;
+                    setStatus('ready');
+                    setGenStartedAt(0);
+                }
+            })();
+            return;
+        }
+
         workerRef.current?.postMessage({
             type: 'generate',
             messages: payload,
@@ -910,11 +1139,21 @@ export default function AIChatPage() {
         params,
         currentModelId,
         useKnowledgeBase,
+        isGeminiBackend,
+        effectiveGeminiKey,
+        geminiModel,
+        finalizeAssistantMessageByRef,
+        currentModelMeta,
     ]);
 
     const handleStop = useCallback(() => {
+        if (isGeminiBackend && geminiAbortRef.current) {
+            geminiAbortRef.current.abort();
+            geminiAbortRef.current = null;
+            return;
+        }
         workerRef.current?.postMessage({ type: 'stop' });
-    }, []);
+    }, [isGeminiBackend]);
 
     const handleNewChat = useCallback(() => {
         const chat = newConversation(currentModelId);
@@ -942,7 +1181,13 @@ export default function AIChatPage() {
            got stuck in 'generating' because the worker silently stalled
            on WASM), we forcibly tell the worker to stop AND locally
            reset UI state so the user is never trapped. */
-        try { workerRef.current?.postMessage({ type: 'stop' }); } catch { /* ignore */ }
+        try {
+            if (geminiAbortRef.current) {
+                geminiAbortRef.current.abort();
+                geminiAbortRef.current = null;
+            }
+            workerRef.current?.postMessage({ type: 'stop' });
+        } catch { /* ignore */ }
 
         setConversations((prev) =>
             prev.map((c) =>
@@ -1027,6 +1272,69 @@ export default function AIChatPage() {
                                 <Sparkles size={14} /> Model
                             </div>
 
+                            <label className="ai-field-label">Backend</label>
+                            <select
+                                className="ai-select"
+                                value={backend}
+                                onChange={(e) => setBackend(e.target.value)}
+                                disabled={isLoading || isGenerating}
+                            >
+                                <option value={BACKEND_LOCAL}>On-device (Hugging Face ONNX)</option>
+                                <option value={BACKEND_GEMINI}>Gemini Flash (Google API)</option>
+                            </select>
+
+                            {isGeminiBackend ? (
+                                <div className="ai-gemini-panel" style={{ marginTop: 10 }}>
+                                    <label className="ai-field-label">Gemini model</label>
+                                    <select
+                                        className="ai-select"
+                                        value={geminiModel}
+                                        onChange={(e) => setGeminiModel(e.target.value)}
+                                        disabled={isGenerating}
+                                    >
+                                        {GEMINI_MODEL_OPTIONS.map((m) => (
+                                            <option key={m.id} value={m.id}>
+                                                {m.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <label className="ai-field-label" style={{ marginTop: 8 }}>
+                                        API key
+                                    </label>
+                                    <input
+                                        className="ai-input"
+                                        type="password"
+                                        autoComplete="off"
+                                        placeholder="AIza… (from Google AI Studio)"
+                                        value={geminiApiKeyInput}
+                                        onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                                        disabled={isGenerating}
+                                    />
+                                    <p className="ai-field-hint">
+                                        Get a key at{' '}
+                                        <a
+                                            href="https://aistudio.google.com/apikey"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                        >
+                                            Google AI Studio
+                                        </a>
+                                        . Stored in this browser only. For team deploys you can set{' '}
+                                        <code>VITE_GEMINI_API_KEY</code> at build time instead.
+                                    </p>
+                                    {!effectiveGeminiKey && (
+                                        <div className="ai-status-warn" style={{ marginTop: 8 }}>
+                                            <AlertTriangle size={12} /> Paste an API key to chat with Gemini.
+                                        </div>
+                                    )}
+                                    {effectiveGeminiKey && (
+                                        <div className="ai-status-ok" style={{ marginTop: 8 }}>
+                                            <CheckCircle2 size={12} /> Ready — no download required.
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <>
                             <label className="ai-field-label">Curated</label>
                             <select
                                 className="ai-select"
@@ -1075,6 +1383,92 @@ export default function AIChatPage() {
                                 disabled={isLoading}
                             />
 
+                            <div className="ai-local-upload-card" style={{ marginTop: 12 }}>
+                                <div className="ai-card-title ai-card-title--sub">
+                                    <Upload size={13} /> Local fine-tuned bundle
+                                </div>
+                                <p className="ai-field-hint">
+                                    Zip must be a <strong>Transformers.js–compatible ONNX</strong> tree (e.g. export
+                                    from a fine-tuned Mistral with Optimum; same file layout as huggingface.co
+                                    model repos). An uploaded zip <em>overrides</em> the HF id below for Load.
+                                </p>
+                                <input
+                                    ref={onnxZipInputRef}
+                                    type="file"
+                                    accept=".zip,application/zip"
+                                    className="ai-file-input-hidden"
+                                    onChange={handleOnnxZipChange}
+                                />
+                                <div className="ai-local-upload-row">
+                                    <button
+                                        type="button"
+                                        className="ai-btn ai-btn-ghost"
+                                        onClick={() => onnxZipInputRef.current?.click()}
+                                        disabled={isLoading}
+                                    >
+                                        <Upload size={14} /> ONNX zip…
+                                    </button>
+                                    {onnxZipName ? (
+                                        <span className="ai-local-upload-name" title={onnxZipName}>
+                                            {onnxZipName}
+                                        </span>
+                                    ) : (
+                                        <span className="ai-field-hint">None</span>
+                                    )}
+                                    {onnxZipName && (
+                                        <button
+                                            type="button"
+                                            className="ai-inline-link"
+                                            onClick={handleClearOnnxUpload}
+                                            disabled={isLoading}
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+                                <input
+                                    ref={ragJsonInputRef}
+                                    type="file"
+                                    accept=".json,application/json"
+                                    className="ai-file-input-hidden"
+                                    onChange={handleRagJsonChange}
+                                />
+                                <label className="ai-field-label" style={{ marginTop: 8 }}>
+                                    RAG corpus (BM25 JSON)
+                                </label>
+                                <div className="ai-local-upload-row">
+                                    <button
+                                        type="button"
+                                        className="ai-btn ai-btn-ghost"
+                                        onClick={() => ragJsonInputRef.current?.click()}
+                                        disabled={isLoading}
+                                    >
+                                        <FileJson size={14} /> rag-bundle.json…
+                                    </button>
+                                    {ragBundleName ? (
+                                        <span className="ai-local-upload-name" title={ragBundleName}>
+                                            {ragBundleName}
+                                        </span>
+                                    ) : (
+                                        <span className="ai-field-hint">Bundled app docs</span>
+                                    )}
+                                    {ragBundleName && (
+                                        <button
+                                            type="button"
+                                            className="ai-inline-link"
+                                            onClick={handleClearRagUpload}
+                                            disabled={isLoading}
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="ai-field-hint">
+                                    Retrieval chunks: <strong>{kbChunkCount}</strong>
+                                    {ragBundleName ? ' · uploaded corpus' : ''}
+                                </p>
+                            </div>
+
                             <div className="ai-grid-2" style={{ marginTop: 10 }}>
                                 <div>
                                     <label className="ai-field-label">Device</label>
@@ -1111,16 +1505,26 @@ export default function AIChatPage() {
                                 type="button"
                                 className="ai-btn ai-btn-primary ai-btn-block"
                                 onClick={handleLoadModel}
-                                disabled={isLoading || isGenerating}
+                                disabled={
+                                    isLoading ||
+                                    isGenerating ||
+                                    (!uploadedOnnxFilesRef.current &&
+                                        !currentModelId)
+                                }
                                 style={{ marginTop: 12 }}
                             >
                                 {isLoading ? (
                                     <>
-                                        <Loader2 size={14} className="ai-spin" /> Downloading…
+                                        <Loader2 size={14} className="ai-spin" />{' '}
+                                        {onnxZipName ? 'Loading…' : 'Downloading…'}
                                     </>
                                 ) : isLoaded ? (
                                     <>
                                         <CheckCircle2 size={14} /> Reload
+                                    </>
+                                ) : onnxZipName ? (
+                                    <>
+                                        <Upload size={14} /> Load uploaded ONNX
                                     </>
                                 ) : (
                                     <>
@@ -1165,6 +1569,8 @@ export default function AIChatPage() {
                                     (WASM). Pick a smaller model or enable WebGPU.
                                 </div>
                             )}
+                                </>
+                            )}
 
                             {/* Context-memory chip: shows that the assistant
                                 actually has conversation memory, and how
@@ -1201,9 +1607,21 @@ export default function AIChatPage() {
 
                             {/* Status line */}
                             <div className="ai-status-line" data-status={status}>
-                                {status === 'idle' && <><Cpu size={12} /> Idle</>}
+                                {status === 'idle' && (
+                                    <>
+                                        <Cpu size={12} />{' '}
+                                        {isGeminiBackend && !effectiveGeminiKey
+                                            ? 'Waiting for Gemini API key'
+                                            : 'Idle'}
+                                    </>
+                                )}
                                 {status === 'loading' && <><Loader2 size={12} className="ai-spin" /> Loading model…</>}
-                                {status === 'ready' && <><CheckCircle2 size={12} /> Ready · {loadedModelId.split('/').pop()}</>}
+                                {status === 'ready' && (
+                                    <>
+                                        <CheckCircle2 size={12} /> Ready · {loadedModelId.split('/').pop()}
+                                        {isGeminiBackend && <span className="ai-status-sub"> · cloud</span>}
+                                    </>
+                                )}
                                 {status === 'generating' && (
                                     <>
                                         <Zap size={12} /> Generating… {Math.max(0, elapsedMs / 1000).toFixed(1)} s
@@ -1371,9 +1789,17 @@ export default function AIChatPage() {
                         </h1>
                         <span className="ai-main-sub">
                             {isLoaded ? (
-                                <>
-                                    <Cpu size={11} /> {loadedModelId.split('/').pop()} · {device} · {dtype}
-                                </>
+                                isGeminiBackend ? (
+                                    <>
+                                        <Zap size={11} /> {geminiModel} · Gemini API
+                                    </>
+                                ) : (
+                                    <>
+                                        <Cpu size={11} /> {loadedModelId.split('/').pop()} · {device} · {dtype}
+                                    </>
+                                )
+                            ) : isGeminiBackend ? (
+                                <>Add your Gemini API key in the sidebar to start chatting.</>
                             ) : (
                                 <>Pick a model on the left, then Download & Load to start chatting.</>
                             )}
@@ -1404,7 +1830,11 @@ export default function AIChatPage() {
                         <div className="ai-empty">
                             <div className="ai-empty-badge"><Brain size={24} /></div>
                             <p className="ai-empty-line">
-                                {isLoaded ? 'Ask anything.' : 'Load a model to start chatting.'}
+                                {isLoaded
+                                    ? 'Ask anything.'
+                                    : isGeminiBackend
+                                      ? 'Add your Gemini API key to start chatting.'
+                                      : 'Load a model to start chatting.'}
                             </p>
                         </div>
                     )}
@@ -1456,7 +1886,9 @@ export default function AIChatPage() {
                         placeholder={
                             isLoaded
                                 ? 'Ask anything… (Enter to send · Shift+Enter for newline)'
-                                : 'Load a model first to start chatting…'
+                                : isGeminiBackend
+                                  ? 'Add Gemini API key in sidebar…'
+                                  : 'Load a model first to start chatting…'
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
