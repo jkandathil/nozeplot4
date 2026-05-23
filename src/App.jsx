@@ -9,6 +9,7 @@ import {
   Folder
 } from 'lucide-react';
 import './App.css';
+import { initCodeStudioShell } from './utils/codeStudioBridge.js';
 import { fileManager } from './utils/db';
 const logo = `${import.meta.env.BASE_URL}logo_noze_circle.png`;
 
@@ -155,6 +156,26 @@ function App() {
     window.addEventListener('nozeplot-navigate-help', onNavigateHelp);
     return () => window.removeEventListener('nozeplot-navigate-help', onNavigateHelp);
   }, []);
+
+  const ensureCodeStudioEverOpened = useCallback(() => {
+    setEverOpenedPages((prev) => {
+      if (prev.has('codeStudio')) return prev;
+      const next = new Set(prev);
+      next.add('codeStudio');
+      return next;
+    });
+  }, []);
+
+  const focusCodeStudio = useCallback(() => {
+    setActivePage('codeStudio');
+  }, []);
+
+  useEffect(() => {
+    initCodeStudioShell({
+      ensureEverOpened: ensureCodeStudioEverOpened,
+      focusCodeStudio,
+    });
+  }, [ensureCodeStudioEverOpened, focusCodeStudio]);
 
   // User Name State
   const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');

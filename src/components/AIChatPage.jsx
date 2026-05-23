@@ -23,6 +23,7 @@ import {
     FileJson,
     Copy,
     Check,
+    Code2,
 } from 'lucide-react';
 import './AIChatPage.css';
 import {
@@ -46,6 +47,10 @@ import {
     streamGeminiChat,
 } from '../ai/geminiChat.js';
 import { CURATED_MODELS } from '../ai/curatedChatModels.js';
+import {
+    markdownHasFencedCode,
+    tryApplyAssistantMarkdownToCodeStudio,
+} from '../utils/codeStudioBridge.js';
 
 /** Must match `UPLOAD_MODEL_ID` in `src/ai/aiChatWorker.js` (synthetic HF repo for zip uploads). */
 const UPLOADED_ONNX_MODEL_ID = 'hf-internal/user-upload';
@@ -100,7 +105,7 @@ const DEFAULT_SYSTEM_PROMPT = [
     '- Use `- ` bullets for lists, `1.` for ordered/sequential steps.',
     '- Use **bold** for UI labels, settings, tab names, or key terms.',
     '- Use `inline code` for file paths, identifiers, or very short snippets.',
-    '- For any multi-line code (Python, JavaScript, SQL, bash, etc.), use a fenced block with a language tag on the opening line, e.g. ```python then your code then ``` on its own line — never bury multi-line code in a single paragraph.',
+    '- For any multi-line code (Python, JavaScript, SQL, bash, etc.), use a fenced block with a language tag on the opening line, e.g. ```python then your code then ``` on its own line — never bury multi-line code in a single paragraph. The Code Studio editor can apply fenced blocks with syntax highlighting.',
     '- Keep tone warm, confident, practical. No filler, no apologies, no recap, no "I hope this helps".',
     '- Stop as soon as the question is answered. Depth over length.',
     '',
@@ -136,6 +141,8 @@ const LS_KB_ENABLED = 'ai-chat:kb-enabled';
 const LS_BACKEND = 'ai-chat:backend';
 const LS_GEMINI_KEY = 'ai-chat:gemini-api-key';
 const LS_GEMINI_MODEL = 'ai-chat:gemini-model';
+const LS_APPLY_CODE_STUDIO = 'ai-chat:apply-code-to-studio';
+const LS_APPLY_CODE_FOCUS = 'ai-chat:apply-code-focus-tab';
 
 /** `local` = on-device HF ONNX; `gemini` = hosted cloud API (internal id; UI says "Cloud API"). */
 const BACKEND_LOCAL = 'local';
@@ -311,6 +318,12 @@ export default function AIChatPage() {
     const [sidebarExpanded, setSidebarExpanded] = useState(true);
     const [paramsOpen, setParamsOpen] = useState(false);
     const [systemOpen, setSystemOpen] = useState(false);
+    const [applyCodeToStudio, setApplyCodeToStudio] = useState(
+        () => loadLS(LS_APPLY_CODE_STUDIO, 'true') !== 'false'
+    );
+    const [applyCodeFocusTab, setApplyCodeFocusTab] = useState(
+        () => loadLS(LS_APPLY_CODE_FOCUS, 'true') !== 'false'
+    );
 
     /* Mirror the resolved active chat id into a ref so async callbacks
        (worker messages, streaming writes) always target the live chat.
@@ -321,28 +334,71 @@ export default function AIChatPage() {
         activeChatIdRef.current = activeChat?.id || activeChatId || null;
     }, [activeChat, activeChatId]);
 
+    const applyAssistantToCodeStudio = useCallback(
+        async (markdown) => {
+            if (!markdown || !applyCodeToStudio) return;
+            if (!markdownHasFencedCode(markdown)) return;
+            const r = await tryApplyAssistantMarkdownToCodeStudio(markdown, {
+                autoFocus: applyCodeFocusTab,
+            });
+            if (!r.ok && r.reason !== 'no_fence') {
+                setErrorMsg(
+                    r.reason === 'no_file'
+                        ? 'That reply includes fenced code — open Code Studio and create or open a file in Codes, then use “Apply to Code Studio” on the message.'
+                        : r.reason === 'timeout'
+                          ? 'Code Studio is still loading. Open the Code Studio tab once, then try “Apply to Code Studio”.'
+                          : String(r.reason || 'Could not apply code to Code Studio.')
+                );
+            }
+        },
+        [applyCodeToStudio, applyCodeFocusTab]
+    );
+
+    const handleApplyCodeStudioFromBubble = useCallback(
+        async (markdown) => {
+            if (!markdown || !markdownHasFencedCode(markdown)) return;
+            const r = await tryApplyAssistantMarkdownToCodeStudio(markdown, {
+                autoFocus: applyCodeFocusTab,
+            });
+            if (!r.ok && r.reason !== 'no_fence') {
+                setErrorMsg(
+                    r.reason === 'no_file'
+                        ? 'Open Code Studio and create or open a file in Codes, then try again.'
+                        : r.reason === 'timeout'
+                          ? 'Code Studio is still loading — open that tab once and retry.'
+                          : String(r.reason || 'Could not apply code to Code Studio.')
+                );
+            }
+        },
+        [applyCodeFocusTab]
+    );
+
     /* Writes assistant reply into the active chat (ref-based id). */
     const finalizeAssistantMessageByRef = useCallback((finalText, stats, wasStopped) => {
         setStreamingText('');
         setLastStats(stats || null);
         const targetId = activeChatIdRef.current;
+        let replyMarkdown = '';
         setConversations((prev) =>
             prev.map((c) => {
                 if (c.id !== targetId) return c;
                 const msgs = [...c.messages];
                 const lastIdx = msgs.length - 1;
                 if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant' && msgs[lastIdx].streaming) {
+                    const content =
+                        finalText ||
+                        msgs[lastIdx].content ||
+                        (wasStopped ? '⏹ stopped' : '');
+                    replyMarkdown = content;
                     msgs[lastIdx] = {
                         ...msgs[lastIdx],
-                        content:
-                            finalText ||
-                            msgs[lastIdx].content ||
-                            (wasStopped ? '⏹ stopped' : ''),
+                        content,
                         streaming: false,
                         stats: stats || null,
                         stopped: !!wasStopped,
                     };
                 } else if (finalText) {
+                    replyMarkdown = finalText;
                     msgs.push({
                         role: 'assistant',
                         content: finalText,
@@ -354,7 +410,10 @@ export default function AIChatPage() {
                 return { ...c, messages: msgs, updatedAt: Date.now() };
             })
         );
-    }, []);
+        if (!wasStopped && replyMarkdown) {
+            void applyAssistantToCodeStudio(replyMarkdown);
+        }
+    }, [applyAssistantToCodeStudio]);
 
     /* ============ Worker wiring ============ */
     useEffect(() => {
@@ -476,6 +535,12 @@ export default function AIChatPage() {
     useEffect(() => { saveLS(LS_BACKEND, backend); }, [backend]);
     useEffect(() => { saveLS(LS_GEMINI_KEY, geminiApiKeyInput); }, [geminiApiKeyInput]);
     useEffect(() => { saveLS(LS_GEMINI_MODEL, geminiModel); }, [geminiModel]);
+    useEffect(() => {
+        saveLS(LS_APPLY_CODE_STUDIO, applyCodeToStudio ? 'true' : 'false');
+    }, [applyCodeToStudio]);
+    useEffect(() => {
+        saveLS(LS_APPLY_CODE_FOCUS, applyCodeFocusTab ? 'true' : 'false');
+    }, [applyCodeFocusTab]);
     useEffect(() => { saveLS(LS_CHATS, conversations); }, [conversations]);
     useEffect(() => { saveLS(LS_ACTIVE_CHAT, activeChatId); }, [activeChatId]);
 
@@ -783,6 +848,7 @@ export default function AIChatPage() {
                     kb: useKnowledgeBase,
                     sourcesUsed: (grounded.sources || usedSources).length,
                 });
+                void applyAssistantToCodeStudio(grounded.text);
                 return;
             }
         }
@@ -1087,6 +1153,7 @@ export default function AIChatPage() {
         effectiveGeminiKey,
         geminiModel,
         finalizeAssistantMessageByRef,
+        applyAssistantToCodeStudio,
         currentModelMeta,
     ]);
 
@@ -1639,6 +1706,44 @@ export default function AIChatPage() {
                             </label>
                         </div>
 
+                        {/* ===== Code Studio integration ===== */}
+                        <div className="ai-card">
+                            <div className="ai-card-title">
+                                <Code2 size={14} /> Code Studio
+                            </div>
+                            <label className="ai-kb-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={applyCodeToStudio}
+                                    onChange={(e) => setApplyCodeToStudio(e.target.checked)}
+                                />
+                                <span>
+                                    Apply fenced code blocks to the Code Studio editor
+                                    <span className="ai-kb-hint">
+                                        When the assistant uses a fenced block (for example{' '}
+                                        <code className="ai-code-hint">{'```'}python</code>
+                                        ), the code is written into the open file in Code Studio with Monaco
+                                        syntax highlighting. Chat still shows the full reply.
+                                    </span>
+                                </span>
+                            </label>
+                            <label className="ai-kb-toggle" style={{ marginTop: 10 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={applyCodeFocusTab}
+                                    onChange={(e) => setApplyCodeFocusTab(e.target.checked)}
+                                    disabled={!applyCodeToStudio}
+                                />
+                                <span>
+                                    Switch to Code Studio when code is applied
+                                    <span className="ai-kb-hint">
+                                        Uncheck to keep your current tab while the buffer updates in the background
+                                        (only works if Code Studio has been opened once this session).
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
+
                         {/* ===== System prompt ===== */}
                         <div className="ai-card">
                             <div className="ai-card-title-row">
@@ -1792,6 +1897,11 @@ export default function AIChatPage() {
                                     isLiveStream && !m.content
                                         ? `Warming up… ${(elapsedMs / 1000).toFixed(1)} s elapsed`
                                         : null
+                                }
+                                onApplyCodeStudio={
+                                    m.role === 'assistant' && !m.streaming && markdownHasFencedCode(m.content)
+                                        ? () => void handleApplyCodeStudioFromBubble(m.content)
+                                        : undefined
                                 }
                                 onSourceClick={(anchor) => {
                                     if (!anchor) return;
@@ -1953,9 +2063,11 @@ function MessageBubble({
     waitingNote,
     sources,
     onSourceClick,
+    onApplyCodeStudio,
 }) {
     const isUser = role === 'user';
     const hasSources = !isUser && Array.isArray(sources) && sources.length > 0;
+    const showApply = !isUser && !streaming && content && onApplyCodeStudio;
     return (
         <div className={`ai-msg ai-msg--${role}`}>
             <div className="ai-msg-avatar">
@@ -1975,6 +2087,15 @@ function MessageBubble({
                         ) : '')}
                     {streaming && <span className="ai-msg-caret" />}
                 </div>
+                {showApply && (
+                    <button
+                        type="button"
+                        className="ai-msg-apply-studio"
+                        onClick={onApplyCodeStudio}
+                    >
+                        <Code2 size={14} aria-hidden /> Apply to Code Studio
+                    </button>
+                )}
                 {stopped && <div className="ai-msg-stopped">⏹ stopped</div>}
                 {hasSources && (
                     <div className="ai-msg-sources">

@@ -4,6 +4,12 @@ import Editor from '@monaco-editor/react';
 import { Code2, FilePlus, Save, Trash2, Play, Eraser, Package } from 'lucide-react';
 import { CODES_WORKSPACE_FOLDER_NAME } from '../utils/workspaceFilename.js';
 import CodeStudioAiPanel from './CodeStudioAiPanel.jsx';
+import {
+    extractFencedCodeBlocks,
+    fenceLangToMonacoLanguage,
+    pickBestCodeBlock,
+    registerCodeStudioEditorApi,
+} from '../utils/codeStudioBridge.js';
 import './CodeStudioPage.css';
 
 /** Must match the `pyodide` npm version so the CDN assets match the JS API. */
@@ -144,6 +150,7 @@ export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDele
     const [dirty, setDirty] = useState(false);
     const [status, setStatus] = useState('');
     const editorRef = useRef(null);
+    const monacoRef = useRef(null);
     const saveHandlerRef = useRef(async () => {});
     const runHandlerRef = useRef(async () => {});
     const pyodideRef = useRef(null);
@@ -348,6 +355,40 @@ await micropip.install(${specJson})
     );
     const getProgramOutput = useCallback(() => output, [output]);
 
+    const applyFromMarkdown = useCallback(
+        (markdown) => {
+            const ed = editorRef.current;
+            if (!ed) return { ok: false, reason: 'not_ready' };
+            if (!resolvedFileId) return { ok: false, reason: 'no_file' };
+            const pick = pickBestCodeBlock(extractFencedCodeBlocks(markdown));
+            if (!pick) return { ok: false, reason: 'no_fence' };
+            const model = ed.getModel();
+            if (!model) return { ok: false, reason: 'not_ready' };
+            const monaco = monacoRef.current;
+            const monacoLang = fenceLangToMonacoLanguage(pick.lang);
+            ed.pushUndoStop();
+            ed.executeEdits('noze-ai-apply', [{ range: model.getFullModelRange(), text: pick.body }]);
+            startTransition(() => {
+                setEditorValue(pick.body);
+                setDirty(true);
+            });
+            try {
+                if (monaco?.editor?.setModelLanguage) {
+                    monaco.editor.setModelLanguage(model, monacoLang);
+                }
+            } catch {
+                /* ignore */
+            }
+            return { ok: true };
+        },
+        [resolvedFileId]
+    );
+
+    useEffect(() => {
+        registerCodeStudioEditorApi({ applyFromMarkdown });
+        return () => registerCodeStudioEditorApi(null);
+    }, [applyFromMarkdown]);
+
     const beforeMount = useCallback((monaco) => {
         monaco.editor.defineTheme('noze-code', {
             base: 'vs-dark',
@@ -511,6 +552,7 @@ await micropip.install(${specJson})
                                     }}
                                     onMount={(editor, monaco) => {
                                         editorRef.current = editor;
+                                        monacoRef.current = monaco;
                                         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                                             void saveHandlerRef.current();
                                         });

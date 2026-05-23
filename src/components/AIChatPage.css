@@ -1309,3 +1309,33 @@
 :root[data-theme="light"] .ai-md-link { color: #2563eb; border-bottom-color: rgba(37, 99, 235, 0.4); }
 :root[data-theme="light"] .ai-md-link:hover { color: #1d4ed8; border-bottom-color: #1d4ed8; }
 :root[data-theme="light"] .ai-md-hr { border-top-color: rgba(15, 23, 42, 0.12); }
+
+.ai-code-hint {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.35);
+    color: #cbd5e1;
+}
+
+.ai-msg-apply-studio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ai-msg-apply-studio:hover {
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 60%, var(--border-color));
+}

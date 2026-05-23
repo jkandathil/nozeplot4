@@ -16,6 +16,10 @@ import {
 import { CURATED_MODELS } from '../ai/curatedChatModels.js';
 import { renderMarkdown } from '../utils/miniMarkdown.jsx';
 import { CODES_WORKSPACE_FOLDER_NAME } from '../utils/workspaceFilename.js';
+import {
+    isApplyCodeToStudioEnabled,
+    tryApplyAssistantMarkdownToCodeStudio,
+} from '../utils/codeStudioBridge.js';
 
 const LS_MODEL = 'ai-chat:selected-model';
 const LS_CUSTOM = 'ai-chat:custom-model';
@@ -282,6 +286,9 @@ export default function CodeStudioAiPanel({ fileName, language, getCode, getOutp
                         return next;
                     });
                     setWorkerStatus('ready');
+                    if (isApplyCodeToStudioEnabled() && text) {
+                        void tryApplyAssistantMarkdownToCodeStudio(text, { autoFocus: false });
+                    }
                     break;
                 }
                 case 'stopped':
@@ -542,6 +549,9 @@ export default function CodeStudioAiPanel({ fileName, language, getCode, getOutp
                     }
                     return next;
                 });
+                if (isApplyCodeToStudioEnabled() && result.text) {
+                    void tryApplyAssistantMarkdownToCodeStudio(result.text, { autoFocus: false });
+                }
             } catch (err) {
                 if (err?.name === 'AbortError') {
                     setMessages((prev) => {
