@@ -1200,6 +1200,56 @@
     border: 1px solid rgba(148, 163, 184, 0.18);
     overflow-x: auto;
 }
+/* Fenced blocks: toolbar + copy (see MarkdownFencedCode in AIChatPage.jsx) */
+.ai-code-block {
+    margin: 8px 0;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.55);
+}
+.ai-code-block-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    background: rgba(2, 6, 23, 0.35);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    font-size: 0.72rem;
+}
+.ai-code-block-lang {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #94a3b8;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+}
+.ai-code-block-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(30, 41, 59, 0.65);
+    color: #e2e8f0;
+    cursor: pointer;
+    font-size: 0.72rem;
+    flex-shrink: 0;
+}
+.ai-code-block-copy:hover {
+    background: rgba(51, 65, 85, 0.85);
+    border-color: rgba(148, 163, 184, 0.4);
+}
+.ai-md-pre--block {
+    margin: 0;
+    border-radius: 0;
+    border: none;
+    padding: 10px 12px;
+    max-height: min(70vh, 28rem);
+    overflow: auto;
+    user-select: text;
+}
 .ai-md-pre-code {
     font-family: 'SF Mono', Menlo, Consolas, monospace;
     font-size: 0.82rem;
@@ -1236,6 +1286,24 @@
 :root[data-theme="light"] .ai-md-pre {
     background: rgba(15, 23, 42, 0.04);
     border-color: rgba(15, 23, 42, 0.1);
+}
+:root[data-theme="light"] .ai-code-block {
+    background: rgba(248, 250, 252, 0.95);
+    border-color: rgba(15, 23, 42, 0.12);
+}
+:root[data-theme="light"] .ai-code-block-toolbar {
+    background: rgba(241, 245, 249, 0.95);
+    border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+:root[data-theme="light"] .ai-code-block-lang { color: #64748b; }
+:root[data-theme="light"] .ai-code-block-copy {
+    background: #fff;
+    border-color: rgba(15, 23, 42, 0.15);
+    color: #0f172a;
+}
+:root[data-theme="light"] .ai-code-block-copy:hover {
+    background: #f1f5f9;
+    border-color: rgba(15, 23, 42, 0.22);
 }
 :root[data-theme="light"] .ai-md-pre-code { color: #0f172a; }
 :root[data-theme="light"] .ai-md-link { color: #2563eb; border-bottom-color: rgba(37, 99, 235, 0.4); }

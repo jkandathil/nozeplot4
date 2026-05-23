@@ -21,6 +21,8 @@ import {
     BookOpen,
     Upload,
     FileJson,
+    Copy,
+    Check,
 } from 'lucide-react';
 import './AIChatPage.css';
 import {
@@ -194,7 +196,8 @@ const DEFAULT_SYSTEM_PROMPT = [
     '- Use `### Heading` sections only when the answer has 2+ natural groupings (e.g. "What it does" / "How to use it").',
     '- Use `- ` bullets for lists, `1.` for ordered/sequential steps.',
     '- Use **bold** for UI labels, settings, tab names, or key terms.',
-    '- Use `inline code` for file paths, identifiers, or short code; use ```fenced code blocks``` for multi-line code.',
+    '- Use `inline code` for file paths, identifiers, or very short snippets.',
+    '- For any multi-line code (Python, JavaScript, SQL, bash, etc.), use a fenced block with a language tag on the opening line, e.g. ```python then your code then ``` on its own line — never bury multi-line code in a single paragraph.',
     '- Keep tone warm, confident, practical. No filler, no apologies, no recap, no "I hope this helps".',
     '- Stop as soon as the question is answered. Depth over length.',
     '',
@@ -2230,6 +2233,70 @@ function renderMarkdownListItems(items) {
     ));
 }
 
+/** Fenced code block with toolbar + copy (clipboard API + textarea fallback). */
+function MarkdownFencedCode({ lang, text }) {
+    const [copied, setCopied] = useState(false);
+    const label = (lang || 'text').trim().toLowerCase() || 'text';
+
+    const handleCopy = useCallback(async () => {
+        const body = String(text ?? '');
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(body);
+            } else {
+                throw new Error('no clipboard');
+            }
+        } catch {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = body;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            } catch {
+                return;
+            }
+        }
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+    }, [text]);
+
+    return (
+        <div className="ai-code-block">
+            <div className="ai-code-block-toolbar">
+                <span className="ai-code-block-lang" title="Language hint for this snippet">
+                    {label}
+                </span>
+                <button
+                    type="button"
+                    className="ai-code-block-copy"
+                    onClick={handleCopy}
+                    title="Copy code to clipboard"
+                >
+                    {copied ? (
+                        <>
+                            <Check size={13} /> Copied
+                        </>
+                    ) : (
+                        <>
+                            <Copy size={13} /> Copy
+                        </>
+                    )}
+                </button>
+            </div>
+            <pre className="ai-md-pre ai-md-pre--block">
+                <code className={`ai-md-pre-code lang-${label.replace(/[^a-z0-9_-]/g, '') || 'text'}`}>
+                    {text}
+                </code>
+            </pre>
+        </div>
+    );
+}
+
 /** Top-level: avoids `switch` inside `.map((b,i)=>…)` (some minifier/runtime TDZ edge cases). */
 function renderAiMarkdownBlock(b, i) {
     switch (b.type) {
@@ -2255,13 +2322,7 @@ function renderAiMarkdownBlock(b, i) {
                 </ol>
             );
         case 'code':
-            return (
-                <pre key={i} className="ai-md-pre">
-                    <code className={`ai-md-pre-code lang-${b.lang || 'text'}`}>
-                        {b.text}
-                    </code>
-                </pre>
-            );
+            return <MarkdownFencedCode key={i} lang={b.lang} text={b.text} />;
         case 'hr':
             return <hr key={i} className="ai-md-hr" />;
         default:
@@ -2299,7 +2360,7 @@ function MarkdownContent({ text }) {
             const line = raw.replace(/\s+$/, '');
 
             // Fenced code block
-            const fence = /^```(\w+)?\s*$/.exec(line);
+            const fence = /^```([\w.-]*)\s*$/.exec(line);
             if (code) {
                 if (fence) {
                     out.push({ type: 'code', lang: code.lang, text: code.lines.join('\n') });
