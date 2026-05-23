@@ -1,11 +1,11 @@
 /**
- * Google Gemini API (Generative Language) — browser-side streaming chat.
- * API key is supplied by the user (localStorage) or VITE_GEMINI_API_KEY at build time.
+ * Hosted generative API (Generative Language REST) — browser-side streaming chat.
+ * API key: localStorage or VITE_GEMINI_API_KEY at build time.
  *
- * @see https://ai.google.dev/api/generate-content
+ * @see Vendor REST documentation for your generative API.
  */
 
-/** Google is phasing out 2.0 Flash for new API keys — use 2.5 as default. */
+/** Legacy 2.0 model ids are remapped — default is a current Flash-tier id. */
 export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 /** @type {Record<string, string>} */
@@ -33,8 +33,8 @@ export function normalizeGeminiModelId(id) {
 }
 
 export const GEMINI_MODEL_OPTIONS = [
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (recommended)' },
-    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+    { id: 'gemini-2.5-flash', label: 'Standard (recommended)' },
+    { id: 'gemini-2.5-flash-lite', label: 'Efficient (lower cost)' },
 ];
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -89,7 +89,7 @@ function extractTextFromSseDataLine(line) {
 }
 
 /**
- * Stream a chat completion from Gemini.
+ * Stream a chat completion from the hosted API.
  *
  * @param {object} opts
  * @param {string} opts.apiKey
@@ -111,14 +111,14 @@ export async function streamGeminiChat({
     onFirstChunk,
 }) {
     if (!apiKey?.trim()) {
-        throw new Error('Gemini API key is missing. Add your key in AI Agents → Gemini Flash.');
+        throw new Error('Cloud API key is missing. Add your key under AI Agents → Backend → Cloud API.');
     }
 
     const resolvedModel = normalizeGeminiModelId(model || DEFAULT_GEMINI_MODEL);
 
     const { contents, systemInstruction } = messagesToGeminiRequest(messages);
     if (!contents.length) {
-        throw new Error('No messages to send to Gemini.');
+        throw new Error('No messages to send to the cloud model.');
     }
 
     const body = {
@@ -153,12 +153,12 @@ export async function streamGeminiChat({
                 detail = await res.text();
             } catch { /* ignore */ }
         }
-        throw new Error(detail || `Gemini API error (${res.status})`);
+        throw new Error(detail || `Cloud API error (${res.status})`);
     }
 
     const reader = res.body?.getReader();
     if (!reader) {
-        throw new Error('Gemini response had no body (streaming unavailable).');
+        throw new Error('Cloud API response had no body (streaming unavailable).');
     }
 
     const decoder = new TextDecoder();

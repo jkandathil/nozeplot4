@@ -121,7 +121,7 @@ const CURATED_MODELS = [
         quality: 'good',
         dtypeWebGPU: 'q4f16',
         dtypeWasm: 'q4',
-        description: 'Google Gemma 3 1B. Good quality, WebGPU recommended.',
+        description: 'Gemma 3 1B. Good quality, WebGPU recommended.',
     },
     {
         id: 'onnx-community/SmolLM2-1.7B-Instruct',
@@ -229,7 +229,7 @@ const LS_BACKEND = 'ai-chat:backend';
 const LS_GEMINI_KEY = 'ai-chat:gemini-api-key';
 const LS_GEMINI_MODEL = 'ai-chat:gemini-model';
 
-/** `local` = on-device HF ONNX; `gemini` = Google Gemini Flash API */
+/** `local` = on-device HF ONNX; `gemini` = hosted cloud API (internal id; UI says "Cloud API"). */
 const BACKEND_LOCAL = 'local';
 const BACKEND_GEMINI = 'gemini';
 
@@ -623,7 +623,7 @@ export default function AIChatPage() {
     const isLoading = !isGeminiBackend && status === 'loading';
     const isGenerating = status === 'generating';
 
-    /* Gemini backend: ready when API key is set (no model download). */
+    /* Cloud backend: ready when API key is set (no model download). */
     useEffect(() => {
         if (!isGeminiBackend) return;
         if (isGenerating) return;
@@ -637,7 +637,7 @@ export default function AIChatPage() {
         }
     }, [isGeminiBackend, effectiveGeminiKey, geminiModel, isGenerating]);
 
-    /* Leaving Gemini: clear cloud "ready" state until a local model loads. */
+    /* Leaving cloud API: clear "ready" state until a local model loads. */
     useEffect(() => {
         if (isGeminiBackend || isLocalLoaded) return;
         if (loadedModelId.startsWith('gemini/')) {
@@ -766,7 +766,7 @@ export default function AIChatPage() {
         if (!isLoaded) {
             setErrorMsg(
                 isGeminiBackend
-                    ? 'Add your Gemini API key in the sidebar (or set VITE_GEMINI_API_KEY at build time).'
+                    ? 'Add your cloud API key in the sidebar (optional: set VITE_GEMINI_API_KEY when building).'
                     : 'Load a model first.'
             );
             return;
@@ -1114,7 +1114,7 @@ export default function AIChatPage() {
                     } else {
                         const msg = err?.message || String(err);
                         setErrorMsg(msg);
-                        finalizeAssistantMessageByRef(`**Gemini error:** ${msg}`, null, false);
+                        finalizeAssistantMessageByRef(`**Cloud API error:** ${msg}`, null, false);
                     }
                 } finally {
                     geminiAbortRef.current = null;
@@ -1281,12 +1281,12 @@ export default function AIChatPage() {
                                 disabled={isLoading || isGenerating}
                             >
                                 <option value={BACKEND_LOCAL}>On-device (Hugging Face ONNX)</option>
-                                <option value={BACKEND_GEMINI}>Gemini Flash (Google API)</option>
+                                <option value={BACKEND_GEMINI}>Cloud API (hosted model)</option>
                             </select>
 
                             {isGeminiBackend ? (
                                 <div className="ai-gemini-panel" style={{ marginTop: 10 }}>
-                                    <label className="ai-field-label">Gemini model</label>
+                                    <label className="ai-field-label">Cloud model</label>
                                     <select
                                         className="ai-select"
                                         value={geminiModel}
@@ -1306,26 +1306,19 @@ export default function AIChatPage() {
                                         className="ai-input"
                                         type="password"
                                         autoComplete="off"
-                                        placeholder="AIza… (from Google AI Studio)"
+                                        placeholder="Paste your API key"
                                         value={geminiApiKeyInput}
                                         onChange={(e) => setGeminiApiKeyInput(e.target.value)}
                                         disabled={isGenerating}
                                     />
                                     <p className="ai-field-hint">
-                                        Get a key at{' '}
-                                        <a
-                                            href="https://aistudio.google.com/apikey"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                        >
-                                            Google AI Studio
-                                        </a>
-                                        . Stored in this browser only. For team deploys you can set{' '}
-                                        <code>VITE_GEMINI_API_KEY</code> at build time instead.
+                                        Create a key in your provider’s developer console, then paste it here.
+                                        Stored in this browser only. For team builds you can inject{' '}
+                                        <code>VITE_GEMINI_API_KEY</code> at compile time (same as Firebase-style env vars).
                                     </p>
                                     {!effectiveGeminiKey && (
                                         <div className="ai-status-warn" style={{ marginTop: 8 }}>
-                                            <AlertTriangle size={12} /> Paste an API key to chat with Gemini.
+                                            <AlertTriangle size={12} /> Paste an API key to use the cloud assistant.
                                         </div>
                                     )}
                                     {effectiveGeminiKey && (
@@ -1612,7 +1605,7 @@ export default function AIChatPage() {
                                     <>
                                         <Cpu size={12} />{' '}
                                         {isGeminiBackend && !effectiveGeminiKey
-                                            ? 'Waiting for Gemini API key'
+                                            ? 'Waiting for cloud API key'
                                             : 'Idle'}
                                     </>
                                 )}
@@ -1792,7 +1785,7 @@ export default function AIChatPage() {
                             {isLoaded ? (
                                 isGeminiBackend ? (
                                     <>
-                                        <Zap size={11} /> {geminiModel} · Gemini API
+                                        <Zap size={11} /> {geminiModel} · Cloud API
                                     </>
                                 ) : (
                                     <>
@@ -1800,7 +1793,7 @@ export default function AIChatPage() {
                                     </>
                                 )
                             ) : isGeminiBackend ? (
-                                <>Add your Gemini API key in the sidebar to start chatting.</>
+                                <>Add your cloud API key in the sidebar to start chatting.</>
                             ) : (
                                 <>Pick a model on the left, then Download & Load to start chatting.</>
                             )}
@@ -1834,7 +1827,7 @@ export default function AIChatPage() {
                                 {isLoaded
                                     ? 'Ask anything.'
                                     : isGeminiBackend
-                                      ? 'Add your Gemini API key to start chatting.'
+                                      ? 'Add your cloud API key to start chatting.'
                                       : 'Load a model to start chatting.'}
                             </p>
                         </div>
@@ -1888,7 +1881,7 @@ export default function AIChatPage() {
                             isLoaded
                                 ? 'Ask anything… (Enter to send · Shift+Enter for newline)'
                                 : isGeminiBackend
-                                  ? 'Add Gemini API key in sidebar…'
+                                  ? 'Add cloud API key in sidebar…'
                                   : 'Load a model first to start chatting…'
                         }
                         value={input}

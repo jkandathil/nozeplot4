@@ -5,7 +5,8 @@ import {
     Activity, CheckSquare, Square, LineChart, FileSpreadsheet, Table2, Eye, FilePlus,
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
-    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu, LayoutGrid
+    Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu, LayoutGrid, ScanLine,
+    Thermometer, Syringe as SyringeIcon, Beaker
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -396,12 +397,16 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'flowLab', title: 'Flow Lab — 2D gas-path designer & CFD', Icon: Wind },
                         { page: 'circuitStudio', title: 'Circuit Studio — SPICE-style analog simulator', Icon: Cpu },
                         { page: 'pcbStudio', title: 'PCB Studio — 2-layer layout & Gerber export', Icon: LayoutGrid },
+                        { page: 'memsMaskStudio', title: 'MEMS Mask Studio — multilayer lithography layout', Icon: ScanLine },
+                        { page: 'thermalStudio', title: 'Thermal Studio — 2D MEMS hotplate heat-equation solver', Icon: Thermometer },
+                        { page: 'printer', title: 'Printer — syringe pump control for microdrop printing', Icon: SyringeIcon },
+                        { page: 'hspStudio', title: 'HSP Studio — Hansen solubility parameter workbench', Icon: Beaker },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
                         { page: 'recoveryAnalysis', title: 'Drift Map — baseline drift & recovery', Icon: Activity },
                         { page: 'mlStudio', title: 'FeNOze ML Studio', Icon: Brain },
                         { page: 'tsnePage', title: 't-SNE explorer', Icon: Atom },
-                        { page: 'aiChat', title: 'AI Agents — on-device chat with Gemma / Llama / Qwen', Icon: Bot },
+                        { page: 'aiChat', title: 'AI Agents — local models or cloud API chat', Icon: Bot },
                         { page: 'help', title: 'Help', Icon: BookOpen },
                     ].map(({ page, title, Icon }) => {
                         const showFlowLabDot = page === 'flowLab' && flowLabRunning;
@@ -609,6 +614,34 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="PCB Studio — board outline, footprints, manual route, Gerber + drill ZIP"
                 >
                     <LayoutGrid size={13} /> PCB Studio
+                </button>
+                <button
+                    onClick={() => onPageChange?.('memsMaskStudio')}
+                    {...toolBtnProps(activePage === 'memsMaskStudio', 'rgba(45, 212, 191, 0.14)', '#5eead4')}
+                    title="MEMS Mask Studio — multilayer mask layout (µm), lithography-oriented editor"
+                >
+                    <ScanLine size={13} /> MEMS Mask
+                </button>
+                <button
+                    onClick={() => onPageChange?.('thermalStudio')}
+                    {...toolBtnProps(activePage === 'thermalStudio', 'rgba(251, 146, 60, 0.16)', '#fb923c')}
+                    title="Thermal Studio — 2D MEMS micro-hotplate heat-equation solver with full vector CAD"
+                >
+                    <Thermometer size={13} /> Thermal
+                </button>
+                <button
+                    onClick={() => onPageChange?.('printer')}
+                    {...toolBtnProps(activePage === 'printer', 'rgba(168, 85, 247, 0.18)', '#c084fc')}
+                    title="Printer — control the Kloehn / Cavro syringe pump over Web Serial; program drop volumes (100-500 nL) and aspirate/dispense cycles"
+                >
+                    <SyringeIcon size={13} /> Printer
+                </button>
+                <button
+                    onClick={() => onPageChange?.('hspStudio')}
+                    {...toolBtnProps(activePage === 'hspStudio', 'rgba(34, 211, 238, 0.18)', '#22d3ee')}
+                    title="HSP Studio — Hansen Solubility Parameters: 3D solvent space, sphere fitting, blend optimizer, RED calculator"
+                >
+                    <Beaker size={13} /> HSP Studio
                 </button>
                 <button
                     onClick={() => onPageChange?.('normalize')}
@@ -833,7 +866,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         boxShadow: activePage === 'aiChat' ? '0 0 10px rgba(99,102,241,0.2)' : 'none',
                         transition: 'all 0.15s',
                     }}
-                    title="AI Agents — on-device chat (Gemma, Llama, Qwen, Phi, SmolLM)"
+                    title="AI Agents — local ONNX models or optional cloud API"
                 >
                     <Bot size={16} />
                 </button>
