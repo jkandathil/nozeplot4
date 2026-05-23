@@ -5,11 +5,30 @@
  * @see https://ai.google.dev/api/generate-content
  */
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+/** Google is phasing out 2.0 Flash for new API keys — use 2.5 as default. */
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+
+/** @type {Record<string, string>} */
+const DEPRECATED_GEMINI_MODEL_IDS = {
+    'gemini-2.0-flash': 'gemini-2.5-flash',
+    'gemini-2.0-flash-001': 'gemini-2.5-flash',
+    'gemini-2.0-flash-lite': 'gemini-2.5-flash-lite',
+    'gemini-2.0-flash-lite-001': 'gemini-2.5-flash-lite',
+};
+
+/**
+ * Map retired model ids (saved in localStorage / old builds) to current ids.
+ * @param {string | undefined} id
+ */
+export function normalizeGeminiModelId(id) {
+    const t = String(id || '').trim();
+    if (!t) return DEFAULT_GEMINI_MODEL;
+    return DEPRECATED_GEMINI_MODEL_IDS[t] || t;
+}
 
 export const GEMINI_MODEL_OPTIONS = [
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (recommended)' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
 ];
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -78,7 +97,7 @@ function extractTextFromSseDataLine(line) {
  */
 export async function streamGeminiChat({
     apiKey,
-    model = DEFAULT_GEMINI_MODEL,
+    model,
     messages,
     params = {},
     signal,
@@ -88,6 +107,8 @@ export async function streamGeminiChat({
     if (!apiKey?.trim()) {
         throw new Error('Gemini API key is missing. Add your key in AI Agents → Gemini Flash.');
     }
+
+    const resolvedModel = normalizeGeminiModelId(model || DEFAULT_GEMINI_MODEL);
 
     const { contents, systemInstruction } = messagesToGeminiRequest(messages);
     if (!contents.length) {
@@ -104,7 +125,7 @@ export async function streamGeminiChat({
         },
     };
 
-    const url = `${API_BASE}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey.trim())}`;
+    const url = `${API_BASE}/models/${encodeURIComponent(resolvedModel)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey.trim())}`;
     const started = Date.now();
     let firstChunkAt = null;
     let fullText = '';

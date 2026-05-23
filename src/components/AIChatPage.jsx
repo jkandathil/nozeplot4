@@ -38,6 +38,7 @@ import {
 import {
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODEL_OPTIONS,
+    normalizeGeminiModelId,
     resolveGeminiApiKey,
     streamGeminiChat,
 } from '../ai/geminiChat.js';
@@ -364,8 +365,8 @@ export default function AIChatPage() {
 
     const [backend, setBackend] = useState(() => loadLS(LS_BACKEND, BACKEND_LOCAL));
     const [geminiApiKeyInput, setGeminiApiKeyInput] = useState(() => loadLS(LS_GEMINI_KEY, ''));
-    const [geminiModel, setGeminiModel] = useState(
-        () => loadLS(LS_GEMINI_MODEL, DEFAULT_GEMINI_MODEL)
+    const [geminiModel, setGeminiModel] = useState(() =>
+        normalizeGeminiModelId(loadLS(LS_GEMINI_MODEL, DEFAULT_GEMINI_MODEL))
     );
     const geminiAbortRef = useRef(null);
 
@@ -2236,6 +2237,45 @@ function renderMarkdownListItems(items) {
     ));
 }
 
+/** Top-level: avoids `switch` inside `.map((b,i)=>…)` (some minifier/runtime TDZ edge cases). */
+function renderAiMarkdownBlock(b, i) {
+    switch (b.type) {
+        case 'h1':
+            return <h2 key={i} className="ai-md-h1">{renderInline(b.text)}</h2>;
+        case 'h2':
+            return <h3 key={i} className="ai-md-h2">{renderInline(b.text)}</h3>;
+        case 'h3':
+        case 'h4':
+            return <h4 key={i} className="ai-md-h3">{renderInline(b.text)}</h4>;
+        case 'p':
+            return <p key={i} className="ai-md-p">{renderInline(b.text)}</p>;
+        case 'ul':
+            return (
+                <ul key={i} className="ai-md-ul">
+                    {renderMarkdownListItems(b.items)}
+                </ul>
+            );
+        case 'ol':
+            return (
+                <ol key={i} className="ai-md-ol">
+                    {renderMarkdownListItems(b.items)}
+                </ol>
+            );
+        case 'code':
+            return (
+                <pre key={i} className="ai-md-pre">
+                    <code className={`ai-md-pre-code lang-${b.lang || 'text'}`}>
+                        {b.text}
+                    </code>
+                </pre>
+            );
+        case 'hr':
+            return <hr key={i} className="ai-md-hr" />;
+        default:
+            return null;
+    }
+}
+
 function MarkdownContent({ text }) {
     const blocks = useMemo(() => {
         /* Run the LaTeX → Unicode pass BEFORE block parsing so math
@@ -2334,43 +2374,7 @@ function MarkdownContent({ text }) {
 
     return (
         <div className="ai-md">
-            {blocks.map((b, i) => {
-                switch (b.type) {
-                    case 'h1':
-                        return <h2 key={i} className="ai-md-h1">{renderInline(b.text)}</h2>;
-                    case 'h2':
-                        return <h3 key={i} className="ai-md-h2">{renderInline(b.text)}</h3>;
-                    case 'h3':
-                    case 'h4':
-                        return <h4 key={i} className="ai-md-h3">{renderInline(b.text)}</h4>;
-                    case 'p':
-                        return <p key={i} className="ai-md-p">{renderInline(b.text)}</p>;
-                    case 'ul':
-                        return (
-                            <ul key={i} className="ai-md-ul">
-                                {renderMarkdownListItems(b.items)}
-                            </ul>
-                        );
-                    case 'ol':
-                        return (
-                            <ol key={i} className="ai-md-ol">
-                                {renderMarkdownListItems(b.items)}
-                            </ol>
-                        );
-                    case 'code':
-                        return (
-                            <pre key={i} className="ai-md-pre">
-                                <code className={`ai-md-pre-code lang-${b.lang || 'text'}`}>
-                                    {b.text}
-                                </code>
-                            </pre>
-                        );
-                    case 'hr':
-                        return <hr key={i} className="ai-md-hr" />;
-                    default:
-                        return null;
-                }
-            })}
+            {blocks.map((b, i) => renderAiMarkdownBlock(b, i))}
         </div>
     );
 }
