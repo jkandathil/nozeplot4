@@ -152,6 +152,43 @@ const INDEX = buildBM25(KNOWLEDGE_CHUNKS);
 
 export const KNOWLEDGE_SIZE = KNOWLEDGE_CHUNKS.length;
 
+/** When set, retrieval uses this BM25 index instead of the bundled app corpus. */
+let OVERRIDE_INDEX = null;
+
+function activeRetrieveIndex() {
+    return OVERRIDE_INDEX || INDEX;
+}
+
+/**
+ * Replace BM25 retrieval with a user-uploaded corpus (see `rag-bundle` JSON in scripts/llm_local).
+ * Pass `null` to clear.
+ */
+export function setUploadedKnowledgeChunks(chunks) {
+    if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
+        OVERRIDE_INDEX = null;
+        return;
+    }
+    const normalized = chunks
+        .map((c, i) => ({
+            id: String(c.id ?? `upload:${i}`),
+            title: String(c.title || `Chunk ${i + 1}`),
+            source: String(c.source || 'Uploaded RAG'),
+            anchor: c.anchor ?? null,
+            text: String(c.text || '').trim(),
+        }))
+        .filter((c) => c.text.length > 20);
+    OVERRIDE_INDEX = normalized.length ? buildBM25(normalized) : null;
+}
+
+export function clearUploadedKnowledgeBase() {
+    OVERRIDE_INDEX = null;
+}
+
+/** Chunk count for UI: bundled corpus or uploaded override. */
+export function getEffectiveKnowledgeSize() {
+    return OVERRIDE_INDEX ? OVERRIDE_INDEX.size : KNOWLEDGE_SIZE;
+}
+
 /* ------------- Query expansion -------------------------------------
    Users ask natural questions but our corpus uses specific terms
    ("sensitivity map", "drift map", "aroma analysis"). Expanding the
@@ -203,7 +240,7 @@ function expandQuery(query) {
  */
 export function retrieveContext(query, { k = 4 } = {}) {
     const expanded = expandQuery(query);
-    return INDEX.searchWithDiversity(expanded, k);
+    return activeRetrieveIndex().searchWithDiversity(expanded, k);
 }
 
 function sentenceize(text) {
