@@ -2228,6 +2228,14 @@ function renderInline(text) {
     return out;
 }
 
+/** Markdown list lines → `<li>` nodes. Keeps list rendering out of `switch` cases so
+ *  minifiers never merge two `(it) => …` callbacks into one scope (TDZ: "Cannot access 'it'…"). */
+function renderMarkdownListItems(items) {
+    return items.map((line, j) => (
+        <li key={j}>{renderInline(line)}</li>
+    ));
+}
+
 function MarkdownContent({ text }) {
     const blocks = useMemo(() => {
         /* Run the LaTeX → Unicode pass BEFORE block parsing so math
@@ -2340,17 +2348,13 @@ function MarkdownContent({ text }) {
                     case 'ul':
                         return (
                             <ul key={i} className="ai-md-ul">
-                                {b.items.map((it, j) => (
-                                    <li key={j}>{renderInline(it)}</li>
-                                ))}
+                                {renderMarkdownListItems(b.items)}
                             </ul>
                         );
                     case 'ol':
                         return (
                             <ol key={i} className="ai-md-ol">
-                                {b.items.map((it, j) => (
-                                    <li key={j}>{renderInline(it)}</li>
-                                ))}
+                                {renderMarkdownListItems(b.items)}
                             </ol>
                         );
                     case 'code':
