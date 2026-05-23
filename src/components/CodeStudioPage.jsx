@@ -132,6 +132,20 @@ function parsePackageSpecs(raw) {
     return [...new Set(parts)];
 }
 
+/**
+ * Pyodide `setStdout({ batched })` with line-buffered streams often emits one logical line per
+ * callback without a trailing `\n`. Concatenating those chunks merges runs onto one visual line;
+ * insert a newline only when the boundary does not already include one.
+ */
+function appendCapturedStream(prev, chunk) {
+    if (!chunk) return prev;
+    if (!prev) return chunk;
+    if (!prev.endsWith('\n') && !chunk.startsWith('\n')) {
+        return `${prev}\n${chunk}`;
+    }
+    return prev + chunk;
+}
+
 export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDeleteFile }) {
     const codesFolderId = useMemo(() => {
         const f = workspaceFiles.find((x) => x?.isFolder && String(x.name) === CODES_WORKSPACE_FOLDER_NAME);
@@ -230,14 +244,15 @@ export default function CodeStudioPage({ workspaceFiles = [], onSaveCode, onDele
             py.setStdout({
                 batched: (s) => {
                     flushSync(() => {
-                        setOutput((prev) => prev + s);
+                        setOutput((prev) => appendCapturedStream(prev, s));
                     });
                 },
             });
             py.setStderr({
                 batched: (s) => {
                     flushSync(() => {
-                        setOutput((prev) => prev + (s ? `[stderr] ${s}` : ''));
+                        const piece = s ? `[stderr] ${s}` : '';
+                        setOutput((prev) => appendCapturedStream(prev, piece));
                     });
                 },
             });
