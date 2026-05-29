@@ -28,6 +28,7 @@ import {
     Eye,
     Crosshair,
     Wind,
+    CircuitBoard,
 } from 'lucide-react';
 import './HelpPage.css';
 
@@ -1637,6 +1638,38 @@ export const GUIDE_SECTIONS = [
             'Choose the correct **Baud rate** for your device, then click **Connect**.',
             'Incoming data appears in the log panel in real time. To send a command, type it in the send box and press **Send** (or Ctrl/⌘+Enter). Choose the line ending your firmware expects.',
             'After disconnecting, click **Save CSV** or **Save TXT** to export the timestamped log to your workspace.',
+        ],
+    },
+    {
+        id: 'arduino-flasher',
+        icon: CircuitBoard,
+        title: 'Arduino & ESP32 programmer',
+        subtitle: 'Write, AI-generate, and flash sketches over USB',
+        intro:
+            '**MCU Flash** is a browser-based programmer for Arduino-family AVR boards (Uno, Nano, Pro Mini) and the ESP32 / ESP8266 family. Edit Arduino C/C++ in a Monaco editor, get a complete sketch from the built-in **MCU agent**, then flash firmware directly over the **Web Serial API** — no Arduino IDE install. Because a browser cannot run a C/C++ toolchain, **compiling source** is handled either by uploading a precompiled `.hex`/`.bin`, or by pointing the app at an optional remote **compile server** (an arduino-cli wrapper).',
+        fundamentals: [
+            '**Flashing in the browser:** ESP32/ESP8266 use Espressif\'s **esptool** protocol (via `esptool-js`); AVR boards use the **STK500 v1** bootloader protocol. Both run over Web Serial in Chromium browsers (Chrome / Edge) over HTTPS or localhost.',
+            '**Compiling needs a toolchain:** the browser cannot compile. Either **Upload** a precompiled `.hex` (AVR) / `.bin` (ESP), or set a **compile server URL** in Settings so the AI loop can build from source.',
+            '**Compile server contract:** `POST /compile` with `{ fqbn, sketch }`, returning JSON with base64 `hex` (AVR) or `bin` / `parts` (ESP). Any small arduino-cli wrapper that honors this contract works.',
+            '**AI agent:** the MCU agent reuses your **AI Agents** backend (local model or Cloud API) and writes a complete sketch into the editor. With **Auto build & flash** on, after each reply it compiles (if a server is set), flashes the connected board, then reads serial output and reports back.',
+            '**Board support:** Mega 2560 (STK500v2) and Leonardo/Micro (Caterina/AVR109) can be edited and serial-monitored, but in-browser flashing for them is not implemented yet.',
+        ],
+        implemented: [
+            'Monaco C/C++ editor with multiple sketches saved per browser, plus **Save to workspace** (folder `Arduino`)',
+            'Board selector: Arduino Uno / Nano / Pro Mini / Duemilanove · ESP32 / S2 / S3 / C3 / C6 · ESP8266',
+            'ESP flashing via esptool-js (chip auto-detect, compressed write, hard reset)',
+            'AVR flashing via STK500 v1 (auto-reset, sync, paged program, signature check)',
+            'Upload precompiled **.hex** (AVR) or **.bin** (ESP) and flash directly',
+            'Optional remote **compile server** to build sketches from source',
+            'Built-in serial monitor (send box, line endings, live log) with auto-reconnect after flashing',
+            'MCU agent: AI sketch authoring, apply-to-editor, and a **Build ▶ Flash ▶ Observe** pipeline',
+        ],
+        steps: [
+            'Pick your **board** in the toolbar. Click **Select port** and choose the device in the browser dialog.',
+            'Write a sketch, or ask the **MCU agent** (e.g. “blink the onboard LED and print uptime”). Generated code is applied to the editor.',
+            'To build from source, open **Settings** and set a **compile server URL**; otherwise click **Binary** to upload a precompiled `.hex`/`.bin`.',
+            'Click **Flash**. Watch progress and logs in the **Console**; switch to **Serial Monitor** to see device output.',
+            'For an autonomous loop, enable **Auto build & flash after replies**, or click **Build ▶ Flash ▶ Observe** to run compile → flash → read-serial and feed results back to the agent.',
         ],
     },
     {

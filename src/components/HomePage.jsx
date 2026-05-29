@@ -16,6 +16,7 @@ import {
     Sparkles,
     Moon,
     Sun,
+    CircuitBoard,
 } from 'lucide-react';
 import {
     fileBasename,
@@ -70,6 +71,13 @@ const LAUNCHERS = [
         tint: '#22d3ee',
         title: 'Serial Monitor',
         desc: 'Raw UART — read, send, and save logs.',
+    },
+    {
+        id: 'arduinoFlasher',
+        icon: CircuitBoard,
+        tint: '#fb923c',
+        title: 'MCU Flash',
+        desc: 'Arduino & ESP32 — AI sketches, flash over USB.',
     },
 ];
 

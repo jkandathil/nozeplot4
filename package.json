@@ -23,6 +23,7 @@
     "@xyflow/react": "^12.10.1",
     "clipper-lib": "^6.4.2",
     "dxf-parser": "^1.1.2",
+    "esptool-js": "^0.6.0",
     "file-saver": "^2.0.5",
     "firebase": "^12.11.0",
     "framer-motion": "^12.34.0",

@@ -6,7 +6,7 @@ import {
     Network, Calculator as CalcIcon, FlaskConical, Brain, Layers, DownloadCloud, MonitorUp, FolderPlus, Blend,
     PanelLeftClose, PanelLeftOpen, Target, BookOpen, Usb, Download, Atom, Terminal, Code2,
     Sparkles, Moon, Sun, Home as HomeIcon, Wind, Bot, Cpu, LayoutGrid, ScanLine,
-    Thermometer, Syringe as SyringeIcon, Beaker
+    Thermometer, Syringe as SyringeIcon, Beaker, CircuitBoard
 } from 'lucide-react';
 import './Sidebar.css';
 import { readStoredTheme, cycleTheme } from '../utils/theme.js';
@@ -400,6 +400,7 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                         { page: 'memsMaskStudio', title: 'MEMS Mask Studio — multilayer lithography layout', Icon: ScanLine },
                         { page: 'thermalStudio', title: 'Thermal Studio — 2D MEMS hotplate heat-equation solver', Icon: Thermometer },
                         { page: 'printer', title: 'Printer — syringe pump control for microdrop printing', Icon: SyringeIcon },
+                        { page: 'arduinoFlasher', title: 'MCU Flash — Arduino & ESP32 programmer/flasher', Icon: CircuitBoard },
                         { page: 'hspStudio', title: 'HSP Studio — Hansen solubility parameter workbench', Icon: Beaker },
                         { page: 'gasMath', title: 'Gas dilution math', Icon: FlaskConical },
                         { page: 'aromaAnalysis', title: 'Aroma analysis', Icon: LineChart },
@@ -741,6 +742,13 @@ const Sidebar = ({ files, onFileSelect, selectedFileId, compareFileIds = [], onU
                     title="Read any USB serial device line-by-line (Web Serial)"
                 >
                     <Terminal size={13} /> Serial
+                </button>
+                <button
+                    onClick={() => onPageChange?.('arduinoFlasher')}
+                    {...toolBtnProps(activePage === 'arduinoFlasher', 'rgba(251,146,60,0.16)', '#fb923c')}
+                    title="Arduino & ESP32 — write/AI sketches and flash over Web Serial"
+                >
+                    <CircuitBoard size={13} /> MCU Flash
                 </button>
             </div>
 

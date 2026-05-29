@@ -45,6 +45,7 @@ import HspStudioPage from './components/HspStudioPage';
 import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
+import ArduinoFlasherPage from './components/ArduinoFlasherPage';
 import SpreadsheetPage from './components/SpreadsheetPage';
 import FileViewerPage from './components/FileViewerPage';
 import { nanoid } from 'nanoid';
@@ -78,13 +79,16 @@ import {
 } from './utils/fenoseSyntheticDataset.js';
 
 const RESERVED_WORKSPACE_FOLDER_NAMES = new Set(
-  [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME, CODES_WORKSPACE_FOLDER_NAME].map((s) =>
+  [FENOSE_MODEL_FOLDER_NAME, FENOSE_SYNTHETIC_FOLDER_NAME, CODES_WORKSPACE_FOLDER_NAME, 'Arduino'].map((s) =>
     String(s).toLowerCase()
   )
 );
 
 /** Serial monitor exports (CSV/TXT with timestamps). */
 const SERIAL_DATA_FOLDER_NAME = 'serial_data';
+
+/** Arduino & ESP32 programmer: saved sketches and firmware binaries. */
+const ARDUINO_WORKSPACE_FOLDER_NAME = 'Arduino';
 
 /** Keep sidebar metadata but drop row payloads so huge FeNOse_synthetic/ folders do not OOM React on refresh. */
 function workspaceFilesForReactState(all) {
@@ -984,6 +988,67 @@ function App() {
     setFiles(workspaceFilesForReactState(refreshed));
     return { fileId: outId, folderId };
   }, []);
+
+  /** Arduino programmer: ensure the `Arduino` workspace folder exists. */
+  const ensureArduinoFolder = useCallback(async () => {
+    const existing = await fileManager.getAllFiles();
+    let folderId = existing.find(
+      (f) => f.isFolder && String(f.name) === ARDUINO_WORKSPACE_FOLDER_NAME
+    )?.id;
+    if (!folderId) {
+      folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
+      await fileManager.saveFile({
+        id: folderId,
+        name: ARDUINO_WORKSPACE_FOLDER_NAME,
+        isFolder: true,
+        createdAt: Date.now(),
+      });
+    }
+    return folderId;
+  }, []);
+
+  /** Arduino programmer: save a sketch (text) under workspace folder `Arduino`. */
+  const handleSaveArduinoSketchToWorkspace = useCallback(
+    async (fileName, content) => {
+      if (!fileName || typeof content !== 'string') return;
+      const folderId = await ensureArduinoFolder();
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const nativeFile = new File([blob], fileName, { type: 'text/plain' });
+      await fileManager.saveFile({
+        id: Math.random().toString(36).substr(2, 9),
+        name: fileName,
+        folderId: String(folderId),
+        file: nativeFile,
+        csvText: content,
+        size: blob.size,
+        createdAt: Date.now(),
+      });
+      const refreshed = await fileManager.getAllFiles();
+      setFiles(workspaceFilesForReactState(refreshed));
+    },
+    [ensureArduinoFolder]
+  );
+
+  /** Arduino programmer: save firmware bytes (.hex/.bin) under workspace folder `Arduino`. */
+  const handleSaveArduinoBinaryToWorkspace = useCallback(
+    async (fileName, bytes) => {
+      if (!fileName || !bytes) return;
+      const folderId = await ensureArduinoFolder();
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const nativeFile = new File([blob], fileName, { type: 'application/octet-stream' });
+      await fileManager.saveFile({
+        id: Math.random().toString(36).substr(2, 9),
+        name: fileName,
+        folderId: String(folderId),
+        file: nativeFile,
+        size: blob.size,
+        createdAt: Date.now(),
+      });
+      const refreshed = await fileManager.getAllFiles();
+      setFiles(workspaceFilesForReactState(refreshed));
+    },
+    [ensureArduinoFolder]
+  );
 
   /**
    * Save a JSON payload to the workspace.
@@ -1935,6 +2000,14 @@ function App() {
                     content = (
                       <SerialMonitorPage
                         onSaveSerialLogToWorkspace={handleSaveSerialLogToWorkspace}
+                      />
+                    );
+                    break;
+                  case 'arduinoFlasher':
+                    content = (
+                      <ArduinoFlasherPage
+                        onSaveSketch={handleSaveArduinoSketchToWorkspace}
+                        onSaveBinary={handleSaveArduinoBinaryToWorkspace}
                       />
                     );
                     break;
