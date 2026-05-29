@@ -912,17 +912,35 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                                                 const isActive = isActiveProj && f.id === activeFile?.id;
                                                 return (
                                                     <li key={f.id} className={isActive ? 'is-active' : ''}>
-                                                        <button
-                                                            className="arduino-file-btn"
-                                                            onClick={() => {
-                                                                setActiveProjectId(proj.id);
-                                                                setActiveFileId(f.id);
-                                                            }}
-                                                            title={f.name}
-                                                        >
-                                                            <FileCode2 size={12} /> {f.name}
-                                                            {isMain ? <Star size={10} className="arduino-main-star" /> : null}
-                                                        </button>
+                                                        {renamingId === f.id ? (
+                                                            <input
+                                                                className="arduino-tree-rename"
+                                                                autoFocus
+                                                                defaultValue={f.name}
+                                                                onBlur={(e) => {
+                                                                    const v = e.target.value.trim();
+                                                                    if (v && v !== f.name) renameFile(proj.id, f.id, uniqueFileName({ files: proj.files.filter((x) => x.id !== f.id) }, v));
+                                                                    setRenamingId(null);
+                                                                }}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') e.target.blur();
+                                                                    if (e.key === 'Escape') setRenamingId(null);
+                                                                }}
+                                                            />
+                                                        ) : (
+                                                            <button
+                                                                className="arduino-file-btn"
+                                                                onClick={() => {
+                                                                    setActiveProjectId(proj.id);
+                                                                    setActiveFileId(f.id);
+                                                                }}
+                                                                onDoubleClick={() => setRenamingId(f.id)}
+                                                                title={`${f.name} — double-click to rename`}
+                                                            >
+                                                                <FileCode2 size={12} /> {f.name}
+                                                                {isMain ? <Star size={10} className="arduino-main-star" /> : null}
+                                                            </button>
+                                                        )}
                                                         {!isMain ? (
                                                             <button
                                                                 className="arduino-icon-btn arduino-file-main"
