@@ -40,6 +40,7 @@ export function isApplyCodeToArduinoEnabled() {
 }
 
 const ARDUINO_FENCE_LANGS = ['arduino', 'ino', 'cpp', 'c++', 'cxx', 'c', 'cc', 'h', 'hpp'];
+const FILE_NAME_RE = /[\w./-]+\.(?:ino|pde|cpp|cc|cxx|c|hpp|hh|h)/i;
 
 /** Prefer Arduino/C/C++ blocks; else the longest block. */
 export function pickBestArduinoBlock(blocks) {
@@ -55,6 +56,53 @@ export function extractBestArduinoSketch(markdown) {
 
 export function markdownHasArduinoCode(markdown) {
     return extractFencedCodeBlocks(markdown).length > 0;
+}
+
+function fileNameFromInfoString(info) {
+    if (!info) return null;
+    // tokens like:  cpp main.ino   |   cpp:sensor.h   |   cpp title=foo.cpp
+    const cleaned = info.replace(/title=/gi, ' ').replace(/[:=]/g, ' ');
+    const m = cleaned.match(FILE_NAME_RE);
+    return m ? m[0].split(/[\\/]/).pop() : null;
+}
+
+function fileNameFromContext(before) {
+    if (!before) return null;
+    const lines = before.split('\n').filter((l) => l.trim());
+    // search last few non-empty lines for an explicit filename
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i -= 1) {
+        const line = lines[i];
+        if (/file\s*[:=]/i.test(line) || /\b(create|new|update|add)\b/i.test(line) || /^[#*>\s`]*[\w./-]+\.\w+/.test(line)) {
+            const m = line.match(FILE_NAME_RE);
+            if (m) return m[0].split(/[\\/]/).pop();
+        }
+    }
+    return null;
+}
+
+/**
+ * Extract one or more named code files from an assistant reply. Filenames come
+ * from the fence info string (```cpp main.ino), or a preceding line
+ * (e.g. **File: sensor.h**). Returns `[{ lang, body, name|null, isMain }]`.
+ */
+export function extractNamedCodeFiles(markdown) {
+    const s = String(markdown || '');
+    const fence = /```([^\n]*)\n([\s\S]*?)```/g;
+    const out = [];
+    let m;
+    while ((m = fence.exec(s)) !== null) {
+        const info = (m[1] || '').trim();
+        const body = String(m[2] || '').replace(/\n$/, '');
+        if (!body.trim()) continue;
+        const lang = info.split(/\s+/)[0]?.toLowerCase() || '';
+        const before = s.slice(Math.max(0, m.index - 240), m.index);
+        const name = fileNameFromInfoString(info) || fileNameFromContext(before);
+        const hasEntry = /\bvoid\s+setup\s*\(/.test(body) && /\bvoid\s+loop\s*\(/.test(body);
+        out.push({ lang, body, name: name || null, isMain: hasEntry });
+    }
+    // keep only code-ish blocks (skip pure shell/json/etc. when cpp blocks exist)
+    const codeish = out.filter((b) => !b.lang || ARDUINO_FENCE_LANGS.includes(b.lang) || b.name);
+    return codeish.length ? codeish : out;
 }
 
 function sleep(ms) {

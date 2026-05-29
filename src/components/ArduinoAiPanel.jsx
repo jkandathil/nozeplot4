@@ -32,10 +32,16 @@ const BACKEND_GEMINI = 'gemini';
 
 const FALLBACK_SYSTEM_PROMPT = [
     'You are NozeMCU, an embedded-systems assistant in the NozePlot Arduino & ESP32 Programmer.',
-    'You write and debug Arduino-framework C/C++ sketches for AVR (Uno/Nano) and ESP32/ESP8266 boards.',
-    'Always return a COMPLETE compilable sketch in a single ```cpp fenced block (include setup() and loop()).',
-    'Prefer the Arduino core APIs; for ESP32 use the ESP32 Arduino core. Keep pin choices explicit and safe.',
-    'Be concise; explain only what matters, then give the full sketch.',
+    'You build and debug Arduino-framework C/C++ projects for AVR (Uno/Nano) and ESP32/ESP8266 boards.',
+    '',
+    'OUTPUT RULES (important — the editor parses these):',
+    '- Return each file as its own fenced code block whose info string is the FILENAME, e.g.',
+    '  ```cpp main.ino  …  ```   and   ```cpp sensors.h  …  ```   and   ```cpp sensors.cpp  …  ```',
+    '- Always include the main sketch as a `.ino` file containing setup() and loop().',
+    '- For larger apps, SPLIT the code into multiple files (headers + implementation + the .ino). Emit every file you change as a full file (not a diff).',
+    '- Keep each file complete and compilable; do not abbreviate with "// ...".',
+    '- If external libraries are needed, name them in prose (e.g. "Add library: ArduinoJson") so the user can install them.',
+    'Prefer Arduino core APIs; for ESP32 use the ESP32 Arduino core. Keep pin choices explicit and safe.',
 ].join('\n');
 
 function loadLS(key, fallback) {
@@ -91,16 +97,21 @@ function clip(s, max) {
     return t.length <= max ? t : `${t.slice(0, max)}\n\n… [truncated]`;
 }
 
-function buildSketchContextBlock({ board, sketch, console: consoleLog, isCloud }) {
-    const maxCode = isCloud ? 48000 : 9000;
+function buildProjectContextBlock({ board, project, console: consoleLog, isCloud }) {
+    const totalBudget = isCloud ? 60000 : 11000;
+    const files = project?.files || [];
+    const perFile = Math.max(800, Math.floor(totalBudget / Math.max(1, files.length)));
+    const fileBlocks = files.map((f) => {
+        const lang = /\.c$/i.test(f.name) ? 'c' : 'cpp';
+        return [`### ${f.name}${f.isMain ? '  *(main)*' : ''} (\`${lang}\`)`, '```' + lang, clip(f.content || '// (empty)', perFile), '```'].join('\n');
+    });
     return [
-        '## Target & sketch',
+        '## Project',
         `- **Board:** ${board || '(none selected)'}`,
+        `- **Project:** ${project?.name || '(untitled)'} — ${files.length} file(s)`,
+        project?.libraries?.length ? `- **Libraries:** ${project.libraries.join(', ')}` : '- **Libraries:** (none)',
         '',
-        '### Current sketch (`cpp`)',
-        '```cpp',
-        clip(sketch || '// (empty)', maxCode),
-        '```',
+        ...fileBlocks,
         consoleLog?.trim() ? `\n### Recent compile/flash/serial log\n\`\`\`text\n${clip(consoleLog, 4000)}\n\`\`\`` : '',
     ].join('\n');
 }
@@ -108,10 +119,10 @@ function buildSketchContextBlock({ board, sketch, console: consoleLog, isCloud }
 /**
  * @param {object} props
  * @param {string} props.boardName
- * @param {() => string} props.getSketch
+ * @param {() => { name: string, files: {name:string,content:string,isMain:boolean}[], libraries: string[] }} props.getProject
  * @param {() => string} [props.getConsole]
  */
-export default function ArduinoAiPanel({ boardName, getSketch, getConsole }) {
+export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
     const [collapsed, setCollapsed] = useState(false);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
@@ -334,9 +345,9 @@ export default function ArduinoAiPanel({ boardName, getSketch, getConsole }) {
                 return;
             }
 
-            const snapshot = buildSketchContextBlock({
+            const snapshot = buildProjectContextBlock({
                 board: boardName,
-                sketch: getSketch?.() ?? '',
+                project: getProject?.() ?? { name: '', files: [], libraries: [] },
                 console: getConsole?.() ?? '',
                 isCloud: p.isGeminiBackend,
             });
@@ -420,7 +431,7 @@ export default function ArduinoAiPanel({ boardName, getSketch, getConsole }) {
 
             workerRef.current?.postMessage({ type: 'generate', messages: payload, params: p.params });
         },
-        [boardName, getSketch, getConsole, loadedModelId, workerStatus, finalizeAssistant, runAgentPipeline]
+        [boardName, getProject, getConsole, loadedModelId, workerStatus, finalizeAssistant, runAgentPipeline]
     );
 
     const handleSend = useCallback(() => {
@@ -495,8 +506,9 @@ export default function ArduinoAiPanel({ boardName, getSketch, getConsole }) {
                     <div className="code-studio-ai-empty">
                         <Bot size={28} aria-hidden />
                         <p>
-                            Ask for a sketch (e.g. “blink the onboard LED”, “read DHT22 and print JSON”, “ESP32 Wi-Fi scan”). The current
-                            sketch, board, and recent log are sent each time.
+                            Ask for a sketch or a whole app (e.g. “read DHT22 and serve JSON over Wi-Fi, split into files”). The full
+                            project (all files + libraries), board, and recent log are sent each time. Multi-file replies are applied
+                            across the project.
                         </p>
                     </div>
                 ) : (

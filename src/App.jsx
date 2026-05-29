@@ -2006,6 +2006,7 @@ function App() {
                   case 'arduinoFlasher':
                     content = (
                       <ArduinoFlasherPage
+                        workspaceFiles={files}
                         onSaveSketch={handleSaveArduinoSketchToWorkspace}
                         onSaveBinary={handleSaveArduinoBinaryToWorkspace}
                       />

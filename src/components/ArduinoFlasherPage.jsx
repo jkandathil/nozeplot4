@@ -10,13 +10,35 @@ import {
     Trash2,
     Plus,
     FileCode2,
+    FolderPlus,
+    Folder,
+    FolderOpen,
     Save,
     Settings2,
     Send,
     Loader2,
     HardDrive,
+    Star,
+    Library,
+    Download,
+    ChevronRight,
+    ChevronDown,
 } from 'lucide-react';
 import { BOARDS, DEFAULT_BOARD_ID, getBoardById, KNOWN_USB_VENDORS } from '../arduino/boards.js';
+import {
+    loadProjects,
+    persistProjects,
+    loadActiveProjectId,
+    persistActiveProjectId,
+    makeProject,
+    makeFile,
+    getMainFile,
+    extraFilesMap,
+    uniqueFileName,
+    isSketchFileName,
+    isMainCandidate,
+    DEFAULT_SKETCH,
+} from '../arduino/projects.js';
 import { flashAvr } from '../arduino/stk500.js';
 import { flashEsp } from '../arduino/esptoolFlasher.js';
 import { parseIntelHex, looksLikeIntelHex } from '../arduino/intelHex.js';
@@ -25,57 +47,18 @@ import { isWebSerialSupported } from '../arduino/serialIO.js';
 import {
     registerArduinoEditorApi,
     registerArduinoAgentActions,
-    extractBestArduinoSketch,
+    extractNamedCodeFiles,
 } from '../utils/arduinoStudioBridge.js';
+import { fileBasename } from '../utils/workspaceFilename.js';
 import ArduinoAiPanel from './ArduinoAiPanel.jsx';
 import './CodeStudioPage.css';
 import './ArduinoFlasherPage.css';
 
-const LS_FILES = 'arduino:files:v1';
-const LS_ACTIVE = 'arduino:active-file';
 const LS_BOARD = 'arduino:board';
-
-const DEFAULT_SKETCH = `// Blink — works on Uno/Nano (LED_BUILTIN) and most ESP32 boards.
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2  // common ESP32 onboard LED
-#endif
-
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_BUILTIN, OUTPUT);
-  Serial.println("NozePlot MCU: hello!");
-}
-
-void loop() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(500);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(500);
-  Serial.println("blink");
-}
-`;
-
 const BAUD_RATES = [9600, 19200, 38400, 57600, 74880, 115200, 230400, 460800, 921600];
 
-function loadFiles() {
-    try {
-        const raw = localStorage.getItem(LS_FILES);
-        if (raw) {
-            const arr = JSON.parse(raw);
-            if (Array.isArray(arr) && arr.length) return arr;
-        }
-    } catch {
-        /* ignore */
-    }
-    return [{ id: 'blink', name: 'blink.ino', content: DEFAULT_SKETCH }];
-}
-
-function persistFiles(files) {
-    try {
-        localStorage.setItem(LS_FILES, JSON.stringify(files));
-    } catch {
-        /* ignore */
-    }
+function langForFile(name) {
+    return /\.c$/i.test(name) ? 'c' : 'cpp';
 }
 
 function portLabel(port, index) {
@@ -92,16 +75,47 @@ function portLabel(port, index) {
     return `Port ${index + 1}`;
 }
 
-export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
-    const supported = isWebSerialSupported();
-    const [files, setFiles] = useState(loadFiles);
-    const [activeId, setActiveId] = useState(() => {
-        try {
-            return localStorage.getItem(LS_ACTIVE) || loadFiles()[0].id;
-        } catch {
-            return loadFiles()[0].id;
+/** Merge AI-extracted named files into a project's file list. */
+function applyExtractedFiles(project, extracted) {
+    let files = project.files.map((f) => ({ ...f }));
+    let mainId = project.mainFileId;
+    const mainName = getMainFile(project)?.name || 'main.ino';
+
+    const named = extracted.filter((b) => b.name);
+    const mainBlocks = extracted.filter((b) => !b.name && b.isMain);
+    const looseBlocks = extracted.filter((b) => !b.name && !b.isMain);
+
+    const upsert = (name, body, markMain) => {
+        const idx = files.findIndex((f) => f.name.toLowerCase() === name.toLowerCase());
+        if (idx >= 0) {
+            files[idx] = { ...files[idx], content: body };
+            if (markMain) mainId = files[idx].id;
+        } else {
+            const nf = makeFile(name, body);
+            files.push(nf);
+            if (markMain) mainId = nf.id;
         }
-    });
+    };
+
+    for (const b of named) upsert(b.name.split(/[\\/]/).pop(), b.body, b.isMain);
+    for (const b of mainBlocks) upsert(mainName, b.body, true);
+    // a single loose block with nothing else → replace main
+    if (looseBlocks.length === 1 && named.length === 0 && mainBlocks.length === 0) {
+        const idx = files.findIndex((f) => f.id === mainId);
+        if (idx >= 0) files[idx] = { ...files[idx], content: looseBlocks[0].body };
+    }
+    return { files, mainId };
+}
+
+export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSaveBinary }) {
+    const supported = isWebSerialSupported();
+
+    const [projects, setProjects] = useState(loadProjects);
+    const [activeProjectId, setActiveProjectId] = useState(() => loadActiveProjectId(loadProjects()));
+    const [activeFileId, setActiveFileId] = useState(null);
+    const [expanded, setExpanded] = useState({});
+    const [renamingId, setRenamingId] = useState(null);
+
     const [boardId, setBoardId] = useState(() => {
         try {
             return localStorage.getItem(LS_BOARD) || DEFAULT_BOARD_ID;
@@ -111,6 +125,9 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     });
     const [compileUrl, setCompileUrl] = useState(() => getCompileServerUrl());
     const [showSettings, setShowSettings] = useState(false);
+    const [showLibs, setShowLibs] = useState(false);
+    const [libDraft, setLibDraft] = useState('');
+    const [showWorkspaceImport, setShowWorkspaceImport] = useState(false);
 
     const [portName, setPortName] = useState('');
     const [monitorBaud, setMonitorBaud] = useState(115200);
@@ -120,13 +137,12 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     const [sendEnding, setSendEnding] = useState('nl');
 
     const [flashLog, setFlashLog] = useState('');
-    const [progress, setProgress] = useState(null); // { written, total }
+    const [progress, setProgress] = useState(null);
     const [busy, setBusy] = useState('');
     const [bottomTab, setBottomTab] = useState('console');
-    const [lastArtifact, setLastArtifact] = useState(null); // { kind, hexText?, parts?, name }
+    const [lastArtifact, setLastArtifact] = useState(null);
 
     const editorRef = useRef(null);
-    const monacoRef = useRef(null);
     const portRef = useRef(null);
     const monitorReaderRef = useRef(null);
     const monitorWriterRef = useRef(null);
@@ -135,10 +151,19 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     const flashLogRef = useRef('');
     const lastArtifactRef = useRef(null);
     const fileInputRef = useRef(null);
+    const importInputRef = useRef(null);
+    const projectsRef = useRef(projects);
 
     const board = useMemo(() => getBoardById(boardId) || BOARDS[0], [boardId]);
-    const activeFile = files.find((f) => f.id === activeId) || files[0];
+    const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0];
+    const activeFile =
+        activeProject?.files.find((f) => f.id === activeFileId) || getMainFile(activeProject) || activeProject?.files[0];
 
+    useEffect(() => {
+        projectsRef.current = projects;
+        persistProjects(projects);
+    }, [projects]);
+    useEffect(() => persistActiveProjectId(activeProjectId), [activeProjectId]);
     useEffect(() => {
         serialLinesRef.current = serialLines;
     }, [serialLines]);
@@ -148,14 +173,6 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     useEffect(() => {
         lastArtifactRef.current = lastArtifact;
     }, [lastArtifact]);
-    useEffect(() => persistFiles(files), [files]);
-    useEffect(() => {
-        try {
-            localStorage.setItem(LS_ACTIVE, activeId);
-        } catch {
-            /* ignore */
-        }
-    }, [activeId]);
     useEffect(() => {
         try {
             localStorage.setItem(LS_BOARD, boardId);
@@ -163,6 +180,10 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
             /* ignore */
         }
     }, [boardId]);
+    useEffect(() => {
+        // expand the active project by default
+        if (activeProjectId) setExpanded((e) => ({ ...e, [activeProjectId]: e[activeProjectId] !== false }));
+    }, [activeProjectId]);
 
     const appendLog = useCallback((text) => {
         setFlashLog((prev) => {
@@ -178,6 +199,162 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
         });
     }, []);
 
+    /* ── Project / file mutations ───────────────────────────────────── */
+    const mutateProject = useCallback(
+        (projId, fn) => {
+            setProjects((prev) => prev.map((p) => (p.id === projId ? fn(p) : p)));
+        },
+        []
+    );
+
+    const setFileContent = useCallback(
+        (value) => {
+            if (!activeProject || !activeFile) return;
+            mutateProject(activeProject.id, (p) => ({
+                ...p,
+                files: p.files.map((f) => (f.id === activeFile.id ? { ...f, content: value ?? '' } : f)),
+            }));
+        },
+        [activeProject, activeFile, mutateProject]
+    );
+
+    const addProject = useCallback(() => {
+        const proj = makeProject(`project_${projects.length + 1}`, [makeFile('main.ino', DEFAULT_SKETCH)]);
+        setProjects((prev) => [...prev, proj]);
+        setActiveProjectId(proj.id);
+        setActiveFileId(proj.mainFileId);
+        setExpanded((e) => ({ ...e, [proj.id]: true }));
+    }, [projects.length]);
+
+    const deleteProject = useCallback(
+        (id) => {
+            setProjects((prev) => {
+                const next = prev.filter((p) => p.id !== id);
+                const final = next.length ? next : [makeProject('Blink', [makeFile('blink.ino', DEFAULT_SKETCH)])];
+                if (id === activeProjectId) {
+                    setActiveProjectId(final[0].id);
+                    setActiveFileId(final[0].mainFileId);
+                }
+                return final;
+            });
+        },
+        [activeProjectId]
+    );
+
+    const renameProject = useCallback(
+        (id, name) => mutateProject(id, (p) => ({ ...p, name })),
+        [mutateProject]
+    );
+
+    const addFileToProject = useCallback(
+        (projId, name, content = '// new file\n') => {
+            const proj = projectsRef.current.find((p) => p.id === projId);
+            const finalName = uniqueFileName(proj, name);
+            const nf = makeFile(finalName, content);
+            mutateProject(projId, (p) => ({ ...p, files: [...p.files, nf] }));
+            setActiveProjectId(projId);
+            setActiveFileId(nf.id);
+            return nf;
+        },
+        [mutateProject]
+    );
+
+    const deleteFile = useCallback(
+        (projId, fileId) => {
+            mutateProject(projId, (p) => {
+                const files = p.files.filter((f) => f.id !== fileId);
+                const final = files.length ? files : [makeFile('main.ino', DEFAULT_SKETCH)];
+                let mainFileId = p.mainFileId;
+                if (fileId === p.mainFileId) mainFileId = (final.find(isMainCandidate) || final[0]).id;
+                return { ...p, files: final, mainFileId };
+            });
+        },
+        [mutateProject]
+    );
+
+    const renameFile = useCallback(
+        (projId, fileId, name) => mutateProject(projId, (p) => ({ ...p, files: p.files.map((f) => (f.id === fileId ? { ...f, name } : f)) })),
+        [mutateProject]
+    );
+
+    const setMainFile = useCallback(
+        (projId, fileId) => mutateProject(projId, (p) => ({ ...p, mainFileId: fileId })),
+        [mutateProject]
+    );
+
+    /* ── Libraries ──────────────────────────────────────────────────── */
+    const addLibrary = useCallback(() => {
+        const lib = libDraft.trim();
+        if (!lib || !activeProject) return;
+        mutateProject(activeProject.id, (p) => ({
+            ...p,
+            libraries: p.libraries.includes(lib) ? p.libraries : [...p.libraries, lib],
+        }));
+        setLibDraft('');
+    }, [libDraft, activeProject, mutateProject]);
+
+    const removeLibrary = useCallback(
+        (lib) => {
+            if (!activeProject) return;
+            mutateProject(activeProject.id, (p) => ({ ...p, libraries: p.libraries.filter((l) => l !== lib) }));
+        },
+        [activeProject, mutateProject]
+    );
+
+    /* ── Import ─────────────────────────────────────────────────────── */
+    const importDiskFiles = useCallback(
+        async (fileList) => {
+            if (!activeProject || !fileList?.length) return;
+            for (const f of Array.from(fileList)) {
+                try {
+                    const text = await f.text();
+                    addFileToProject(activeProject.id, fileBasename(f.name), text);
+                    appendLog(`[import] Added ${f.name}`);
+                } catch (e) {
+                    appendLog(`[import] ${f.name}: ${e?.message || e}`);
+                }
+            }
+        },
+        [activeProject, addFileToProject, appendLog]
+    );
+
+    const workspaceArduinoFiles = useMemo(() => {
+        if (!Array.isArray(workspaceFiles)) return [];
+        const arduinoFolderIds = new Set(
+            workspaceFiles.filter((f) => f.isFolder && String(f.name) === 'Arduino').map((f) => String(f.id))
+        );
+        return workspaceFiles.filter(
+            (f) =>
+                !f.isFolder &&
+                isSketchFileName(f.name) &&
+                (arduinoFolderIds.has(String(f.folderId)) || typeof f.csvText === 'string')
+        );
+    }, [workspaceFiles]);
+
+    const importFromWorkspace = useCallback(
+        (wf) => {
+            if (!activeProject) return;
+            const text = typeof wf.csvText === 'string' ? wf.csvText : '';
+            if (!text) {
+                appendLog(`[import] ${wf.name}: no text content available in workspace.`);
+                return;
+            }
+            addFileToProject(activeProject.id, fileBasename(wf.name), text);
+            appendLog(`[import] Loaded ${wf.name} from workspace.`);
+            setShowWorkspaceImport(false);
+        },
+        [activeProject, addFileToProject, appendLog]
+    );
+
+    /* ── Save to workspace ──────────────────────────────────────────── */
+    const saveProjectToWorkspace = useCallback(() => {
+        if (!activeProject || !onSaveSketch) return;
+        for (const f of activeProject.files) {
+            onSaveSketch(`${activeProject.name}__${f.name}`, f.content);
+        }
+        appendLog(`[workspace] Saved ${activeProject.files.length} file(s) from "${activeProject.name}" to Arduino/.`);
+    }, [activeProject, onSaveSketch, appendLog]);
+
     /* ── Editor ─────────────────────────────────────────────────────── */
     const beforeMount = useCallback((monaco) => {
         monaco.editor.defineTheme('noze-code', {
@@ -192,31 +369,23 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
         });
     }, []);
 
-    const onEditorMount = useCallback((editor, monaco) => {
-        editorRef.current = editor;
-        monacoRef.current = monaco;
-    }, []);
-
-    const updateActiveContent = useCallback(
-        (value) => {
-            setFiles((prev) => prev.map((f) => (f.id === activeId ? { ...f, content: value ?? '' } : f)));
-        },
-        [activeId]
-    );
-
-    /* ── AI editor bridge ───────────────────────────────────────────── */
+    /* ── AI editor bridge (multi-file) ──────────────────────────────── */
     useEffect(() => {
         registerArduinoEditorApi({
             applyFromMarkdown: (md) => {
-                const block = extractBestArduinoSketch(md);
-                if (!block) return { ok: false, reason: 'no_code' };
-                setFiles((prev) => prev.map((f) => (f.id === activeId ? { ...f, content: block.body } : f)));
-                if (editorRef.current) editorRef.current.setValue(block.body);
+                const extracted = extractNamedCodeFiles(md);
+                if (!extracted.length) return { ok: false, reason: 'no_code' };
+                const proj = projectsRef.current.find((p) => p.id === activeProjectId);
+                if (!proj) return { ok: false, reason: 'not_ready' };
+                const { files, mainId } = applyExtractedFiles(proj, extracted);
+                mutateProject(proj.id, (p) => ({ ...p, files, mainFileId: mainId }));
+                // focus the main file so the editor shows the entry point
+                setActiveFileId(mainId);
                 return { ok: true };
             },
         });
         return () => registerArduinoEditorApi(null);
-    }, [activeId]);
+    }, [activeProjectId, mutateProject]);
 
     /* ── Ports & serial monitor ─────────────────────────────────────── */
     const requestPort = useCallback(async () => {
@@ -310,12 +479,18 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
 
     /* ── Compile ────────────────────────────────────────────────────── */
     const runCompile = useCallback(async () => {
-        const sketch = (files.find((f) => f.id === activeId) || {}).content || '';
-        appendLog(`[compile] ${board.name} (${board.fqbn}) …`);
+        const proj = projectsRef.current.find((p) => p.id === activeProjectId) || projectsRef.current[0];
+        const main = getMainFile(proj);
+        appendLog(`[compile] ${board.name} (${board.fqbn}) · ${proj.name} · ${proj.files.length} file(s)${proj.libraries.length ? ` · libs: ${proj.libraries.join(', ')}` : ''}`);
         setBusy('compile');
         setBottomTab('console');
         try {
-            const res = await compileSketch({ fqbn: board.fqbn, sketch });
+            const res = await compileSketch({
+                fqbn: board.fqbn,
+                sketch: main?.content || '',
+                files: extraFilesMap(proj),
+                libraries: proj.libraries,
+            });
             if (res.stdout) appendLog(res.stdout.trim());
             if (res.stderr) appendLog(res.stderr.trim());
             if (!res.ok) {
@@ -324,10 +499,10 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
             }
             let artifact = null;
             if (res.hexText) {
-                parseIntelHex(res.hexText); // validate
-                artifact = { kind: 'avr', hexText: res.hexText, name: `${activeFile?.name || 'sketch'}.hex` };
+                parseIntelHex(res.hexText);
+                artifact = { kind: 'avr', hexText: res.hexText, name: `${proj.name}.hex` };
             } else if (res.parts?.length) {
-                artifact = { kind: 'esp', parts: res.parts, name: `${activeFile?.name || 'sketch'}.bin` };
+                artifact = { kind: 'esp', parts: res.parts, name: `${proj.name}.bin` };
             }
             if (!artifact) {
                 appendLog('[compile] Server returned no hex/bin/parts.');
@@ -343,13 +518,13 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
         } finally {
             setBusy('');
         }
-    }, [files, activeId, board, activeFile, appendLog]);
+    }, [activeProjectId, board, appendLog]);
 
     /* ── Flash ──────────────────────────────────────────────────────── */
     const onFlashProgress = useCallback(
         (p) => {
             if (p.message) appendLog(`[flash] ${p.message}`);
-            if (p.phase === 'log' && p.message) return; // already logged
+            if (p.phase === 'log' && p.message) return;
             if (typeof p.written === 'number' && typeof p.total === 'number' && p.total > 0) {
                 setProgress({ written: p.written, total: p.total });
             }
@@ -374,7 +549,6 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                 appendLog('[flash] No serial port selected.');
                 return { ok: false, log: 'no port' };
             }
-
             const wasMonitoring = monitorOpenRef.current;
             await stopMonitor();
             setBusy('flash');
@@ -403,9 +577,7 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
             } finally {
                 setBusy('');
                 setProgress(null);
-                if (wasMonitoring) {
-                    setTimeout(() => void startMonitor(), 400);
-                }
+                if (wasMonitoring) setTimeout(() => void startMonitor(), 400);
             }
         },
         [board, requestPort, stopMonitor, startMonitor, onFlashProgress, appendLog]
@@ -414,7 +586,6 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     const flashCurrent = useCallback(async () => {
         const wantKind = board.protocol === 'esptool' ? 'esp' : 'avr';
         let artifact = lastArtifactRef.current;
-        // Recompile if there's no matching artifact and a compile server is configured.
         if ((!artifact || artifact.kind !== wantKind) && getCompileServerUrl()) {
             const c = await runCompile();
             if (!c.ok) return c;
@@ -456,17 +627,21 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
     /* ── Agent action registration ──────────────────────────────────── */
     useEffect(() => {
         registerArduinoAgentActions({
-            getSketch: () => (files.find((f) => f.id === activeId) || {}).content || '',
+            getProject: () => {
+                const proj = projectsRef.current.find((p) => p.id === activeProjectId) || projectsRef.current[0];
+                return {
+                    name: proj.name,
+                    files: proj.files.map((f) => ({ name: f.name, content: f.content, isMain: f.id === proj.mainFileId })),
+                    libraries: proj.libraries,
+                };
+            },
             compile: () => runCompile(),
             flash: () => flashCurrent(),
             readSerial: async (ms) => {
                 if (!monitorOpenRef.current) await startMonitor();
                 const before = serialLinesRef.current.length;
                 await new Promise((r) => setTimeout(r, ms));
-                return serialLinesRef.current
-                    .slice(before)
-                    .map((l) => l.text)
-                    .join('\n');
+                return serialLinesRef.current.slice(before).map((l) => l.text).join('\n');
             },
             getState: () => ({
                 boardName: board.name,
@@ -475,51 +650,13 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
             }),
         });
         return () => registerArduinoAgentActions(null);
-    }, [files, activeId, runCompile, flashCurrent, startMonitor, board]);
-
-    /* ── File ops ───────────────────────────────────────────────────── */
-    const addFile = useCallback(() => {
-        const n = files.length + 1;
-        const id = `sketch_${Date.now()}`;
-        const name = `sketch_${n}.ino`;
-        setFiles((prev) => [...prev, { id, name, content: '// new sketch\nvoid setup() {}\nvoid loop() {}\n' }]);
-        setActiveId(id);
-    }, [files]);
-
-    const deleteFile = useCallback(
-        (id) => {
-            setFiles((prev) => {
-                const next = prev.filter((f) => f.id !== id);
-                const final = next.length ? next : [{ id: 'blink', name: 'blink.ino', content: DEFAULT_SKETCH }];
-                if (id === activeId) setActiveId(final[0].id);
-                return final;
-            });
-        },
-        [activeId]
-    );
-
-    const renameFile = useCallback((id, name) => {
-        setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
-    }, []);
-
-    const handleSaveToWorkspace = useCallback(() => {
-        const f = files.find((x) => x.id === activeId);
-        if (!f) return;
-        if (onSaveSketch) {
-            onSaveSketch(f.name, f.content);
-            appendLog(`[workspace] Saved ${f.name}.`);
-        }
-    }, [files, activeId, onSaveSketch, appendLog]);
+    }, [activeProjectId, runCompile, flashCurrent, startMonitor, board]);
 
     const handleSaveFirmware = useCallback(() => {
         if (!lastArtifact || !onSaveBinary) return;
-        if (lastArtifact.hexText) {
-            onSaveBinary(lastArtifact.name || 'firmware.hex', new TextEncoder().encode(lastArtifact.hexText));
-        } else if (lastArtifact.bytes) {
-            onSaveBinary(lastArtifact.name || 'firmware.bin', lastArtifact.bytes);
-        } else if (lastArtifact.parts?.length === 1) {
-            onSaveBinary(lastArtifact.name || 'firmware.bin', lastArtifact.parts[0].data);
-        }
+        if (lastArtifact.hexText) onSaveBinary(lastArtifact.name || 'firmware.hex', new TextEncoder().encode(lastArtifact.hexText));
+        else if (lastArtifact.bytes) onSaveBinary(lastArtifact.name || 'firmware.bin', lastArtifact.bytes);
+        else if (lastArtifact.parts?.length === 1) onSaveBinary(lastArtifact.name || 'firmware.bin', lastArtifact.parts[0].data);
         appendLog('[workspace] Firmware saved.');
     }, [lastArtifact, onSaveBinary, appendLog]);
 
@@ -546,12 +683,7 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                     <span className="arduino-brand">
                         <Cpu size={16} /> MCU Flash
                     </span>
-                    <select
-                        className="arduino-select"
-                        value={boardId}
-                        onChange={(e) => setBoardId(e.target.value)}
-                        title="Target board"
-                    >
+                    <select className="arduino-select" value={boardId} onChange={(e) => setBoardId(e.target.value)} title="Target board">
                         <optgroup label="AVR (Arduino)">
                             {BOARDS.filter((b) => b.arch === 'avr').map((b) => (
                                 <option key={b.id} value={b.id}>
@@ -567,6 +699,13 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                             ))}
                         </optgroup>
                     </select>
+                    <button
+                        className={`arduino-btn ${showLibs ? 'arduino-btn--active' : ''}`}
+                        onClick={() => setShowLibs((s) => !s)}
+                        title="External libraries for this project"
+                    >
+                        <Library size={14} /> Libraries{activeProject?.libraries.length ? ` (${activeProject.libraries.length})` : ''}
+                    </button>
                 </div>
 
                 <div className="arduino-toolbar-right">
@@ -596,12 +735,7 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                     </select>
 
                     {getCompileServerUrl() ? (
-                        <button
-                            className="arduino-btn"
-                            disabled={!!busy}
-                            onClick={() => void runCompile()}
-                            title="Compile via remote server"
-                        >
+                        <button className="arduino-btn" disabled={!!busy} onClick={() => void runCompile()} title="Compile via remote server">
                             {busy === 'compile' ? <Loader2 className="arduino-spin" size={14} /> : <FileCode2 size={14} />} Verify
                         </button>
                     ) : null}
@@ -627,15 +761,47 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                             e.target.value = '';
                         }}
                     />
-                    <button
-                        className={`arduino-btn ${showSettings ? 'arduino-btn--active' : ''}`}
-                        onClick={() => setShowSettings((s) => !s)}
-                        title="Settings"
-                    >
+                    <button className={`arduino-btn ${showSettings ? 'arduino-btn--active' : ''}`} onClick={() => setShowSettings((s) => !s)} title="Settings">
                         <Settings2 size={14} />
                     </button>
                 </div>
             </header>
+
+            {showLibs ? (
+                <div className="arduino-libs">
+                    <div className="arduino-libs-head">
+                        <Library size={14} /> <strong>{activeProject?.name}</strong> libraries — installed by the compile server before building.
+                    </div>
+                    <div className="arduino-libs-input">
+                        <input
+                            type="text"
+                            placeholder='e.g. ArduinoJson  or  "Adafruit GFX Library@1.11.9"'
+                            value={libDraft}
+                            onChange={(e) => setLibDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') addLibrary();
+                            }}
+                        />
+                        <button className="arduino-btn" onClick={addLibrary}>
+                            <Plus size={14} /> Add
+                        </button>
+                    </div>
+                    <div className="arduino-libs-chips">
+                        {activeProject?.libraries.length ? (
+                            activeProject.libraries.map((lib) => (
+                                <span key={lib} className="arduino-lib-chip">
+                                    {lib}
+                                    <button onClick={() => removeLibrary(lib)} title="Remove">
+                                        ×
+                                    </button>
+                                </span>
+                            ))
+                        ) : (
+                            <span className="arduino-libs-empty">No libraries. Add by name (Arduino Library Manager names) or name@version.</span>
+                        )}
+                    </div>
+                </div>
+            ) : null}
 
             {showSettings ? (
                 <div className="arduino-settings">
@@ -650,9 +816,9 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                         />
                     </label>
                     <p className="arduino-settings-hint">
-                        Optional. Lets the AI compile sketches to firmware. The server must accept <code>POST /compile</code> with{' '}
-                        <code>{'{ fqbn, sketch }'}</code> and return base64 <code>hex</code> (AVR) or <code>bin</code>/<code>parts</code>{' '}
-                        (ESP). Without it, write the sketch here and flash a precompiled <code>.hex</code>/<code>.bin</code>.
+                        Optional. Lets the AI compile multi-file projects to firmware. The server must accept <code>POST /compile</code> with{' '}
+                        <code>{'{ fqbn, sketch, files, libraries }'}</code> and return base64 <code>hex</code> (AVR) or <code>bin</code>/
+                        <code>parts</code> (ESP). Without it, write the sketch here and flash a precompiled <code>.hex</code>/<code>.bin</code>.
                     </p>
                     {boardUnsupported ? <p className="arduino-settings-warn">{board.unsupportedReason}</p> : null}
                 </div>
@@ -661,32 +827,137 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
             <div className="arduino-body">
                 <aside className="arduino-files">
                     <div className="arduino-files-head">
-                        <span>Sketches</span>
-                        <button className="arduino-icon-btn" onClick={addFile} title="New sketch">
-                            <Plus size={15} />
-                        </button>
+                        <span>Projects</span>
+                        <span className="arduino-files-head-actions">
+                            <button className="arduino-icon-btn" onClick={() => importInputRef.current?.click()} title="Import code files">
+                                <Download size={15} />
+                            </button>
+                            <button className="arduino-icon-btn" onClick={addProject} title="New project">
+                                <FolderPlus size={15} />
+                            </button>
+                        </span>
                     </div>
-                    <ul className="arduino-file-list">
-                        {files.map((f) => (
-                            <li key={f.id} className={f.id === activeId ? 'is-active' : ''}>
-                                <button className="arduino-file-btn" onClick={() => setActiveId(f.id)} title={f.name}>
-                                    <FileCode2 size={13} /> {f.name}
-                                </button>
-                                <button className="arduino-icon-btn arduino-file-del" onClick={() => deleteFile(f.id)} title="Delete">
-                                    <Trash2 size={13} />
-                                </button>
-                            </li>
-                        ))}
-                    </ul>
+                    <input
+                        ref={importInputRef}
+                        type="file"
+                        accept=".ino,.pde,.cpp,.cc,.cxx,.c,.h,.hpp,.hh"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                            void importDiskFiles(e.target.files);
+                            e.target.value = '';
+                        }}
+                    />
+
+                    <div className="arduino-tree">
+                        {projects.map((proj) => {
+                            const open = expanded[proj.id] !== false;
+                            const isActiveProj = proj.id === activeProjectId;
+                            return (
+                                <div key={proj.id} className={`arduino-tree-proj ${isActiveProj ? 'is-active-proj' : ''}`}>
+                                    <div className="arduino-tree-proj-row">
+                                        <button
+                                            className="arduino-tree-twisty"
+                                            onClick={() => setExpanded((s) => ({ ...s, [proj.id]: !open }))}
+                                            title={open ? 'Collapse' : 'Expand'}
+                                        >
+                                            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                        </button>
+                                        {renamingId === proj.id ? (
+                                            <input
+                                                className="arduino-tree-rename"
+                                                autoFocus
+                                                defaultValue={proj.name}
+                                                onBlur={(e) => {
+                                                    if (e.target.value.trim()) renameProject(proj.id, e.target.value.trim());
+                                                    setRenamingId(null);
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') e.target.blur();
+                                                    if (e.key === 'Escape') setRenamingId(null);
+                                                }}
+                                            />
+                                        ) : (
+                                            <button
+                                                className="arduino-tree-proj-name"
+                                                onClick={() => {
+                                                    setActiveProjectId(proj.id);
+                                                    setActiveFileId(getMainFile(proj)?.id);
+                                                }}
+                                                onDoubleClick={() => setRenamingId(proj.id)}
+                                                title={`${proj.name} — double-click to rename`}
+                                            >
+                                                {open ? <FolderOpen size={13} /> : <Folder size={13} />} {proj.name}
+                                            </button>
+                                        )}
+                                        <button
+                                            className="arduino-icon-btn arduino-tree-add"
+                                            onClick={() => addFileToProject(proj.id, 'newfile.h')}
+                                            title="New file in project"
+                                        >
+                                            <Plus size={13} />
+                                        </button>
+                                        <button
+                                            className="arduino-icon-btn arduino-tree-del"
+                                            onClick={() => deleteProject(proj.id)}
+                                            title="Delete project"
+                                        >
+                                            <Trash2 size={13} />
+                                        </button>
+                                    </div>
+                                    {open ? (
+                                        <ul className="arduino-tree-files">
+                                            {proj.files.map((f) => {
+                                                const isMain = f.id === proj.mainFileId;
+                                                const isActive = isActiveProj && f.id === activeFile?.id;
+                                                return (
+                                                    <li key={f.id} className={isActive ? 'is-active' : ''}>
+                                                        <button
+                                                            className="arduino-file-btn"
+                                                            onClick={() => {
+                                                                setActiveProjectId(proj.id);
+                                                                setActiveFileId(f.id);
+                                                            }}
+                                                            title={f.name}
+                                                        >
+                                                            <FileCode2 size={12} /> {f.name}
+                                                            {isMain ? <Star size={10} className="arduino-main-star" /> : null}
+                                                        </button>
+                                                        {!isMain ? (
+                                                            <button
+                                                                className="arduino-icon-btn arduino-file-main"
+                                                                onClick={() => setMainFile(proj.id, f.id)}
+                                                                title="Set as main sketch"
+                                                            >
+                                                                <Star size={12} />
+                                                            </button>
+                                                        ) : null}
+                                                        <button
+                                                            className="arduino-icon-btn arduino-file-del"
+                                                            onClick={() => deleteFile(proj.id, f.id)}
+                                                            title="Delete file"
+                                                        >
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    </li>
+                                                );
+                                            })}
+                                        </ul>
+                                    ) : null}
+                                </div>
+                            );
+                        })}
+                    </div>
+
                     <div className="arduino-files-foot">
                         <input
                             className="arduino-rename"
                             value={activeFile?.name || ''}
-                            onChange={(e) => renameFile(activeId, e.target.value)}
-                            title="Rename active sketch"
+                            onChange={(e) => activeFile && renameFile(activeProject.id, activeFile.id, e.target.value)}
+                            title="Rename active file"
                         />
                         {onSaveSketch ? (
-                            <button className="arduino-icon-btn" onClick={handleSaveToWorkspace} title="Save sketch to workspace">
+                            <button className="arduino-icon-btn" onClick={saveProjectToWorkspace} title="Save whole project to workspace">
                                 <Save size={14} />
                             </button>
                         ) : null}
@@ -696,18 +967,40 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
                             </button>
                         ) : null}
                     </div>
+
+                    {workspaceArduinoFiles.length ? (
+                        <div className="arduino-ws-import">
+                            <button className="arduino-ws-import-head" onClick={() => setShowWorkspaceImport((s) => !s)}>
+                                {showWorkspaceImport ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Import from workspace (
+                                {workspaceArduinoFiles.length})
+                            </button>
+                            {showWorkspaceImport ? (
+                                <ul className="arduino-ws-list">
+                                    {workspaceArduinoFiles.map((wf) => (
+                                        <li key={wf.id}>
+                                            <button onClick={() => importFromWorkspace(wf)} title={`Load ${wf.name}`}>
+                                                <FileCode2 size={11} /> {fileBasename(wf.name)}
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </aside>
 
                 <main className="arduino-editor-col">
                     <div className="arduino-editor-wrap">
                         <Editor
                             theme="noze-code"
-                            language="cpp"
-                            path={activeFile?.name}
+                            language={langForFile(activeFile?.name || 'x.cpp')}
+                            path={`${activeProject?.id}/${activeFile?.name}`}
                             value={activeFile?.content || ''}
                             beforeMount={beforeMount}
-                            onMount={onEditorMount}
-                            onChange={updateActiveContent}
+                            onMount={(ed) => {
+                                editorRef.current = ed;
+                            }}
+                            onChange={setFileContent}
                             options={{
                                 fontSize: 14,
                                 minimap: { enabled: true },
@@ -722,16 +1015,10 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
 
                     <section className="arduino-bottom">
                         <div className="arduino-bottom-tabs">
-                            <button
-                                className={bottomTab === 'console' ? 'is-active' : ''}
-                                onClick={() => setBottomTab('console')}
-                            >
+                            <button className={bottomTab === 'console' ? 'is-active' : ''} onClick={() => setBottomTab('console')}>
                                 Console
                             </button>
-                            <button
-                                className={bottomTab === 'serial' ? 'is-active' : ''}
-                                onClick={() => setBottomTab('serial')}
-                            >
+                            <button className={bottomTab === 'serial' ? 'is-active' : ''} onClick={() => setBottomTab('serial')}>
                                 Serial Monitor {monitorConnected ? '●' : ''}
                             </button>
                             <span className="arduino-bottom-spacer" />
@@ -787,7 +1074,14 @@ export default function ArduinoFlasherPage({ onSaveSketch, onSaveBinary }) {
 
                 <ArduinoAiPanel
                     boardName={board.name}
-                    getSketch={() => (files.find((f) => f.id === activeId) || {}).content || ''}
+                    getProject={() => {
+                        const proj = projectsRef.current.find((p) => p.id === activeProjectId) || projectsRef.current[0];
+                        return {
+                            name: proj.name,
+                            files: proj.files.map((f) => ({ name: f.name, content: f.content, isMain: f.id === proj.mainFileId })),
+                            libraries: proj.libraries,
+                        };
+                    }}
                     getConsole={() => `${flashLogRef.current}\n${serialLinesRef.current.slice(-40).map((l) => l.text).join('\n')}`}
                 />
             </div>

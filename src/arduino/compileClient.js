@@ -6,7 +6,12 @@
  * simple so a tiny arduino-cli wrapper can satisfy it:
  *
  *   POST {baseUrl}/compile
- *   Request JSON:  { fqbn: string, sketch: string, files?: { [name]: string } }
+ *   Request JSON:  {
+ *     fqbn: string,
+ *     sketch: string,                  // the main .ino source
+ *     files?: { [name]: string },      // extra .cpp/.h files placed beside the sketch
+ *     libraries?: string[],            // e.g. ["ArduinoJson", "Adafruit GFX@1.11.9"] → arduino-cli lib install
+ *   }
  *   Response JSON: {
  *     ok: boolean,
  *     stdout?: string,
@@ -63,11 +68,12 @@ export function bytesToBase64(bytes) {
  * @param {string} args.fqbn   Fully-qualified board name (board.fqbn)
  * @param {string} args.sketch Sketch source
  * @param {Record<string,string>} [args.files] Extra files by name
+ * @param {string[]} [args.libraries] External libraries to install before compiling
  * @param {string} [args.baseUrl] Override server URL (else stored value)
  * @param {AbortSignal} [args.signal]
  * @returns {Promise<{ ok: boolean, stdout: string, stderr: string, hex?: Uint8Array, parts?: {address:number,data:Uint8Array}[] }>}
  */
-export async function compileSketch({ fqbn, sketch, files, baseUrl, signal }) {
+export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, signal }) {
     const url = (baseUrl || getCompileServerUrl()).replace(/\/+$/, '');
     if (!url) {
         throw new Error('No compile server configured. Set a compile server URL, or upload a precompiled .hex/.bin.');
@@ -75,7 +81,12 @@ export async function compileSketch({ fqbn, sketch, files, baseUrl, signal }) {
     const res = await fetch(`${url}/compile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fqbn, sketch, files: files || undefined }),
+        body: JSON.stringify({
+            fqbn,
+            sketch,
+            files: files && Object.keys(files).length ? files : undefined,
+            libraries: libraries && libraries.length ? libraries : undefined,
+        }),
         signal,
     });
     if (!res.ok) {
