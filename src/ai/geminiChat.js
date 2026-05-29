@@ -71,20 +71,21 @@ export function messagesToGeminiRequest(messages) {
 /**
  * Parse one SSE `data:` line from streamGenerateContent (?alt=sse).
  * @param {string} line
- * @returns {string} incremental text, if any
+ * @returns {{ text: string, finishReason: string }} incremental text and finish reason, if any
  */
 function extractTextFromSseDataLine(line) {
     const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) return '';
+    if (!trimmed.startsWith('data:')) return { text: '', finishReason: '' };
     const jsonStr = trimmed.slice(5).trim();
-    if (!jsonStr || jsonStr === '[DONE]') return '';
+    if (!jsonStr || jsonStr === '[DONE]') return { text: '', finishReason: '' };
     try {
         const data = JSON.parse(jsonStr);
-        const parts = data?.candidates?.[0]?.content?.parts;
-        if (!Array.isArray(parts)) return '';
-        return parts.map((p) => p.text || '').join('');
+        const cand = data?.candidates?.[0];
+        const parts = cand?.content?.parts;
+        const text = Array.isArray(parts) ? parts.map((p) => p.text || '').join('') : '';
+        return { text, finishReason: cand?.finishReason || '' };
     } catch {
-        return '';
+        return { text: '', finishReason: '' };
     }
 }
 
@@ -163,6 +164,7 @@ export async function streamGeminiChat({
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let finishReason = '';
 
     while (true) {
         const { done, value } = await reader.read();
@@ -173,7 +175,8 @@ export async function streamGeminiChat({
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-            const chunk = extractTextFromSseDataLine(line);
+            const { text: chunk, finishReason: fr } = extractTextFromSseDataLine(line);
+            if (fr) finishReason = fr;
             if (!chunk) continue;
             if (firstChunkAt == null) {
                 firstChunkAt = Date.now();
@@ -185,7 +188,8 @@ export async function streamGeminiChat({
     }
 
     if (buffer.trim()) {
-        const chunk = extractTextFromSseDataLine(buffer);
+        const { text: chunk, finishReason: fr } = extractTextFromSseDataLine(buffer);
+        if (fr) finishReason = fr;
         if (chunk) {
             if (firstChunkAt == null) {
                 firstChunkAt = Date.now();
@@ -201,6 +205,7 @@ export async function streamGeminiChat({
 
     return {
         text: fullText,
+        finishReason,
         stats: {
             tokens,
             seconds,

@@ -30,17 +30,29 @@ const LS_AUTO_AGENT = 'arduino:auto-agent';
 
 const BACKEND_GEMINI = 'gemini';
 
+/** For very complex programs: keep generating across token limits. */
+const MAX_CONTINUATIONS = 8;
+const CONTINUE_PROMPT =
+    'Continue the previous response from exactly where it stopped. Do NOT repeat any text already sent. ' +
+    'If you stopped inside a code block, keep writing inside it and remember to close it with ```. ' +
+    'Output only the continuation.';
+
 const FALLBACK_SYSTEM_PROMPT = [
-    'You are NozeMCU, an embedded-systems assistant in the NozePlot Arduino & ESP32 Programmer.',
-    'You build and debug Arduino-framework C/C++ projects for AVR (Uno/Nano) and ESP32/ESP8266 boards.',
+    'You are NozeMCU, an embedded-systems engineer in the NozePlot Arduino & ESP32 Programmer.',
+    'You design, build and debug complete Arduino-framework C/C++ projects for AVR (Uno/Nano) and ESP32/ESP8266.',
     '',
-    'OUTPUT RULES (important — the editor parses these):',
-    '- Return each file as its own fenced code block whose info string is the FILENAME, e.g.',
-    '  ```cpp main.ino  …  ```   and   ```cpp sensors.h  …  ```   and   ```cpp sensors.cpp  …  ```',
-    '- Always include the main sketch as a `.ino` file containing setup() and loop().',
-    '- For larger apps, SPLIT the code into multiple files (headers + implementation + the .ino). Emit every file you change as a full file (not a diff).',
-    '- Keep each file complete and compilable; do not abbreviate with "// ...".',
-    '- If external libraries are needed, name them in prose (e.g. "Add library: ArduinoJson") so the user can install them.',
+    'WORKFLOW for non-trivial / complex programs:',
+    '1. Start with a short "## Plan": list the files you will create and each file\'s responsibility.',
+    '2. Then output EVERY file as its own fenced block whose info string is the FILENAME, e.g.',
+    '   ```cpp main.ino  …  ```   ```cpp net.h  …  ```   ```cpp net.cpp  …  ```',
+    '3. Split large apps into focused modules (header + implementation) plus the main `.ino` with setup()/loop().',
+    '',
+    'OUTPUT RULES (the editor parses these):',
+    '- The filename MUST be on the code-fence info line (```cpp <filename>).',
+    '- Always include a main `.ino` containing setup() and loop().',
+    '- Emit each changed file IN FULL — never abbreviate with "// ..." or "rest unchanged".',
+    '- Keep every file complete and compilable. If you run out of space, stop mid-file; you will be asked to continue.',
+    '- Name any external libraries needed (Arduino Library Manager names) so the user can add them.',
     'Prefer Arduino core APIs; for ESP32 use the ESP32 Arduino core. Keep pin choices explicit and safe.',
 ].join('\n');
 
@@ -62,8 +74,8 @@ function readAllPrefs() {
     const currentModelId = customModel.trim() || selectedModel;
     const currentModelMeta = CURATED_MODELS.find((m) => m.id === currentModelId) || null;
     const params = {
-        max_new_tokens: 700,
-        temperature: 0.4,
+        max_new_tokens: 1024,
+        temperature: 0.35,
         top_p: 0.9,
         top_k: 50,
         repetition_penalty: 1.08,
@@ -97,6 +109,23 @@ function clip(s, max) {
     return t.length <= max ? t : `${t.slice(0, max)}\n\n… [truncated]`;
 }
 
+/** A reply is "truncated" if the model hit the length cap or left a code fence open. */
+function isTruncated(text, finishReason) {
+    if (finishReason && /max.?tokens|length/i.test(finishReason)) return true;
+    const fences = (String(text).match(/```/g) || []).length;
+    return fences % 2 === 1;
+}
+
+/** Append a continuation, removing any overlap the model repeated. */
+function stitchContinuation(prev, cont) {
+    if (!cont) return '';
+    const maxOverlap = Math.min(400, prev.length, cont.length);
+    for (let n = maxOverlap; n >= 24; n -= 1) {
+        if (prev.slice(-n) === cont.slice(0, n)) return cont.slice(n);
+    }
+    return cont;
+}
+
 function buildProjectContextBlock({ board, project, console: consoleLog, isCloud }) {
     const totalBudget = isCloud ? 60000 : 11000;
     const files = project?.files || [];
@@ -126,17 +155,20 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
     const [collapsed, setCollapsed] = useState(false);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
-    const [streamingText, setStreamingText] = useState('');
     const [busy, setBusy] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     const [workerStatus, setWorkerStatus] = useState('idle');
     const [loadedModelId, setLoadedModelId] = useState('');
     const [autoAgent, setAutoAgent] = useState(() => loadLS(LS_AUTO_AGENT, 'false') === 'true');
     const [agentRunning, setAgentRunning] = useState(false);
+    const [genPart, setGenPart] = useState(0);
+
     const workerRef = useRef(null);
     const abortRef = useRef(null);
     const scrollRef = useRef(null);
     const messagesRef = useRef([]);
+    const assembledRef = useRef('');
+    const genCtlRef = useRef(null); // { resolve, reject, assembled, live }
 
     useEffect(() => {
         messagesRef.current = messages;
@@ -181,13 +213,11 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
         }
     }, [prefs.isGeminiBackend, prefs.effectiveGeminiKey, prefs.geminiModel]);
 
-    const finalizeAssistant = useCallback((text) => {
+    const setAssistant = useCallback((content, streaming) => {
         setMessages((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last?.role === 'assistant' && last.streaming) {
-                next[next.length - 1] = { ...last, content: text || last.content, streaming: false };
-            }
+            if (last?.role === 'assistant') next[next.length - 1] = { ...last, content, streaming };
             return next;
         });
     }, []);
@@ -220,7 +250,7 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                     observations.push('Flash: skipped (no serial port selected — connect a board first).');
                 }
             } catch {
-                /* observations already captured */
+                /* observations captured */
             } finally {
                 setAgentRunning(false);
             }
@@ -242,6 +272,7 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
         w.onmessage = (ev) => {
             const msg = ev.data;
             if (!msg) return;
+            const ctl = genCtlRef.current;
             switch (msg.type) {
                 case 'status':
                     setWorkerStatus(msg.status);
@@ -251,29 +282,36 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                     setWorkerStatus('ready');
                     break;
                 case 'token':
-                    setStreamingText((prev) => prev + (msg.text || ''));
+                    if (ctl) {
+                        ctl.live += msg.text || '';
+                        setAssistant(ctl.assembled + ctl.live, true);
+                    }
                     break;
-                case 'complete': {
-                    const text = msg.text || '';
-                    setStreamingText('');
-                    setBusy(false);
-                    finalizeAssistant(text);
+                case 'complete':
                     setWorkerStatus('ready');
-                    void runAgentPipeline(text);
+                    if (ctl?.resolve) {
+                        const resolve = ctl.resolve;
+                        ctl.resolve = null;
+                        resolve({ text: msg.text || ctl.live });
+                    }
                     break;
-                }
                 case 'stopped':
-                    setStreamingText('');
-                    setBusy(false);
-                    finalizeAssistant('⏹ stopped');
                     setWorkerStatus('ready');
+                    if (ctl?.resolve) {
+                        const resolve = ctl.resolve;
+                        ctl.resolve = null;
+                        resolve({ text: ctl.live, stopped: true });
+                    }
                     break;
                 case 'error':
-                    setErrorMsg(String(msg.message || 'Model error'));
-                    setStreamingText('');
-                    setBusy(false);
-                    finalizeAssistant(`**Error:** ${String(msg.message || 'Unknown')}`);
                     setWorkerStatus('ready');
+                    if (ctl?.reject) {
+                        const reject = ctl.reject;
+                        ctl.reject = null;
+                        reject(new Error(String(msg.message || 'Model error')));
+                    } else {
+                        setErrorMsg(String(msg.message || 'Model error'));
+                    }
                     break;
                 default:
                     break;
@@ -296,29 +334,14 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
     }, [prefs.isGeminiBackend, prefs.currentModelId, prefs.device, prefs.dtype]);
 
     useEffect(() => {
-        if (!streamingText) return;
-        setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === 'assistant' && last.streaming) {
-                next[next.length - 1] = { ...last, content: streamingText };
-            }
-            return next;
-        });
-    }, [streamingText]);
-
-    useEffect(() => {
         const el = scrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
-    }, [messages, streamingText]);
+    }, [messages]);
 
     const handleStop = useCallback(() => {
-        const p = readAllPrefs();
-        if (p.isGeminiBackend && abortRef.current) {
+        if (abortRef.current) {
             abortRef.current.abort();
             abortRef.current = null;
-            setBusy(false);
-            return;
         }
         workerRef.current?.postMessage({ type: 'stop' });
     }, []);
@@ -326,9 +349,45 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
     const handleClear = useCallback(() => {
         handleStop();
         setMessages([]);
-        setStreamingText('');
         setErrorMsg('');
     }, [handleStop]);
+
+    /** One generation round. Resolves with { text, finishReason?, stopped? }. */
+    const runRound = useCallback(
+        async (payload, p) => {
+            if (p.isGeminiBackend) {
+                const ac = new AbortController();
+                abortRef.current = ac;
+                const live = { v: '' };
+                try {
+                    const result = await streamGeminiChat({
+                        apiKey: p.effectiveGeminiKey,
+                        model: p.geminiModel,
+                        messages: payload,
+                        params: {
+                            temperature: p.params.temperature,
+                            top_p: p.params.top_p,
+                            max_new_tokens: Math.min(p.params.max_new_tokens || 8192, 8192),
+                        },
+                        signal: ac.signal,
+                        onChunk: (chunk) => {
+                            live.v += chunk;
+                            setAssistant(assembledRef.current + live.v, true);
+                        },
+                    });
+                    return { text: result.text, finishReason: result.finishReason };
+                } finally {
+                    abortRef.current = null;
+                }
+            }
+            // local worker
+            return new Promise((resolve, reject) => {
+                genCtlRef.current = { resolve, reject, assembled: assembledRef.current, live: '' };
+                workerRef.current?.postMessage({ type: 'generate', messages: payload, params: p.params });
+            });
+        },
+        [setAssistant]
+    );
 
     const sendToModel = useCallback(
         async (text) => {
@@ -372,7 +431,7 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
 
             const budget = computeHistoryBudget({
                 systemPromptChars: effectiveSystem.length,
-                maxNewTokens: p.isGeminiBackend ? Math.min(p.params.max_new_tokens || 2048, 8192) : p.params.max_new_tokens || 700,
+                maxNewTokens: p.isGeminiBackend ? 8192 : p.params.max_new_tokens || 1024,
                 targetPromptTokens: p.isGeminiBackend ? 120000 : 3200,
             });
             const packed = packHistory(sanitizeHistory(history), {
@@ -380,58 +439,67 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                 minKeepTurns: p.isGeminiBackend ? 8 : 3,
             });
 
-            const payload = [
+            const basePayload = [
                 { role: 'system', content: effectiveSystem },
                 ...packed.messages.map((m) => ({ role: m.role, content: m.content })),
                 { role: 'user', content: text },
             ];
 
             setErrorMsg('');
-            setStreamingText('');
             setMessages((prev) => [
                 ...prev,
                 { role: 'user', content: text, ts: Date.now() },
                 { role: 'assistant', content: '', streaming: true, ts: Date.now() },
             ]);
             setBusy(true);
+            assembledRef.current = '';
+            let round = 0;
+            let stopped = false;
+            let payload = basePayload;
 
-            if (p.isGeminiBackend) {
-                const ac = new AbortController();
-                abortRef.current = ac;
-                try {
-                    const result = await streamGeminiChat({
-                        apiKey: p.effectiveGeminiKey,
-                        model: p.geminiModel,
-                        messages: payload,
-                        params: {
-                            temperature: p.params.temperature,
-                            top_p: p.params.top_p,
-                            max_new_tokens: Math.min(p.params.max_new_tokens || 2048, 8192),
-                        },
-                        signal: ac.signal,
-                        onChunk: (chunk) => setStreamingText((prev) => prev + chunk),
-                    });
-                    setStreamingText('');
-                    finalizeAssistant(result.text || '');
-                    void runAgentPipeline(result.text || '');
-                } catch (err) {
-                    if (err?.name === 'AbortError') {
-                        finalizeAssistant('⏹ stopped');
-                    } else {
-                        const msg = err?.message || String(err);
-                        setErrorMsg(msg);
-                        finalizeAssistant(`**Cloud API error:** ${msg}`);
+            try {
+                while (true) {
+                    setGenPart(round + 1);
+                    let r;
+                    try {
+                        r = await runRound(payload, p);
+                    } catch (err) {
+                        if (err?.name === 'AbortError') {
+                            stopped = true;
+                            break;
+                        }
+                        throw err;
                     }
-                } finally {
-                    abortRef.current = null;
-                    setBusy(false);
+                    if (round === 0) assembledRef.current = r.text || '';
+                    else assembledRef.current += stitchContinuation(assembledRef.current, r.text || '');
+                    setAssistant(assembledRef.current, true);
+                    round += 1;
+                    if (r.stopped) {
+                        stopped = true;
+                        break;
+                    }
+                    if (!isTruncated(assembledRef.current, r.finishReason) || round >= MAX_CONTINUATIONS) break;
+                    payload = [
+                        ...basePayload,
+                        { role: 'assistant', content: assembledRef.current },
+                        { role: 'user', content: CONTINUE_PROMPT },
+                    ];
                 }
+            } catch (err) {
+                const msg = err?.message || String(err);
+                setErrorMsg(msg);
+                setAssistant(assembledRef.current ? `${assembledRef.current}\n\n**Error:** ${msg}` : `**Error:** ${msg}`, false);
+                setBusy(false);
+                setGenPart(0);
                 return;
             }
 
-            workerRef.current?.postMessage({ type: 'generate', messages: payload, params: p.params });
+            setAssistant(assembledRef.current || (stopped ? '⏹ stopped' : ''), false);
+            setBusy(false);
+            setGenPart(0);
+            if (!stopped) void runAgentPipeline(assembledRef.current);
         },
-        [boardName, getProject, getConsole, loadedModelId, workerStatus, finalizeAssistant, runAgentPipeline]
+        [boardName, getProject, getConsole, loadedModelId, workerStatus, runRound, setAssistant, runAgentPipeline]
     );
 
     const handleSend = useCallback(() => {
@@ -494,7 +562,8 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                 </div>
             </div>
             <p className="code-studio-ai-hint">
-                Same backend/keys as <strong>AI Agents</strong>. Writes complete Arduino/ESP32 sketches and applies them to the editor.
+                Same backend/keys as <strong>AI Agents</strong>. Builds complete multi-file Arduino/ESP32 apps and keeps writing past
+                token limits for large programs.
             </p>
             <label className="arduino-ai-agent-toggle" title="After each reply: compile (if server set), flash, then read serial and report back">
                 <input type="checkbox" checked={autoAgent} onChange={(e) => setAutoAgent(e.target.checked)} />
@@ -506,9 +575,8 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                     <div className="code-studio-ai-empty">
                         <Bot size={28} aria-hidden />
                         <p>
-                            Ask for a sketch or a whole app (e.g. “read DHT22 and serve JSON over Wi-Fi, split into files”). The full
-                            project (all files + libraries), board, and recent log are sent each time. Multi-file replies are applied
-                            across the project.
+                            Ask for a whole app (e.g. “build a Wi-Fi weather station: read BME280, serve a JSON API and a web dashboard,
+                            split into files”). The agent plans, writes every file, and continues automatically if the program is long.
                         </p>
                     </div>
                 ) : (
@@ -537,7 +605,7 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                 <textarea
                     className="code-studio-ai-input"
                     rows={2}
-                    placeholder="Describe the sketch or the fix you want…"
+                    placeholder="Describe the app or the fix you want…"
                     value={input}
                     disabled={busy}
                     onChange={(e) => setInput(e.target.value)}
@@ -567,7 +635,9 @@ export default function ArduinoAiPanel({ boardName, getProject, getConsole }) {
                     {busy ? <Loader2 className="code-studio-ai-spin" size={16} /> : null}
                 </div>
             </div>
-            {!prefs.isGeminiBackend && workerStatus === 'loading' ? (
+            {busy && genPart > 1 ? (
+                <p className="code-studio-ai-foot">Writing large program… part {genPart}</p>
+            ) : !prefs.isGeminiBackend && workerStatus === 'loading' ? (
                 <p className="code-studio-ai-foot">Loading local model…</p>
             ) : !isLoaded ? (
                 <p className="code-studio-ai-foot code-studio-ai-foot--warn">Not ready — configure AI Agents.</p>
