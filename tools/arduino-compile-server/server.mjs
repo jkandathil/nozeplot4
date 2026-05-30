@@ -46,7 +46,9 @@ async function compile({ fqbn, sketch, sketchName, files, libraries }) {
     await mkdir(sketchDir, { recursive: true });
     await writeFile(join(sketchDir, mainIno), sketch || '');
     for (const [name, content] of Object.entries(files || {})) {
-        await writeFile(join(sketchDir, basename(String(name)).replace(/[^\w.\-]/g, '_')), String(content));
+        const safe = basename(String(name)).replace(/[^\w.\-]/g, '_');
+        if (/\.(ino|pde)$/i.test(safe)) continue;
+        await writeFile(join(sketchDir, safe), String(content));
     }
 
     let stdout = '';

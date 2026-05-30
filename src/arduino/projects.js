@@ -71,13 +71,15 @@ export function getMainFile(project) {
     return project.files.find((f) => f.id === project.mainFileId) || project.files.find(isMainCandidate) || project.files[0] || null;
 }
 
-/** Extra (non-main) files as a { name: content } map for the compile server. */
+/** Extra companion files for compile (.cpp/.h only — never other .ino sketches). */
 export function extraFilesMap(project, excludeFileId) {
     if (!project) return {};
     const skipId = excludeFileId ?? getMainFile(project)?.id;
     const out = {};
     for (const f of project.files) {
         if (f.id === skipId) continue;
+        // arduino-cli merges every .ino in the same folder into one sketch → duplicate setup()/loop().
+        if (/\.(ino|pde)$/i.test(f.name)) continue;
         out[f.name] = f.content;
     }
     return out;
