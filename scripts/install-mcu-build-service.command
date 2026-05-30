@@ -13,8 +13,13 @@ install_cli() {
   echo "Installing arduino-cli…"
   if command -v brew >/dev/null 2>&1; then
     brew install arduino-cli
-  else
-    echo "Install Homebrew from https://brew.sh then run this script again."
+    return 0
+  fi
+  echo "Homebrew not found — installing arduino-cli directly…"
+  curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v arduino-cli >/dev/null 2>&1; then
+    echo "Could not install arduino-cli. Install Homebrew from https://brew.sh and run this script again."
     read -r -p "Press Enter to close…"
     exit 1
   fi
@@ -39,6 +44,7 @@ cat > "$PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PORT</key><string>8787</string>
+    <key>PATH</key><string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
