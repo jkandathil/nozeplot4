@@ -16,7 +16,7 @@ const LS_COMPILE_URL = 'arduino:compile-server-url';
 export const DEV_COMPILE_BRIDGE_URL = 'http://localhost:8787';
 
 export const BUILD_SERVICE_UNAVAILABLE =
-    'Cloud build service is unavailable. Wait a few seconds and click Build & Flash again.';
+    'Build service not running. On your Mac, double-click scripts/install-mcu-build-service.command once, then retry.';
 
 /** Optional build-time cloud compile URL (set VITE_MCU_COMPILE_URL in CI). */
 export function getBuiltInCompileServerUrl() {
@@ -67,7 +67,7 @@ export function listCompileBridgeCandidates() {
     const baked = getBuiltInCompileServerUrl();
     if (baked) out.push(baked);
     const stored = getCompileServerUrl();
-    if (stored && !out.includes(stored)) out.push(stored);
+    if (stored && !(baked && /localhost|127\.0\.0\.1/.test(stored)) && !out.includes(stored)) out.push(stored);
     const devProxy = getDevProxyCompileUrl();
     if (devProxy && !out.includes(devProxy)) out.push(devProxy);
     if (!out.includes(DEV_COMPILE_BRIDGE_URL)) out.push(DEV_COMPILE_BRIDGE_URL);
@@ -110,13 +110,23 @@ export async function probeCompileServer(baseUrl, { signal, timeoutMs = 4000 } =
     }
 }
 
-/** Find the first reachable compile bridge from cloud / stored / dev candidates. */
-export async function resolveCompileBridgeUrl(options) {
-    for (const url of listCompileBridgeCandidates()) {
-        const ok = await probeCompileServer(url, options);
-        if (ok) {
-            if (url === getBuiltInCompileServerUrl()) setCompileServerUrl(url);
-            return url;
+/** Find the first reachable compile bridge; retries for cold-start services. */
+export async function resolveCompileBridgeUrl(options = {}) {
+    const tries = options.retries ?? 3;
+    const timeoutMs = options.timeoutMs ?? 12000;
+    const candidates = listCompileBridgeCandidates();
+    if (!candidates.length) return '';
+
+    for (let attempt = 0; attempt < tries; attempt += 1) {
+        for (const url of candidates) {
+            const ok = await probeCompileServer(url, { timeoutMs });
+            if (ok) {
+                setCompileServerUrl(url);
+                return url;
+            }
+        }
+        if (attempt + 1 < tries) {
+            await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
         }
     }
     return '';

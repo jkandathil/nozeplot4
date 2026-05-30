@@ -1,4 +1,4 @@
-# On push to main: optionally deploy MCU compile bridge, build app, deploy to gh-pages.
+# On push to main: build with Firebase + deploy dist/ to branch gh-pages.
 name: Deploy to GitHub Pages
 
 on:
@@ -17,17 +17,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy compile bridge to Cloud Run
-        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
-        uses: google-github-actions/auth@v2
+      - id: gcp
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          if [ -n "$GCP_SA_KEY" ] && [ -n "$GCP_PROJECT_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: google-github-actions/auth@v2
+        if: steps.gcp.outputs.enabled == 'true'
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - uses: google-github-actions/setup-gcloud@v2
-        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        if: steps.gcp.outputs.enabled == 'true'
 
-      - name: Build and deploy bridge image
-        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+      - name: Build and deploy bridge to Cloud Run
+        if: steps.gcp.outputs.enabled == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
@@ -54,7 +64,7 @@ jobs:
           REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
           SERVICE: noze-mcu-compile-bridge
         run: |
-          if [ -n "${{ secrets.GCP_SA_KEY }}" ] && [ -n "$PROJECT" ]; then
+          if [ "${{ steps.gcp.outputs.enabled }}" = "true" ] && [ -n "$PROJECT" ]; then
             BRIDGE_URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
             echo "url=$BRIDGE_URL" >> "$GITHUB_OUTPUT"
           else

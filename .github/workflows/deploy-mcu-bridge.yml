@@ -1,9 +1,4 @@
-# Deploy the MCU cloud compile bridge (arduino-cli in Docker) to Google Cloud Run.
-# Required secrets: GCP_PROJECT_ID, GCP_SA_KEY (JSON service account with Cloud Run Admin + Storage Admin)
-# Optional: GCP_REGION (default us-central1)
-#
-# After first deploy, add the service URL to repository secret VITE_MCU_COMPILE_URL
-# (or rely on deploy-pages.yml reading the output from this workflow when chained).
+# Deploy MCU compile bridge to Google Cloud Run (optional — needs GCP_SA_KEY + GCP_PROJECT_ID secrets).
 name: Deploy MCU compile bridge
 
 on:
@@ -19,20 +14,33 @@ permissions:
 
 jobs:
   cloud-run:
-    if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
     runs-on: ubuntu-latest
     outputs:
       url: ${{ steps.url.outputs.url }}
     steps:
       - uses: actions/checkout@v4
 
+      - id: gcp
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          if [ -n "$GCP_SA_KEY" ] && [ -n "$GCP_PROJECT_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: google-github-actions/auth@v2
+        if: steps.gcp.outputs.enabled == 'true'
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - uses: google-github-actions/setup-gcloud@v2
+        if: steps.gcp.outputs.enabled == 'true'
 
       - name: Build and deploy to Cloud Run
+        if: steps.gcp.outputs.enabled == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
@@ -54,6 +62,7 @@ jobs:
             --min-instances 0
 
       - id: url
+        if: steps.gcp.outputs.enabled == 'true'
         env:
           PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
