@@ -16,6 +16,7 @@ install_cli() {
     return 0
   fi
   echo "Homebrew not found — installing arduino-cli directly…"
+  mkdir -p "$HOME/.local/bin"
   curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
   export PATH="$HOME/.local/bin:$PATH"
   if ! command -v arduino-cli >/dev/null 2>&1; then
@@ -59,7 +60,7 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl enable "gui/$(id -u)/com.nozeplot.mcu-bridge"
 launchctl kickstart -k "gui/$(id -u)/com.nozeplot.mcu-bridge"
 
-sleep 2
+sleep 5
 if curl -sf "http://localhost:8787/health" >/dev/null; then
   echo ""
   echo "✓ MCU build service is running at http://localhost:8787"
