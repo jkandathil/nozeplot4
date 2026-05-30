@@ -72,15 +72,23 @@ export function getMainFile(project) {
 }
 
 /** Extra (non-main) files as a { name: content } map for the compile server. */
-export function extraFilesMap(project) {
+export function extraFilesMap(project, excludeFileId) {
     if (!project) return {};
-    const mainId = getMainFile(project)?.id;
+    const skipId = excludeFileId ?? getMainFile(project)?.id;
     const out = {};
     for (const f of project.files) {
-        if (f.id === mainId) continue;
+        if (f.id === skipId) continue;
         out[f.name] = f.content;
     }
     return out;
+}
+
+/** Pick the .ino to compile: active editor tab if it is an .ino, else project main. */
+export function getSketchFileForBuild(project, activeFileId) {
+    if (!project) return null;
+    const active = project.files.find((f) => f.id === activeFileId);
+    if (active && /\.(ino|pde)$/i.test(active.name)) return active;
+    return getMainFile(project);
 }
 
 export function loadProjects() {

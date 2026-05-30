@@ -50,14 +50,27 @@ export function setCompileServerUrl(url) {
     }
 }
 
-/** Ordered list of compile bridge URLs to try (cloud first, dev localhost last). */
+/** Dev-only: Vite proxies /mcu-compile → localhost compile bridge. */
+export function getDevProxyCompileUrl() {
+    if (!import.meta.env.DEV) return '';
+    try {
+        const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+        return `${window.location.origin}${base}/mcu-compile`;
+    } catch {
+        return '';
+    }
+}
+
+/** Ordered list of compile bridge URLs to try (cloud → stored → dev proxy → localhost). */
 export function listCompileBridgeCandidates() {
     const out = [];
     const baked = getBuiltInCompileServerUrl();
     if (baked) out.push(baked);
     const stored = getCompileServerUrl();
     if (stored && !out.includes(stored)) out.push(stored);
-    if (import.meta.env.DEV && !out.includes(DEV_COMPILE_BRIDGE_URL)) out.push(DEV_COMPILE_BRIDGE_URL);
+    const devProxy = getDevProxyCompileUrl();
+    if (devProxy && !out.includes(devProxy)) out.push(devProxy);
+    if (!out.includes(DEV_COMPILE_BRIDGE_URL)) out.push(DEV_COMPILE_BRIDGE_URL);
     return out;
 }
 

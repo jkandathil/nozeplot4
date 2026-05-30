@@ -21,5 +21,13 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
+    // Dev: proxy to local compile bridge (npm run mcu:bridge) so Build works without CORS/URL config.
+    proxy: {
+      '/mcu-compile': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/mcu-compile/, ''),
+      },
+    },
   },
 })

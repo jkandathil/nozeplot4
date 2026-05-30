@@ -32,6 +32,7 @@ import {
     makeProject,
     makeFile,
     getMainFile,
+    getSketchFileForBuild,
     extraFilesMap,
     uniqueFileName,
     isSketchFileName,
@@ -528,16 +529,21 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
     const runCompile = useCallback(async () => {
         const proj = getProjectSnapshotForBuild();
         if (!proj) return { ok: false, log: 'no project' };
-        const main = getMainFile(proj);
-        appendLog(`[build] ${board.name} (${board.fqbn}) · ${proj.name} · ${proj.files.length} file(s)${proj.libraries.length ? ` · libs: ${proj.libraries.join(', ')}` : ''}`);
+        const sketchFile = getSketchFileForBuild(proj, activeFileIdRef.current);
+        if (!sketchFile) {
+            appendLog('[build] No .ino sketch to compile. Add a .ino file or open one in the editor.');
+            return { ok: false, log: 'no sketch' };
+        }
+        const ext = board.protocol === 'esptool' ? '.bin' : '.hex';
+        appendLog(`[build] Compiling ${sketchFile.name} → ${sketchFile.name.replace(/\.(ino|pde)$/i, ext)} (${board.name}, ${board.fqbn})`);
         setBusy('compile');
         setBottomTab('console');
         try {
             const res = await compileSketch({
                 fqbn: board.fqbn,
-                sketch: main?.content || '',
-                sketchName: main?.name || 'sketch.ino',
-                files: extraFilesMap(proj),
+                sketch: sketchFile.content || '',
+                sketchName: sketchFile.name,
+                files: extraFilesMap(proj, sketchFile.id),
                 libraries: proj.libraries,
             });
             if (res.stdout) appendLog(res.stdout.trim());
@@ -549,9 +555,9 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
             let artifact = null;
             if (res.hexText) {
                 parseIntelHex(res.hexText);
-                artifact = { kind: 'avr', hexText: res.hexText, name: `${main?.name || proj.name}.hex` };
+                artifact = { kind: 'avr', hexText: res.hexText, name: `${sketchFile.name.replace(/\.(ino|pde)$/i, '')}.hex` };
             } else if (res.parts?.length) {
-                artifact = { kind: 'esp', parts: res.parts, name: `${main?.name || proj.name}.bin` };
+                artifact = { kind: 'esp', parts: res.parts, name: `${sketchFile.name.replace(/\.(ino|pde)$/i, '')}.bin` };
             }
             if (!artifact) {
                 appendLog('[build] Server returned no hex/bin/parts.');
@@ -634,7 +640,9 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
 
     const buildAndFlash = useCallback(async () => {
         setBottomTab('console');
-        appendLog('[build] Compiling source from editor…');
+        const snap = getProjectSnapshotForBuild();
+        const sketch = snap ? getSketchFileForBuild(snap, activeFileIdRef.current) : null;
+        appendLog(`[build] Build & Flash: ${sketch?.name || 'sketch'} on ${board.name}`);
 
         const url = await resolveCompileBridgeUrl({ timeoutMs: 8000 });
         if (!url) {
@@ -649,7 +657,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         const c = await runCompile();
         if (!c.ok) return c;
         return flashArtifact(c.artifact);
-    }, [runCompile, flashArtifact, appendLog]);
+    }, [board, runCompile, flashArtifact, appendLog, getProjectSnapshotForBuild]);
 
     /* ── Agent action registration ──────────────────────────────────── */
     useEffect(() => {
@@ -777,11 +785,9 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                         ))}
                     </select>
 
-                    {compileServerReady ? (
-                        <button className="arduino-btn" disabled={!!busy} onClick={() => void runCompile()} title="Compile editor source only">
-                            {busy === 'compile' ? <Loader2 className="arduino-spin" size={14} /> : <FileCode2 size={14} />} Verify
-                        </button>
-                    ) : null}
+                    <button className="arduino-btn" disabled={!!busy} onClick={() => void runCompile()} title="Compile the open .ino to .hex or .bin">
+                        {busy === 'compile' ? <Loader2 className="arduino-spin" size={14} /> : <FileCode2 size={14} />} Build
+                    </button>
                     <button
                         className="arduino-btn arduino-btn--primary"
                         disabled={!!busy || boardUnsupported}

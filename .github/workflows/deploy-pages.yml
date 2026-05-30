@@ -1,35 +1,4 @@
-# On push to main: build with Firebase + deploy dist/ to branch gh-pages.
-# FeNOse weights are not in the repo (gitignored); users train or upload models in-app to workspace Model/.
-#
-# Default Firebase web config is inlined below (same as .env.example / local dev) so Pages works without
-# repo secrets. These are public client identifiers; restrict abuse in Google Cloud → Credentials → your
-# browser key (HTTP referrers). Set repository secrets to override any value (e.g. after key rotation).
-#
-# Access control: only emails whose domain is VITE_ALLOWED_EMAIL_DOMAIN (noze.ca below)
-# pass AuthGate after Google or email/password sign-in.
-#
-# 1) GitHub → Settings → Secrets and variables → Actions → New repository secret:
-#    VITE_FIREBASE_API_KEY
-#    VITE_FIREBASE_AUTH_DOMAIN   (e.g. nozeplots4.firebaseapp.com)
-#    VITE_FIREBASE_PROJECT_ID
-#    VITE_FIREBASE_APP_ID
-#    Optional: VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_AUTH_PUBLIC_URL
-#    Optional: VITE_GEMINI_API_KEY (AI Agents → Cloud API; restrict key to your Pages URL in the provider console)
-#
-# 2) Firebase → Authentication → Settings → Authorized domains:
-#    add  YOUR_USERNAME.github.io
-#
-# 3) Google Cloud → Credentials → OAuth Web client → Authorized JavaScript origins:
-#    add  https://YOUR_USERNAME.github.io
-#    add  https://YOUR_USERNAME.github.io/nozeplot4   (if your Vite base path is /nozeplot4/)
-#
-# 4) GitHub → Settings → Pages → Source: Deploy from branch → gh-pages / root
-#
-# Secret scanning: Firebase VITE_FIREBASE_API_KEY is embedded in dist/ JS on purpose (Firebase Web SDK).
-# If GitHub emails about “Google API Key” in gh-pages assets, restrict/rotate the key in Google Cloud
-# (HTTP referrer restrictions). Optionally close the alert after review — it will reappear on new deploys
-# unless GitHub offers an allowlist for your org/repo.
-#
+# On push to main: optionally deploy MCU compile bridge, build app, deploy to gh-pages.
 name: Deploy to GitHub Pages
 
 on:
@@ -41,7 +10,59 @@ permissions:
   contents: write
 
 jobs:
+  deploy-mcu-bridge:
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.url.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy compile bridge to Cloud Run
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+
+      - name: Build and deploy bridge image
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+          SERVICE: noze-mcu-compile-bridge
+        run: |
+          gcloud builds submit tools/arduino-compile-server \
+            --project "$PROJECT" \
+            --tag "gcr.io/$PROJECT/$SERVICE"
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --image "gcr.io/$PROJECT/$SERVICE" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8787 \
+            --memory 2Gi \
+            --timeout 300 \
+            --max-instances 3 \
+            --min-instances 0
+
+      - id: url
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+          SERVICE: noze-mcu-compile-bridge
+        run: |
+          if [ -n "${{ secrets.GCP_SA_KEY }}" ] && [ -n "$PROJECT" ]; then
+            BRIDGE_URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+            echo "url=$BRIDGE_URL" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-deploy:
+    needs: deploy-mcu-bridge
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +74,6 @@ jobs:
 
       - name: Install and build
         env:
-          # Secrets override defaults (defaults = nozeplots4 web app; public client config, same as shipped JS).
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || 'AIzaSyDjMDLpyK6dRaqjYQe-w19VJmvOLJTwcrU' }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || 'nozeplots4.firebaseapp.com' }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || 'nozeplots4' }}
@@ -63,8 +83,7 @@ jobs:
           VITE_ALLOWED_EMAIL_DOMAIN: noze.ca
           VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL || 'https://jkandathil.github.io/nozeplot4' }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
-          # Cloud compile bridge — required for MCU Flash Build & Flash on GitHub Pages.
-          VITE_MCU_COMPILE_URL: ${{ secrets.VITE_MCU_COMPILE_URL }}
+          VITE_MCU_COMPILE_URL: ${{ needs.deploy-mcu-bridge.outputs.url || secrets.VITE_MCU_COMPILE_URL }}
         run: |
           npm ci
           node scripts/checkFirebaseBuildEnv.mjs
