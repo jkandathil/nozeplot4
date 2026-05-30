@@ -1,0 +1,16 @@
+{
+  "name": "noze-arduino-compile-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local arduino-cli wrapper that satisfies the NozePlot MCU Flash compile contract.",
+  "bin": {
+    "noze-arduino-compile-server": "server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
