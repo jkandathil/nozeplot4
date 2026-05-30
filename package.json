@@ -12,6 +12,8 @@
     "lint": "eslint .",
     "test:fenose-synth": "node --test scripts/fenoseSyntheticSelfTest.mjs",
     "preview": "vite preview",
+    "mcu:compile-bridge": "node tools/arduino-compile-server/server.mjs",
+    "mcu:bridge": "bash scripts/start-mcu-compile-bridge.sh",
     "predeploy": "node scripts/checkFirebaseBuildEnv.mjs && npm run build",
     "deploy": "gh-pages -d dist"
   },

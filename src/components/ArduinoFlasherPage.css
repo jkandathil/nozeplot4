@@ -217,6 +217,38 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.arduino-bridge-chip {
+    font-size: 11px;
+    color: #4ade80;
+    background: #0f1a12;
+    border: 1px solid #166534;
+    border-radius: 999px;
+    padding: 4px 9px;
+    text-transform: lowercase;
+}
+.arduino-bridge-chip--off {
+    color: #fbbf24;
+    background: #1a1408;
+    border-color: #854d0e;
+}
+.arduino-firmware-banner-cmd {
+    font-size: 11.5px;
+    background: #121922;
+    border: 1px solid #443318;
+    border-radius: 4px;
+    padding: 2px 6px;
+    color: #fde68a;
+}
+.arduino-settings-cmd {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    background: #121922;
+    border: 1px solid #243040;
+    border-radius: 6px;
+    color: #c0cad6;
+    max-width: 420px;
+}
 
 /* ── Body layout ─────────────────────────────────────────────────── */
 .arduino-body {
