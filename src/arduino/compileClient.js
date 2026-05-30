@@ -1,34 +1,37 @@
 /**
- * Client for a user-provided remote compile server (an arduino-cli wrapper).
+ * Client for the MCU cloud compile bridge (arduino-cli wrapper).
  *
- * The browser cannot run a C/C++ toolchain, so closing the AI "write → compile →
- * flash" loop needs an external service. The expected contract is intentionally
- * simple so a tiny arduino-cli wrapper can satisfy it:
+ * The browser cannot run a C/C++ toolchain. Build & Flash sends editor source to a
+ * hosted HTTPS compile service (VITE_MCU_COMPILE_URL), which returns firmware the
+ * app flashes over Web Serial.
  *
  *   POST {baseUrl}/compile
- *   Request JSON:  {
- *     fqbn: string,
- *     sketch: string,                  // the main .ino source
- *     files?: { [name]: string },      // extra .cpp/.h files placed beside the sketch
- *     libraries?: string[],            // e.g. ["ArduinoJson", "Adafruit GFX@1.11.9"] → arduino-cli lib install
- *   }
- *   Response JSON: {
- *     ok: boolean,
- *     stdout?: string,
- *     stderr?: string,
- *     // exactly one of these, base64-encoded:
- *     hex?: string,                    // AVR .hex (Intel HEX, base64)
- *     bin?: string,                    // single merged ESP .bin (base64)
- *     parts?: { address: number, data: string }[],  // ESP multi-part (base64 each)
- *   }
- *
- * The server URL is configured per-browser in the Arduino page (localStorage).
+ *   Request JSON:  { fqbn, sketch, sketchName?, files?, libraries? }
+ *   Response JSON: { ok, stdout?, stderr?, hex? | bin? | parts? }  (base64 payloads)
  */
 
 const LS_COMPILE_URL = 'arduino:compile-server-url';
 
-/** Bundled local server (tools/arduino-compile-server/server.mjs). Chrome allows https→localhost. */
-export const DEFAULT_COMPILE_SERVER_URL = 'http://localhost:8787';
+/** Dev-only fallback when running `npm run mcu:bridge` locally. */
+export const DEV_COMPILE_BRIDGE_URL = 'http://localhost:8787';
+
+export const BUILD_SERVICE_UNAVAILABLE =
+    'Cloud build service is unavailable. Wait a few seconds and click Build & Flash again.';
+
+/** Optional build-time cloud compile URL (set VITE_MCU_COMPILE_URL in CI). */
+export function getBuiltInCompileServerUrl() {
+    try {
+        const baked = import.meta.env.VITE_MCU_COMPILE_URL;
+        if (baked && String(baked).trim()) return String(baked).trim().replace(/\/+$/, '');
+    } catch {
+        /* ignore */
+    }
+    return '';
+}
+
+export function hasCloudCompileService() {
+    return !!getBuiltInCompileServerUrl();
+}
 
 export function getCompileServerUrl() {
     try {
@@ -47,18 +50,25 @@ export function setCompileServerUrl(url) {
     }
 }
 
-export function base64ToBytes(b64) {
-    const bin = atob(String(b64 || ''));
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+/** Ordered list of compile bridge URLs to try (cloud first, dev localhost last). */
+export function listCompileBridgeCandidates() {
+    const out = [];
+    const baked = getBuiltInCompileServerUrl();
+    if (baked) out.push(baked);
+    const stored = getCompileServerUrl();
+    if (stored && !out.includes(stored)) out.push(stored);
+    if (import.meta.env.DEV && !out.includes(DEV_COMPILE_BRIDGE_URL)) out.push(DEV_COMPILE_BRIDGE_URL);
     return out;
 }
 
-/**
- * Check whether a compile server is reachable (GET /health or GET /).
- * @returns {Promise<string|null>} Normalized base URL if healthy, else null.
- */
-export async function probeCompileServer(baseUrl = DEFAULT_COMPILE_SERVER_URL, { signal, timeoutMs = 2500 } = {}) {
+export function base64ToBytes(b64) {
+    const bin = atob(String(b64 || ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+}
+
+export async function probeCompileServer(baseUrl, { signal, timeoutMs = 4000 } = {}) {
     const url = String(baseUrl || '').replace(/\/+$/, '');
     if (!url) return null;
     const ac = new AbortController();
@@ -87,14 +97,14 @@ export async function probeCompileServer(baseUrl = DEFAULT_COMPILE_SERVER_URL, {
     }
 }
 
-/** Use stored URL, or auto-detect the bundled local server on localhost:8787. */
-export async function ensureCompileServerUrl(options) {
-    const existing = getCompileServerUrl();
-    if (existing) return existing;
-    const found = await probeCompileServer(DEFAULT_COMPILE_SERVER_URL, options);
-    if (found) {
-        setCompileServerUrl(found);
-        return found;
+/** Find the first reachable compile bridge from cloud / stored / dev candidates. */
+export async function resolveCompileBridgeUrl(options) {
+    for (const url of listCompileBridgeCandidates()) {
+        const ok = await probeCompileServer(url, options);
+        if (ok) {
+            if (url === getBuiltInCompileServerUrl()) setCompileServerUrl(url);
+            return url;
+        }
     }
     return '';
 }
@@ -109,22 +119,21 @@ export function bytesToBase64(bytes) {
     return btoa(bin);
 }
 
+function resolveCompileUrl(baseUrl) {
+    if (baseUrl) return String(baseUrl).replace(/\/+$/, '');
+    for (const url of listCompileBridgeCandidates()) {
+        if (url) return url;
+    }
+    return '';
+}
+
 /**
- * Compile a sketch on the remote server.
- *
- * @param {object} args
- * @param {string} args.fqbn   Fully-qualified board name (board.fqbn)
- * @param {string} args.sketch Sketch source
- * @param {Record<string,string>} [args.files] Extra files by name
- * @param {string[]} [args.libraries] External libraries to install before compiling
- * @param {string} [args.baseUrl] Override server URL (else stored value)
- * @param {AbortSignal} [args.signal]
- * @returns {Promise<{ ok: boolean, stdout: string, stderr: string, hex?: Uint8Array, parts?: {address:number,data:Uint8Array}[] }>}
+ * Compile a sketch on the cloud compile bridge.
  */
-export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, signal }) {
-    const url = (baseUrl || getCompileServerUrl()).replace(/\/+$/, '');
+export async function compileSketch({ fqbn, sketch, sketchName, files, libraries, baseUrl, signal }) {
+    const url = resolveCompileUrl(baseUrl);
     if (!url) {
-        throw new Error('No compile server configured. Set a compile server URL, or upload a precompiled .hex/.bin.');
+        throw new Error(BUILD_SERVICE_UNAVAILABLE);
     }
     const res = await fetch(`${url}/compile`, {
         method: 'POST',
@@ -132,6 +141,7 @@ export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, s
         body: JSON.stringify({
             fqbn,
             sketch,
+            sketchName: sketchName || undefined,
             files: files && Object.keys(files).length ? files : undefined,
             libraries: libraries && libraries.length ? libraries : undefined,
         }),
@@ -144,7 +154,7 @@ export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, s
         } catch {
             /* ignore */
         }
-        throw new Error(`Compile server HTTP ${res.status}. ${detail.slice(0, 400)}`);
+        throw new Error(`Build service HTTP ${res.status}. ${detail.slice(0, 400)}`);
     }
     const json = await res.json();
     const result = {
@@ -155,7 +165,6 @@ export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, s
     if (!json.ok) return result;
 
     if (json.hex) {
-        // hex may be base64 of Intel HEX text, or raw Intel HEX text
         const raw = json.hex;
         if (/^[\s:0-9A-Fa-f]+$/.test(raw) && raw.includes(':')) {
             result.hexText = raw;
@@ -168,4 +177,10 @@ export async function compileSketch({ fqbn, sketch, files, libraries, baseUrl, s
         result.parts = [{ address: 0, data: base64ToBytes(json.bin) }];
     }
     return result;
+}
+
+// Legacy exports used during migration
+export const DEFAULT_COMPILE_SERVER_URL = DEV_COMPILE_BRIDGE_URL;
+export async function ensureCompileServerUrl(options) {
+    return resolveCompileBridgeUrl(options);
 }

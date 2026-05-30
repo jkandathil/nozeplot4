@@ -1,0 +1,13 @@
+# One-click deploy: Render Dashboard → New → Blueprint → connect this repo.
+# After deploy, copy the service URL into GitHub secret VITE_MCU_COMPILE_URL (or let deploy-pages.yml pick it up).
+services:
+  - type: web
+    name: noze-mcu-compile-bridge
+    runtime: docker
+    dockerfilePath: ./tools/arduino-compile-server/Dockerfile
+    dockerContext: ./tools/arduino-compile-server
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8787

@@ -63,6 +63,8 @@ jobs:
           VITE_ALLOWED_EMAIL_DOMAIN: noze.ca
           VITE_AUTH_PUBLIC_URL: ${{ secrets.VITE_AUTH_PUBLIC_URL || 'https://jkandathil.github.io/nozeplot4' }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          # Cloud compile bridge — required for MCU Flash Build & Flash on GitHub Pages.
+          VITE_MCU_COMPILE_URL: ${{ secrets.VITE_MCU_COMPILE_URL }}
         run: |
           npm ci
           node scripts/checkFirebaseBuildEnv.mjs

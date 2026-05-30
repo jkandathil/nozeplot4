@@ -1,0 +1,64 @@
+# Deploy the MCU cloud compile bridge (arduino-cli in Docker) to Google Cloud Run.
+# Required secrets: GCP_PROJECT_ID, GCP_SA_KEY (JSON service account with Cloud Run Admin + Storage Admin)
+# Optional: GCP_REGION (default us-central1)
+#
+# After first deploy, add the service URL to repository secret VITE_MCU_COMPILE_URL
+# (or rely on deploy-pages.yml reading the output from this workflow when chained).
+name: Deploy MCU compile bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/arduino-compile-server/**'
+      - '.github/workflows/deploy-mcu-bridge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-run:
+    if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.url.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and deploy to Cloud Run
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+          SERVICE: noze-mcu-compile-bridge
+        run: |
+          gcloud builds submit tools/arduino-compile-server \
+            --project "$PROJECT" \
+            --tag "gcr.io/$PROJECT/$SERVICE"
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --image "gcr.io/$PROJECT/$SERVICE" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8787 \
+            --memory 2Gi \
+            --timeout 300 \
+            --max-instances 3 \
+            --min-instances 0
+
+      - id: url
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+          SERVICE: noze-mcu-compile-bridge
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "MCU compile bridge → $URL"

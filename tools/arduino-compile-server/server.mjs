@@ -36,12 +36,15 @@ async function readBody(req) {
     return Buffer.concat(chunks).toString('utf8');
 }
 
-async function compile({ fqbn, sketch, files, libraries }) {
+async function compile({ fqbn, sketch, sketchName, files, libraries }) {
     if (!fqbn) return { ok: false, stderr: 'Missing fqbn.' };
     const root = await mkdtemp(join(tmpdir(), 'noze-sketch-'));
-    const sketchDir = join(root, 'sketch');
+    const rawName = basename(String(sketchName || 'sketch.ino'));
+    const sketchBase = rawName.replace(/\.(ino|pde)$/i, '') || 'sketch';
+    const mainIno = /\.(ino|pde)$/i.test(rawName) ? rawName : `${sketchBase}.ino`;
+    const sketchDir = join(root, sketchBase);
     await mkdir(sketchDir, { recursive: true });
-    await writeFile(join(sketchDir, 'sketch.ino'), sketch || '');
+    await writeFile(join(sketchDir, mainIno), sketch || '');
     for (const [name, content] of Object.entries(files || {})) {
         await writeFile(join(sketchDir, basename(String(name)).replace(/[^\w.\-]/g, '_')), String(content));
     }
@@ -128,7 +131,7 @@ createServer(async (req, res) => {
     }
     res.writeHead(404);
     res.end('Not found');
-}).listen(PORT, () => {
-    console.log(`NozePlot Arduino compile server → http://localhost:${PORT}`);
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`NozePlot MCU compile bridge → http://0.0.0.0:${PORT}`);
     console.log(`Using CLI: ${CLI}`);
 });

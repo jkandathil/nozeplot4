@@ -4,7 +4,6 @@ import {
     Cpu,
     Usb,
     Unplug,
-    Upload,
     Zap,
     RefreshCw,
     Trash2,
@@ -41,8 +40,17 @@ import {
 } from '../arduino/projects.js';
 import { flashAvr } from '../arduino/stk500.js';
 import { flashEsp } from '../arduino/esptoolFlasher.js';
-import { parseIntelHex, looksLikeIntelHex } from '../arduino/intelHex.js';
-import { compileSketch, getCompileServerUrl, setCompileServerUrl, ensureCompileServerUrl, probeCompileServer, DEFAULT_COMPILE_SERVER_URL } from '../arduino/compileClient.js';
+import { parseIntelHex } from '../arduino/intelHex.js';
+import {
+    compileSketch,
+    getCompileServerUrl,
+    setCompileServerUrl,
+    resolveCompileBridgeUrl,
+    hasCloudCompileService,
+    getBuiltInCompileServerUrl,
+    BUILD_SERVICE_UNAVAILABLE,
+    DEV_COMPILE_BRIDGE_URL,
+} from '../arduino/compileClient.js';
 import { isWebSerialSupported } from '../arduino/serialIO.js';
 import {
     registerArduinoEditorApi,
@@ -123,8 +131,9 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
             return DEFAULT_BOARD_ID;
         }
     });
-    const [compileUrl, setCompileUrl] = useState(() => getCompileServerUrl());
-    const [compileServerReady, setCompileServerReady] = useState(() => !!getCompileServerUrl());
+    const [compileUrl, setCompileUrl] = useState(() => getBuiltInCompileServerUrl() || getCompileServerUrl());
+    const [compileServerReady, setCompileServerReady] = useState(false);
+    const cloudCompile = hasCloudCompileService();
     const [showSettings, setShowSettings] = useState(false);
     const [showLibs, setShowLibs] = useState(false);
     const [libDraft, setLibDraft] = useState('');
@@ -151,9 +160,10 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
     const serialLinesRef = useRef([]);
     const flashLogRef = useRef('');
     const lastArtifactRef = useRef(null);
-    const fileInputRef = useRef(null);
     const importInputRef = useRef(null);
     const projectsRef = useRef(projects);
+    const activeProjectIdRef = useRef(activeProjectId);
+    const activeFileIdRef = useRef(activeFileId);
 
     const board = useMemo(() => getBoardById(boardId) || BOARDS[0], [boardId]);
     const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0];
@@ -164,6 +174,12 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         projectsRef.current = projects;
         persistProjects(projects);
     }, [projects]);
+    useEffect(() => {
+        activeProjectIdRef.current = activeProjectId;
+    }, [activeProjectId]);
+    useEffect(() => {
+        activeFileIdRef.current = activeFileId;
+    }, [activeFileId]);
     useEffect(() => persistActiveProjectId(activeProjectId), [activeProjectId]);
     useEffect(() => {
         serialLinesRef.current = serialLines;
@@ -189,21 +205,11 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
     useEffect(() => {
         let cancelled = false;
         (async () => {
-            const existing = getCompileServerUrl();
-            if (existing) {
-                const ok = await probeCompileServer(existing);
-                if (!cancelled) {
-                    setCompileServerReady(!!ok);
-                    if (!ok) appendLog(`[compile] Saved server not reachable: ${existing}`);
-                }
-                return;
-            }
-            const found = await ensureCompileServerUrl();
+            const found = await resolveCompileBridgeUrl();
             if (cancelled) return;
             if (found) {
                 setCompileUrl(found);
                 setCompileServerReady(true);
-                appendLog(`[compile] Local compile server detected at ${found}`);
             } else {
                 setCompileServerReady(false);
             }
@@ -211,7 +217,6 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         return () => {
             cancelled = true;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
     }, []);
 
     const appendLog = useCallback((text) => {
@@ -506,48 +511,63 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
 
     useEffect(() => () => void stopMonitor(), [stopMonitor]);
 
+    const getProjectSnapshotForBuild = useCallback(() => {
+        const proj = projectsRef.current.find((p) => p.id === activeProjectIdRef.current) || projectsRef.current[0];
+        if (!proj) return null;
+        const editor = editorRef.current;
+        const fileId = activeFileIdRef.current;
+        if (!editor || !fileId) return proj;
+        const live = editor.getValue();
+        return {
+            ...proj,
+            files: proj.files.map((f) => (f.id === fileId ? { ...f, content: live } : f)),
+        };
+    }, []);
+
     /* ── Compile ────────────────────────────────────────────────────── */
     const runCompile = useCallback(async () => {
-        const proj = projectsRef.current.find((p) => p.id === activeProjectId) || projectsRef.current[0];
+        const proj = getProjectSnapshotForBuild();
+        if (!proj) return { ok: false, log: 'no project' };
         const main = getMainFile(proj);
-        appendLog(`[compile] ${board.name} (${board.fqbn}) · ${proj.name} · ${proj.files.length} file(s)${proj.libraries.length ? ` · libs: ${proj.libraries.join(', ')}` : ''}`);
+        appendLog(`[build] ${board.name} (${board.fqbn}) · ${proj.name} · ${proj.files.length} file(s)${proj.libraries.length ? ` · libs: ${proj.libraries.join(', ')}` : ''}`);
         setBusy('compile');
         setBottomTab('console');
         try {
             const res = await compileSketch({
                 fqbn: board.fqbn,
                 sketch: main?.content || '',
+                sketchName: main?.name || 'sketch.ino',
                 files: extraFilesMap(proj),
                 libraries: proj.libraries,
             });
             if (res.stdout) appendLog(res.stdout.trim());
             if (res.stderr) appendLog(res.stderr.trim());
             if (!res.ok) {
-                appendLog('[compile] FAILED');
+                appendLog('[build] FAILED');
                 return { ok: false, log: res.stderr || res.stdout || 'compile failed' };
             }
             let artifact = null;
             if (res.hexText) {
                 parseIntelHex(res.hexText);
-                artifact = { kind: 'avr', hexText: res.hexText, name: `${proj.name}.hex` };
+                artifact = { kind: 'avr', hexText: res.hexText, name: `${main?.name || proj.name}.hex` };
             } else if (res.parts?.length) {
-                artifact = { kind: 'esp', parts: res.parts, name: `${proj.name}.bin` };
+                artifact = { kind: 'esp', parts: res.parts, name: `${main?.name || proj.name}.bin` };
             }
             if (!artifact) {
-                appendLog('[compile] Server returned no hex/bin/parts.');
+                appendLog('[build] Server returned no hex/bin/parts.');
                 return { ok: false, log: 'no artifact returned' };
             }
             setLastArtifact(artifact);
             lastArtifactRef.current = artifact;
-            appendLog(`[compile] OK → ${artifact.name}`);
+            appendLog(`[build] OK → ${artifact.name}`);
             return { ok: true, log: res.stdout || 'compiled', artifact };
         } catch (e) {
-            appendLog(`[compile] ${e?.message || e}`);
+            appendLog(`[build] ${e?.message || e}`);
             return { ok: false, log: e?.message || String(e) };
         } finally {
             setBusy('');
         }
-    }, [activeProjectId, board, appendLog]);
+    }, [board, appendLog, getProjectSnapshotForBuild]);
 
     /* ── Flash ──────────────────────────────────────────────────────── */
     const onFlashProgress = useCallback(
@@ -569,9 +589,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                 return { ok: false, log: board.unsupportedReason || 'unsupported board' };
             }
             if (!artifact) {
-                appendLog('[flash] No firmware loaded yet.');
-                appendLog('[flash] • Upload .hex: Arduino IDE → Sketch → Export Compiled Binary, then click Binary here.');
-                appendLog(`[flash] • Or compile from source: run the local server, set URL to ${DEFAULT_COMPILE_SERVER_URL} in Settings, then Flash again.`);
+                appendLog('[flash] No firmware artifact from build step.');
                 return { ok: false, log: 'no firmware' };
             }
             let p = portRef.current;
@@ -614,68 +632,24 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         [board, requestPort, stopMonitor, startMonitor, onFlashProgress, appendLog]
     );
 
-    const flashCurrent = useCallback(async () => {
-        const wantKind = board.protocol === 'esptool' ? 'esp' : 'avr';
-        let artifact = lastArtifactRef.current;
+    const buildAndFlash = useCallback(async () => {
         setBottomTab('console');
+        appendLog('[build] Compiling source from editor…');
 
-        if (!artifact || artifact.kind !== wantKind) {
-            let url = getCompileServerUrl();
-            if (!url) {
-                url = await ensureCompileServerUrl();
-                if (url) {
-                    setCompileUrl(url);
-                    setCompileServerReady(true);
-                    appendLog(`[compile] Local compile server detected at ${url}`);
-                }
-            }
-            if (url) {
-                const c = await runCompile();
-                if (!c.ok) return c;
-                artifact = c.artifact;
-            }
+        const url = await resolveCompileBridgeUrl({ timeoutMs: 8000 });
+        if (!url) {
+            setCompileServerReady(false);
+            appendLog(`[build] ${BUILD_SERVICE_UNAVAILABLE}`);
+            return { ok: false, log: 'no build service' };
         }
+        setCompileUrl(url);
+        setCompileServerReady(true);
+        setCompileServerUrl(url);
 
-        if (!artifact) {
-            setShowSettings(true);
-            appendLog('[flash] Cannot flash yet — no firmware.');
-            appendLog('[flash] Quick fix for Arduino Uno: export a .hex from Arduino IDE, click Binary, then Flash.');
-            appendLog(`[flash] Or start the compile server locally and set ${DEFAULT_COMPILE_SERVER_URL} in Settings (opened above).`);
-            return { ok: false, log: 'no firmware' };
-        }
-
-        return flashArtifact(artifact);
-    }, [board, runCompile, flashArtifact, appendLog]);
-
-    /* ── Upload precompiled binary ──────────────────────────────────── */
-    const handleUploadBinary = useCallback(
-        async (file) => {
-            if (!file) return;
-            const name = file.name;
-            try {
-                if (/\.hex$/i.test(name)) {
-                    const text = await file.text();
-                    if (!looksLikeIntelHex(text)) throw new Error('Not a valid Intel HEX file.');
-                    parseIntelHex(text);
-                    const a = { kind: 'avr', hexText: text, name };
-                    setLastArtifact(a);
-                    lastArtifactRef.current = a;
-                    appendLog(`[upload] AVR HEX loaded: ${name}. Ready to Flash.`);
-                } else if (/\.bin$/i.test(name)) {
-                    const buf = new Uint8Array(await file.arrayBuffer());
-                    const a = { kind: 'esp', bytes: buf, parts: [{ address: board.appOffset || 0x10000, data: buf }], name };
-                    setLastArtifact(a);
-                    lastArtifactRef.current = a;
-                    appendLog(`[upload] ESP binary loaded: ${name} (${buf.length} B) @ 0x${(board.appOffset || 0x10000).toString(16)}.`);
-                } else {
-                    throw new Error('Unsupported file. Use .hex (AVR) or .bin (ESP).');
-                }
-            } catch (e) {
-                appendLog(`[upload] ${e?.message || e}`);
-            }
-        },
-        [board, appendLog]
-    );
+        const c = await runCompile();
+        if (!c.ok) return c;
+        return flashArtifact(c.artifact);
+    }, [runCompile, flashArtifact, appendLog]);
 
     /* ── Agent action registration ──────────────────────────────────── */
     useEffect(() => {
@@ -689,7 +663,8 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                 };
             },
             compile: () => runCompile(),
-            flash: () => flashCurrent(),
+            flash: () => buildAndFlash(),
+            buildAndFlash: () => buildAndFlash(),
             readSerial: async (ms) => {
                 if (!monitorOpenRef.current) await startMonitor();
                 const before = serialLinesRef.current.length;
@@ -703,7 +678,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
             }),
         });
         return () => registerArduinoAgentActions(null);
-    }, [activeProjectId, runCompile, flashCurrent, startMonitor, board]);
+    }, [activeProjectId, runCompile, buildAndFlash, startMonitor, board]);
 
     const handleSaveFirmware = useCallback(() => {
         if (!lastArtifact || !onSaveBinary) return;
@@ -715,18 +690,18 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
 
     const handleProbeCompileServer = useCallback(async () => {
         setBottomTab('console');
-        appendLog('[compile] Checking for local compile server…');
-        const found = await probeCompileServer(compileUrl.trim() || DEFAULT_COMPILE_SERVER_URL);
+        appendLog('[build] Connecting to cloud build service…');
+        const found = await resolveCompileBridgeUrl({ timeoutMs: 8000 });
         if (found) {
             setCompileUrl(found);
             setCompileServerUrl(found);
             setCompileServerReady(true);
-            appendLog(`[compile] Server OK at ${found}`);
+            appendLog('[build] Build service ready.');
         } else {
             setCompileServerReady(false);
-            appendLog(`[compile] No server at ${compileUrl.trim() || DEFAULT_COMPILE_SERVER_URL}. Start it with: node tools/arduino-compile-server/server.mjs`);
+            appendLog(`[build] ${BUILD_SERVICE_UNAVAILABLE}`);
         }
-    }, [compileUrl, appendLog]);
+    }, [appendLog]);
 
     const pct = progress && progress.total > 0 ? Math.round((progress.written / progress.total) * 100) : null;
     const boardUnsupported = board.protocol === 'unsupported';
@@ -802,53 +777,51 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                         ))}
                     </select>
 
-                    {compileServerReady || getCompileServerUrl() ? (
-                        <button className="arduino-btn" disabled={!!busy} onClick={() => void runCompile()} title="Compile via remote server">
+                    {compileServerReady ? (
+                        <button className="arduino-btn" disabled={!!busy} onClick={() => void runCompile()} title="Compile editor source only">
                             {busy === 'compile' ? <Loader2 className="arduino-spin" size={14} /> : <FileCode2 size={14} />} Verify
                         </button>
-                    ) : null}
-                    {lastArtifact ? (
-                        <span className="arduino-firmware-chip" title="Loaded firmware">
-                            {lastArtifact.name}
-                        </span>
                     ) : null}
                     <button
                         className="arduino-btn arduino-btn--primary"
                         disabled={!!busy || boardUnsupported}
-                        onClick={() => void flashCurrent()}
-                        title={boardUnsupported ? board.unsupportedReason : 'Compile (if server set) and flash'}
+                        onClick={() => void buildAndFlash()}
+                        title={boardUnsupported ? board.unsupportedReason : 'Compile editor source, then flash to the board'}
                     >
-                        {busy === 'flash' ? <Loader2 className="arduino-spin" size={14} /> : <Zap size={14} />} Flash
+                        {busy === 'compile' || busy === 'flash' ? (
+                            <Loader2 className="arduino-spin" size={14} />
+                        ) : (
+                            <Zap size={14} />
+                        )}{' '}
+                        Build &amp; Flash
                     </button>
-                    <button className="arduino-btn" onClick={() => fileInputRef.current?.click()} title="Upload precompiled .hex/.bin">
-                        <Upload size={14} /> Binary
-                    </button>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".hex,.bin"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void handleUploadBinary(f);
-                            e.target.value = '';
-                        }}
-                    />
+                    {lastArtifact ? (
+                        <span className="arduino-firmware-chip" title="Last built firmware">
+                            {lastArtifact.name}
+                        </span>
+                    ) : null}
+                    {compileServerReady ? (
+                        <span className="arduino-bridge-chip" title="Cloud build service connected">
+                            build ready
+                        </span>
+                    ) : (
+                        <span className="arduino-bridge-chip arduino-bridge-chip--off" title="Cloud build service starting">
+                            build offline
+                        </span>
+                    )}
                     <button className={`arduino-btn ${showSettings ? 'arduino-btn--active' : ''}`} onClick={() => setShowSettings((s) => !s)} title="Settings">
                         <Settings2 size={14} />
                     </button>
                 </div>
             </header>
 
-            {!lastArtifact ? (
+            {!compileServerReady ? (
                 <div className="arduino-firmware-banner">
-                    <strong>No firmware loaded.</strong> Flash needs a compiled <code>.hex</code> (Uno/Nano) or <code>.bin</code> (ESP).
+                    <strong>Cloud build service starting.</strong> Write your sketch, select board and port, then click{' '}
+                    <strong>Build &amp; Flash</strong> — the app compiles your editor code and programs the board.
                     <span className="arduino-firmware-banner-actions">
-                        <button type="button" className="arduino-btn" onClick={() => fileInputRef.current?.click()}>
-                            <Upload size={14} /> Upload .hex/.bin
-                        </button>
-                        <button type="button" className="arduino-btn" onClick={() => setShowSettings(true)}>
-                            <Settings2 size={14} /> Compile server setup
+                        <button type="button" className="arduino-btn" onClick={() => void handleProbeCompileServer()}>
+                            <RefreshCw size={14} /> Retry connection
                         </button>
                     </span>
                 </div>
@@ -857,7 +830,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
             {showLibs ? (
                 <div className="arduino-libs">
                     <div className="arduino-libs-head">
-                        <Library size={14} /> <strong>{activeProject?.name}</strong> libraries — installed by the compile server before building.
+                        <Library size={14} /> <strong>{activeProject?.name}</strong> libraries — installed by the cloud build service before compiling.
                     </div>
                     <div className="arduino-libs-input">
                         <input
@@ -892,50 +865,41 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
 
             {showSettings ? (
                 <div className="arduino-settings">
-                    <label className="arduino-settings-row">
-                        <span>Remote compile server URL</span>
-                        <div className="arduino-settings-url-row">
-                            <input
-                                type="text"
-                                placeholder={DEFAULT_COMPILE_SERVER_URL}
-                                value={compileUrl}
-                                onChange={(e) => setCompileUrl(e.target.value)}
-                                onBlur={() => {
-                                    const trimmed = compileUrl.trim();
-                                    setCompileServerUrl(trimmed);
-                                    setCompileServerReady(!!trimmed);
-                                }}
-                            />
-                            <button type="button" className="arduino-btn" onClick={() => void handleProbeCompileServer()}>
-                                Test connection
-                            </button>
-                            <button
-                                type="button"
-                                className="arduino-btn"
-                                onClick={() => {
-                                    setCompileUrl(DEFAULT_COMPILE_SERVER_URL);
-                                    setCompileServerUrl(DEFAULT_COMPILE_SERVER_URL);
-                                }}
-                            >
-                                Use localhost
-                            </button>
-                        </div>
-                    </label>
                     <p className="arduino-settings-hint">
-                        The browser cannot compile C/C++. To build from source, run the bundled server locally:{' '}
-                        <code>node tools/arduino-compile-server/server.mjs</code> (needs <code>arduino-cli</code> +{' '}
-                        <code>arduino-cli core install arduino:avr</code> for Uno). Then set URL to{' '}
-                        <code>{DEFAULT_COMPILE_SERVER_URL}</code> and click <strong>Verify</strong> or <strong>Flash</strong>.
+                        <strong>Build &amp; Flash</strong> compiles your editor source in the cloud to AVR <code>.hex</code> or ESP{' '}
+                        <code>.bin</code>, then flashes over Web Serial. No Arduino IDE or manual file export needed.
                     </p>
-                    <p className="arduino-settings-hint">
-                        <strong>Fastest path for Arduino Uno:</strong> Arduino IDE → Sketch → Export Compiled Binary → upload the{' '}
-                        <code>.ino.hex</code> file here via <strong>Binary</strong>, then Flash — no compile server needed.
-                    </p>
+                    {cloudCompile ? (
+                        <p className="arduino-settings-ok">
+                            Cloud build service configured{compileServerReady ? ' and connected' : ' (connecting…)'}.
+                        </p>
+                    ) : import.meta.env.DEV ? (
+                        <>
+                            <p className="arduino-settings-hint">Local dev: optional compile bridge URL (defaults to {DEV_COMPILE_BRIDGE_URL}).</p>
+                            <label className="arduino-settings-row">
+                                <span>Dev compile bridge URL</span>
+                                <div className="arduino-settings-url-row">
+                                    <input
+                                        type="text"
+                                        placeholder={DEV_COMPILE_BRIDGE_URL}
+                                        value={compileUrl}
+                                        onChange={(e) => setCompileUrl(e.target.value)}
+                                        onBlur={() => setCompileServerUrl(compileUrl.trim())}
+                                    />
+                                    <button type="button" className="arduino-btn" onClick={() => void handleProbeCompileServer()}>
+                                        Test
+                                    </button>
+                                </div>
+                            </label>
+                        </>
+                    ) : (
+                        <p className="arduino-settings-warn">Cloud build service is not configured for this deployment.</p>
+                    )}
                     {compileServerReady ? (
-                        <p className="arduino-settings-ok">Compile server reachable{compileUrl ? ` at ${compileUrl}` : ''}.</p>
-                    ) : compileUrl.trim() ? (
-                        <p className="arduino-settings-warn">Server not reachable. Start the local server or upload a precompiled .hex/.bin.</p>
-                    ) : null}
+                        <p className="arduino-settings-ok">Build service online.</p>
+                    ) : (
+                        <p className="arduino-settings-warn">{BUILD_SERVICE_UNAVAILABLE}</p>
+                    )}
                     {boardUnsupported ? <p className="arduino-settings-warn">{board.unsupportedReason}</p> : null}
                 </div>
             ) : null}
@@ -1171,7 +1135,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                             </div>
                         ) : null}
                         {bottomTab === 'console' ? (
-                            <pre className="arduino-console">{flashLog || 'Ready. Select a board and a port.\nWrite or generate a sketch, then Flash.'}</pre>
+                            <pre className="arduino-console">{flashLog || 'Write or generate a sketch, select board and port, then Build & Flash.'}</pre>
                         ) : (
                             <div className="arduino-serial">
                                 <pre className="arduino-serial-out">
