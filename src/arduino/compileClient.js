@@ -27,6 +27,9 @@
 
 const LS_COMPILE_URL = 'arduino:compile-server-url';
 
+/** Bundled local server (tools/arduino-compile-server/server.mjs). Chrome allows https→localhost. */
+export const DEFAULT_COMPILE_SERVER_URL = 'http://localhost:8787';
+
 export function getCompileServerUrl() {
     try {
         return localStorage.getItem(LS_COMPILE_URL) || '';
@@ -49,6 +52,51 @@ export function base64ToBytes(b64) {
     const out = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
     return out;
+}
+
+/**
+ * Check whether a compile server is reachable (GET /health or GET /).
+ * @returns {Promise<string|null>} Normalized base URL if healthy, else null.
+ */
+export async function probeCompileServer(baseUrl = DEFAULT_COMPILE_SERVER_URL, { signal, timeoutMs = 2500 } = {}) {
+    const url = String(baseUrl || '').replace(/\/+$/, '');
+    if (!url) return null;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    if (signal) {
+        if (signal.aborted) {
+            clearTimeout(timer);
+            return null;
+        }
+        signal.addEventListener('abort', () => ac.abort(), { once: true });
+    }
+    try {
+        for (const path of ['/health', '']) {
+            try {
+                const res = await fetch(`${url}${path}`, { signal: ac.signal });
+                if (!res.ok) continue;
+                const json = await res.json();
+                if (json?.ok) return url;
+            } catch {
+                /* try next path */
+            }
+        }
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** Use stored URL, or auto-detect the bundled local server on localhost:8787. */
+export async function ensureCompileServerUrl(options) {
+    const existing = getCompileServerUrl();
+    if (existing) return existing;
+    const found = await probeCompileServer(DEFAULT_COMPILE_SERVER_URL, options);
+    if (found) {
+        setCompileServerUrl(found);
+        return found;
+    }
+    return '';
 }
 
 export function bytesToBase64(bytes) {
