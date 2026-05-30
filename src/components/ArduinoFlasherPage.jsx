@@ -42,6 +42,7 @@ import {
 import { flashAvr } from '../arduino/stk500.js';
 import { flashEsp } from '../arduino/esptoolFlasher.js';
 import { parseIntelHex } from '../arduino/intelHex.js';
+import { boardSketchMismatchWarning, explainCompileFailure } from '../arduino/sketchBoardCheck.js';
 import {
     compileSketch,
     getCompileServerUrl,
@@ -536,6 +537,13 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         }
         const ext = board.protocol === 'esptool' ? '.bin' : '.hex';
         appendLog(`[build] Compiling ${sketchFile.name} → ${sketchFile.name.replace(/\.(ino|pde)$/i, ext)} (${board.name}, ${board.fqbn})`);
+
+        const mismatch = boardSketchMismatchWarning(sketchFile.content, board);
+        if (mismatch) {
+            appendLog(`[build] Board mismatch: ${mismatch}`);
+            return { ok: false, log: 'board mismatch' };
+        }
+
         setBusy('compile');
         setBottomTab('console');
         try {
@@ -550,6 +558,8 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
             if (res.stdout) appendLog(res.stdout.trim());
             if (res.stderr) appendLog(res.stderr.trim());
             if (!res.ok) {
+                const hint = explainCompileFailure(res.stderr, board);
+                if (hint) appendLog(`[build] Hint: ${hint}`);
                 appendLog('[build] FAILED');
                 return { ok: false, log: res.stderr || res.stdout || 'compile failed' };
             }
