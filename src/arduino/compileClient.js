@@ -16,7 +16,7 @@ const LS_COMPILE_URL = 'arduino:compile-server-url';
 export const DEV_COMPILE_BRIDGE_URL = 'http://localhost:8787';
 
 export const BUILD_SERVICE_UNAVAILABLE =
-    'Build service not running. On your Mac, double-click scripts/install-mcu-build-service.command once, then retry.';
+    'Cloud build service is unavailable right now. It may be waking up — wait a few seconds and click Build & Flash again.';
 
 /** Optional build-time cloud compile URL (set VITE_MCU_COMPILE_URL in CI). */
 export function getBuiltInCompileServerUrl() {

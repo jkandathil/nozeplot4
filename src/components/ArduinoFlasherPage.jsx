@@ -654,12 +654,12 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
         const snap = getProjectSnapshotForBuild();
         const sketch = snap ? getSketchFileForBuild(snap, activeFileIdRef.current) : null;
         appendLog(`[build] Build & Flash: ${sketch?.name || 'sketch'} on ${board.name}`);
+        appendLog('[build] Connecting to build service (first build after idle can take ~30–60s)…');
 
-        const url = await resolveCompileBridgeUrl({ timeoutMs: 12000, retries: 3 });
+        const url = await resolveCompileBridgeUrl({ timeoutMs: 15000, retries: 8 });
         if (!url) {
             setCompileServerReady(false);
             appendLog(`[build] ${BUILD_SERVICE_UNAVAILABLE}`);
-            appendLog('[build] One-time setup: in Finder open your repo → scripts → double-click install-mcu-build-service.command');
             return { ok: false, log: 'no build service' };
         }
         setCompileUrl(url);
@@ -712,7 +712,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
     const handleProbeCompileServer = useCallback(async () => {
         setBottomTab('console');
         appendLog('[build] Connecting to build service…');
-        const found = await resolveCompileBridgeUrl({ timeoutMs: 12000, retries: 2 });
+        const found = await resolveCompileBridgeUrl({ timeoutMs: 15000, retries: 6 });
         if (found) {
             setCompileUrl(found);
             setCompileServerUrl(found);
@@ -836,9 +836,8 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
 
             {!compileServerReady ? (
                 <div className="arduino-firmware-banner">
-                    <strong>Build service not detected.</strong> One-time setup on your Mac: open the project folder →{' '}
-                    <code>scripts/install-mcu-build-service.command</code> → double-click it. Then click{' '}
-                    <strong>Retry</strong> below.
+                    <strong>Connecting to the cloud build service…</strong> The first build after idle can take ~30–60s while it
+                    wakes up. If this persists, the hosted build service may be down — click <strong>Retry</strong>.
                     <span className="arduino-firmware-banner-actions">
                         <button type="button" className="arduino-btn" onClick={() => void handleProbeCompileServer()}>
                             <RefreshCw size={14} /> Retry
@@ -918,9 +917,7 @@ export default function ArduinoFlasherPage({ workspaceFiles, onSaveSketch, onSav
                     {compileServerReady ? (
                         <p className="arduino-settings-ok">Build service online.</p>
                     ) : (
-                        <p className="arduino-settings-warn">
-                            {BUILD_SERVICE_UNAVAILABLE} Double-click <code>scripts/install-mcu-build-service.command</code> in the repo.
-                        </p>
+                        <p className="arduino-settings-warn">{BUILD_SERVICE_UNAVAILABLE}</p>
                     )}
                     {boardUnsupported ? <p className="arduino-settings-warn">{board.unsupportedReason}</p> : null}
                 </div>
