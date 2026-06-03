@@ -1,0 +1,43 @@
+# Always-on MCU compile bridge with automatic HTTPS (Caddy + Let's Encrypt).
+# Designed for an Oracle Cloud Always Free VM. See ORACLE_DEPLOY.md.
+#
+#   1. Point a domain (e.g. DuckDNS) at this VM's public IP.
+#   2. Create a .env file next to this one:  DOMAIN=yourname.duckdns.org
+#   3. docker compose up -d --build
+#
+# The app then uses https://${DOMAIN} as VITE_MCU_COMPILE_URL.
+
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8787"
+    environment:
+      - PORT=8787
+      # Lock CORS to your published app origin (optional but recommended).
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
+      - MAX_BODY_BYTES=${MAX_BODY_BYTES:-4194304}
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-30}
+      - MAX_CONCURRENT=${MAX_CONCURRENT:-4}
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - bridge
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env, e.g. yourname.duckdns.org}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

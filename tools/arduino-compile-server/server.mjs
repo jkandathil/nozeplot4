@@ -24,15 +24,51 @@ const run = promisify(execFile);
 const PORT = Number(process.env.PORT || 8787);
 const CLI = process.env.ARDUINO_CLI || 'arduino-cli';
 
+// Public-endpoint guards (the bridge is reachable from the open internet).
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*'; // e.g. https://jkandathil.github.io
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 4 * 1024 * 1024); // 4 MB
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 30); // compiles…
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000); // …per minute per IP
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT || 4); // simultaneous compiles
+
 function setCors(res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+const rateHits = new Map(); // ip → number[] (timestamps within window)
+function rateLimited(ip) {
+    const now = Date.now();
+    const hits = (rateHits.get(ip) || []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    hits.push(now);
+    rateHits.set(ip, hits);
+    if (rateHits.size > 5000) {
+        for (const [k, v] of rateHits) if (!v.some((t) => now - t < RATE_LIMIT_WINDOW_MS)) rateHits.delete(k);
+    }
+    return hits.length > RATE_LIMIT_MAX;
+}
+
+let inFlight = 0;
+
+function clientIp(req) {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    return fwd || req.socket?.remoteAddress || 'unknown';
+}
+
 async function readBody(req) {
     const chunks = [];
-    for await (const c of req) chunks.push(c);
+    let size = 0;
+    for await (const c of req) {
+        size += c.length;
+        if (size > MAX_BODY_BYTES) {
+            const err = new Error('Request body too large.');
+            err.statusCode = 413;
+            throw err;
+        }
+        chunks.push(c);
+    }
     return Buffer.concat(chunks).toString('utf8');
 }
 
@@ -115,14 +151,28 @@ createServer(async (req, res) => {
     }
     const path = (req.url || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
     if (req.method === 'POST' && path.endsWith('/compile')) {
+        if (rateLimited(clientIp(req))) {
+            res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' });
+            res.end(JSON.stringify({ ok: false, stderr: 'Rate limit exceeded. Try again in a minute.' }));
+            return;
+        }
+        if (inFlight >= MAX_CONCURRENT) {
+            res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '5' });
+            res.end(JSON.stringify({ ok: false, stderr: 'Build server busy. Try again shortly.' }));
+            return;
+        }
+        inFlight += 1;
         try {
             const body = JSON.parse((await readBody(req)) || '{}');
             const result = await compile(body);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
         } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+            const code = e?.statusCode || 500;
+            res.writeHead(code, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: false, stderr: String(e?.message || e) }));
+        } finally {
+            inFlight -= 1;
         }
         return;
     }
@@ -136,4 +186,7 @@ createServer(async (req, res) => {
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`NozePlot MCU compile bridge → http://0.0.0.0:${PORT}`);
     console.log(`Using CLI: ${CLI}`);
+    console.log(
+        `Guards: origin=${ALLOWED_ORIGIN} maxBody=${MAX_BODY_BYTES}B rate=${RATE_LIMIT_MAX}/${RATE_LIMIT_WINDOW_MS}ms concurrency=${MAX_CONCURRENT}`,
+    );
 });

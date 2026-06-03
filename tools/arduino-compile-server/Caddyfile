@@ -1,0 +1,6 @@
+# Caddy auto-provisions a free Let's Encrypt certificate for {$DOMAIN}
+# and reverse-proxies HTTPS traffic to the compile bridge container.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy bridge:8787
+}

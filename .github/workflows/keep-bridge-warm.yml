@@ -1,0 +1,38 @@
+# Pings the MCU compile bridge so Render's free tier never sleeps
+# (eliminates cold starts). Reads the URL from the VITE_MCU_COMPILE_URL secret.
+#
+# NOTE: GitHub's scheduled runs can be delayed under load, which may let the
+# service sleep (15 min idle). For rock-solid keep-warm, also/instead create a
+# free monitor at https://cron-job.org or https://uptimerobot.com pointing at
+# <your-bridge-url>/health every 5 minutes. See tools/arduino-compile-server/README.md.
+name: Keep MCU bridge warm
+
+on:
+  schedule:
+    - cron: '*/10 * * * *' # every 10 minutes (best effort)
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping bridge /health
+        env:
+          BRIDGE_URL: ${{ secrets.VITE_MCU_COMPILE_URL }}
+        run: |
+          if [ -z "$BRIDGE_URL" ]; then
+            echo "VITE_MCU_COMPILE_URL secret not set; nothing to ping."
+            exit 0
+          fi
+          URL="${BRIDGE_URL%/}/health"
+          echo "Pinging $URL"
+          for i in 1 2 3; do
+            if curl -fsS --max-time 60 "$URL"; then
+              echo "" && echo "OK"
+              exit 0
+            fi
+            echo "attempt $i failed; retrying in 20s…"
+            sleep 20
+          done
+          echo "Bridge did not respond (it may be waking up)."
+          exit 0

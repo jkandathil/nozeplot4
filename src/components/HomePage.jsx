@@ -17,6 +17,7 @@ import {
     Moon,
     Sun,
     CircuitBoard,
+    Bot,
 } from 'lucide-react';
 import {
     fileBasename,
@@ -78,6 +79,13 @@ const LAUNCHERS = [
         tint: '#fb923c',
         title: 'MCU Flash',
         desc: 'Arduino & ESP32 — AI sketches, flash over USB.',
+    },
+    {
+        id: 'dropRobot',
+        icon: Bot,
+        tint: '#38bdf8',
+        title: 'Drop-Cast Robot',
+        desc: 'Program the Andrew pipetting robot for deposition.',
     },
 ];
 

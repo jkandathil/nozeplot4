@@ -46,6 +46,7 @@ import AromaUnitCapturePage from './components/AromaUnitCapturePage';
 import AIChatPage from './components/AIChatPage';
 import SerialMonitorPage from './components/SerialMonitorPage';
 import ArduinoFlasherPage from './components/ArduinoFlasherPage';
+import DropCastRobotPage from './components/DropCastRobotPage';
 import SpreadsheetPage from './components/SpreadsheetPage';
 import FileViewerPage from './components/FileViewerPage';
 import { nanoid } from 'nanoid';
@@ -2011,6 +2012,9 @@ function App() {
                         onSaveBinary={handleSaveArduinoBinaryToWorkspace}
                       />
                     );
+                    break;
+                  case 'dropRobot':
+                    content = <DropCastRobotPage />;
                     break;
                   case 'mlStudio':
                     content = (
